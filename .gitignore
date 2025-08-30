@@ -4,38 +4,38 @@
 *.ini
 
 # Ignore specific JS files (add more as needed)
-./SlyEdit.js
-./lbshelledited.js
-./LogonMtx/DDLoginMatrix.js
-./DDmsglist/DigitalDistortionMessageListerReverse.js
-./DDmsglist/DigitalDistortionListEmail.js
-./DDmsglist/DigitalDistortionMessageLister.js
-./chshellbulib/chsh-ctl-funcs.js
-./chshellbulib/chsh-maint-funcs.js
-./chshellbulib/chshmain.js
-./chshellbulib/chshCtlFuncs.js
-./chshellbulib/chshlayout.js
-./chshellbulib/chshell.js
-./chshellbulib/chsh-chat-funcs.js
-./chshellbulib/chsh-msg-funcs.js
-./bbslink.js
-./chshelll rollback/chsh-ctl-funcs.js
-./chshelll rollback/chsh-maint-funcs.js
-./chshelll rollback/chshlayout.js
-./chshelll rollback/chsh-chat-funcs.js
-./chshelll rollback/chsh-msg-funcs.js
-./logon.js
-./json-chat-mod-removed-june-14.js
-./fl_bulletin.js
-./DDMsgAreaChooser.js
-./SlyEdit_Misc.js
-./rss-ticker.js
-./DDFileAreaChooser.js
-./grudgeshell.js
-./SlyEdit_IceStuff.js
-./test_env.js
-./SlyEdit_DCTStuff.js
-./ansiedit.js
-./wptree.js
-./lbshell.js
-./wplayout.js
+SlyEdit.js
+lbshelledited.js
+LogonMtx/DDLoginMatrix.js
+DDmsglist/DigitalDistortionMessageListerReverse.js
+DDmsglist/DigitalDistortionListEmail.js
+DDmsglist/DigitalDistortionMessageLister.js
+chshellbulib/chsh-ctl-funcs.js
+chshellbulib/chsh-maint-funcs.js
+chshellbulib/chshmain.js
+chshellbulib/chshCtlFuncs.js
+chshellbulib/chshlayout.js
+chshellbulib/chshell.js
+chshellbulib/chsh-chat-funcs.js
+chshellbulib/chsh-msg-funcs.js
+bbslink.js
+chshelll rollback/chsh-ctl-funcs.js
+chshelll rollback/chsh-maint-funcs.js
+chshelll rollback/chshlayout.js
+chshelll rollback/chsh-chat-funcs.js
+chshelll rollback/chsh-msg-funcs.js
+logon.js
+json-chat-mod-removed-june-14.js
+fl_bulletin.js
+DDMsgAreaChooser.js
+SlyEdit_Misc.js
+rss-ticker.js
+DDFileAreaChooser.js
+grudgeshell.js
+SlyEdit_IceStuff.js
+test_env.js
+SlyEdit_DCTStuff.js
+ansiedit.js
+wptree.js
+lbshell.js
+wplayout.js
