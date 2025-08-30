@@ -1,0 +1,50 @@
+[MATRIX]
+LOGIN=&Log in
+NEWUSER=&New user
+GUEST=&Guest account
+RETRIEVE_PASSWORD=&Retrieve password
+EMAIL_SYSOP=&Email the sysop
+PAGE_SYSOP=&Page the sysop
+DISCONNECT=&Disconnect
+USERNAME_NUM_PASS_PROMPT=Enter your username/# and password
+USERNAME_PASS_PROMPT=Enter your username and password
+USERNAME_OR_NUM_PROMPT=Name / #:
+USERNAME_PROMPT=Username:
+PASSWORD_PROMPT=Password:
+UNKNOWN_USERNAME_OR_NUM=Unknown username/number
+UNKNOWN_USERNAME=Unknown username
+LOGIN_ATTEMPTS_FAIL_MSG=whUnable to log in after y# wattempts.
+GUEST_ACCT_FAIL=nhyError: wUnable to log into the guest account.
+SYSOP_HAS_BEEN_PAGED=hcThe sysop has been paged.
+UNABLE_TO_PAGE_SYSOP=hyUnable to page the sysop at this time.
+LOGOFF_CONFIRM_TEXT=Logoff
+DISCONNECT_MESSAGE=nhwHave a nice day!
+INPUT_TIMEOUT_REACHED=Input timeout reached.
+INVALID_LOGIN=Invalid login
+
+[STANDARD]
+USERNAME_PROMPT=nhgEnter yUser Name
+OR_NUMER_PROMPT=g or yNumberg.
+NEW_USER_INFO=gIf you are a new user, enter w'yNeww'g.
+GUEST_INFO=gFor the guest account, enter w'yGuestw'g.
+LOGIN_PROMPT=Login: w
+PASSWORD_PROMPT=nchPassword: w
+
+[GENERAL]
+NEW=new
+EMAIL_ADDR_CONFIRM_PROMPT=nchPlease confirm your Internet e-mail address: y
+DID_YOU_FORGET_PASSWORD_CONFIRM=Did you forget your password
+ACCT_INFO_REQUESTED_ON_TIME=Your user account information was requested on
+BY=by
+VIA=via
+PORT=port
+INFO_ACCT_NUM=Account Number:
+INFO_CREATED=Created:
+INFO_LAST_ON=Last on:
+INFO_CONNECT=Connect:
+INFO_PASSWORD=Password:
+INFO_INCORRECT_EMAIL_ADDR=Incorrect e-mail address:
+ACCT_INFO_EMAILED_TO=nhyAccount information e-mailed to: w
+ERROR_SAVING_BULKMAIL_MESSAGE=Error saving bulkmail message:
+UNKNOWN_USERNAME=Unknown username
+UNABLE_TO_RETRIEVE_ACCT_INFO=nhyUnable to send you your account information (no email address/invalid user/sysop).

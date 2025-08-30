@@ -1,0 +1,50 @@
+[MATRIX]
+LOGIN=&Anmelden
+NEWUSER=&Benutzer anlegen
+GUEST=&Gastzugang
+RETRIEVE_PASSWORD=&Passwort zurÅckholen
+EMAIL_SYSOP=&Mail an Sysop
+PAGE_SYSOP=&Sysop rufen
+DISCONNECT=&Beenden
+USERNAME_NUM_PASS_PROMPT=Benutzername / -nummer und Passwort
+USERNAME_PASS_PROMPT=Benutzername und Passwort
+USERNAME_OR_NUM_PROMPT=Name / #:
+USERNAME_PROMPT=Benutzer:
+PASSWORD_PROMPT=Passwort:
+UNKNOWN_USERNAME_OR_NUM=Unbekannter Benutzername/Nummer
+UNKNOWN_USERNAME=Unbekannter Benutzername
+LOGIN_ATTEMPTS_FAIL_MSG=whAbbruch nach y# wVersuchen.
+GUEST_ACCT_FAIL=nhyFehler: wGastzugang nicht moeglich.
+SYSOP_HAS_BEEN_PAGED=hcDer Sysop wurde gerufen.
+UNABLE_TO_PAGE_SYSOP=hyDer Sysop kann nicht gerufen werden.
+LOGOFF_CONFIRM_TEXT=Beenden
+DISCONNECT_MESSAGE=nhwAuf Wiedersehen!
+INPUT_TIMEOUT_REACHED=Zeitueberschreitung erreicht.
+INVALID_LOGIN=Anmeldung ungueltig
+
+[STANDARD]
+USERNAME_PROMPT=nhgBitte yBenutzername eingeben
+OR_NUMER_PROMPT=g oder yNummerg eingeben.
+NEW_USER_INFO=gGeben Sie w'yNeuw'g ein um einen Benutzer anzulegen.
+GUEST_INFO=gFuer den Gastzugang, bitte w'yGuestw'g eingeben.
+LOGIN_PROMPT=Login: w
+PASSWORD_PROMPT=nchPasswort: w
+
+[GENERAL]
+NEW=new
+EMAIL_ADDR_CONFIRM_PROMPT=nchBitte bestaetigen Sie Ihre Internet-Mail Adresse: y
+DID_YOU_FORGET_PASSWORD_CONFIRM=Haben Sie Ihr Passwort vergessen
+ACCT_INFO_REQUESTED_ON_TIME=Ihre Kontoinformationen wurden angefordert an
+BY=durch
+VIA=via
+PORT=Anschluss
+INFO_ACCT_NUM=Kontonummer:
+INFO_CREATED=Erstellt:
+INFO_LAST_ON=letzte Anmeldung:
+INFO_CONNECT=Verbindung:
+INFO_PASSWORD=Password:
+INFO_INCORRECT_EMAIL_ADDR=Falsche Email Adresse:
+ACCT_INFO_EMAILED_TO=nhyBenutzerinfo wurde gesendet an: w
+ERROR_SAVING_BULKMAIL_MESSAGE=Bulkmail-Mitteilung gesichert:
+UNKNOWN_USERNAME=Unbekannter Benutzername
+UNABLE_TO_RETRIEVE_ACCT_INFO=nhyKann Benutzerinformation nicht senden (Email Adresse/Benutzername unzulaessig).

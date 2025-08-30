@@ -1,0 +1,10 @@
+nhc   Digital Distortion Message Lister yvw1.36
+hy           For Synchronet 3.15+
+k컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴�
+ncThis is a JavaScript script that lists the
+messages in the user's selected sub-board,
+with lightbar & traditional user interfaces.
+Allows message list navigation, reading
+messages, forward & reverse ordering, editing,
+& deleting (if sub-board allows). Settings
+are configurable.  bhRelease date: 2013-05-23

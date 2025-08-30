@@ -1,6 +1,11 @@
 // Run an external program and always refresh the shell UI after
+load("iconshell/lib/eye_candy.js");
 IconShell.prototype.runExternal = function(fn) {
     try {
+        // Optional: dissolve animation before clearing and launching external
+        if (this.view && typeof dissolve === 'function') {
+            dissolve(this.view, GREEN, 0); // 2ms delay for visible effect
+        }
         console.attr = BG_BLACK|LIGHTGRAY;
         console.clear();
         log("RUNNING EXTERNAL PROGRAM WRAPPER");
@@ -9,6 +14,12 @@ IconShell.prototype.runExternal = function(fn) {
     } finally {
         console.clear();
         this.recreateFramesIfNeeded();
+        // Always refresh dynamic children and hotkeys for current folder after external program
+        var node = this.stack && this.stack.length ? this.stack[this.stack.length-1] : null;
+        if (node && node.label && node.label.toLowerCase().indexOf("game") !== -1 && typeof getGamesMenuItems === 'function') {
+            node.children = getGamesMenuItems();
+            this.assignViewHotkeys(node.children);
+        }
         this.drawFolder();
     }
 };
@@ -61,7 +72,7 @@ IconShell.prototype.main = function() {
             this.recreateFramesIfNeeded();
             var key = console.getkey(K_NOECHO|K_NOSPIN);
             if (typeof key === 'string' && key.length > 0) {
-                var ch = key.toUpperCase();
+                var ch = key;
                 log("Key:" + ch);
                 this.processKeyboardInput(ch);
             }
@@ -98,7 +109,8 @@ IconShell.prototype.processKeyboardInput = function(ch) {
             var viewId = this.currentView || (this.generateViewId ? this.generateViewId() : "root");
             var hotkeyMap = this.viewHotkeys[viewId] || {};
             log("Checking view " + viewId + " hot keys." + JSON.stringify(hotkeyMap));
-            var action = hotkeyMap[ch.toUpperCase ? ch.toUpperCase() : ch];
+            // Try all forms: raw, uppercase, lowercase
+            var action = hotkeyMap[ch];
             if (typeof action === 'function') {
                 log("Executing hotkey action for " + ch + " in view " + viewId);
                 action();
@@ -156,6 +168,7 @@ IconShell.prototype.assignHotkeys = function (items, used, logit, viewId) {
     // Add lowercase a-z
     for (var k = 0; k < 26; k++) hotkeyPool.push(String.fromCharCode(97 + k));
 
+    var fallbackCount = 1;
     for (var i = 0; i < items.length; i++) {
         var item = items[i];
         if (item.type === 'placeholder') continue;
@@ -173,7 +186,7 @@ IconShell.prototype.assignHotkeys = function (items, used, logit, viewId) {
                     if(logit) log(item.label + " Assign hotkey " + JSON.stringify(item.hotkey));
                     break;
                 }
-                var cU = c.toUpperCase ? c.toUpperCase() : c;
+                var cU = c;
                 if (hotkeyPool.indexOf(cU) !== -1 && !used[cU]) {
                     item.hotkey = cU;
                     used[cU] = true;
@@ -189,10 +202,19 @@ IconShell.prototype.assignHotkeys = function (items, used, logit, viewId) {
                     if (!used[hk]) {
                         item.hotkey = hk;
                         used[hk] = true;
+                        found = true;
                         if(logit) log(item.label + " Assign hotkey " + JSON.stringify(item.hotkey));
                         break;
                     }
                 }
+            }
+            // If still not found, assign a fallback hotkey (e.g., F1, F2, ...)
+            if (!found) {
+                var fallbackKey = 'F' + fallbackCount;
+                item.hotkey = fallbackKey;
+                used[fallbackKey] = true;
+                fallbackCount++;
+                log(LOG_WARNING, "Hotkey pool exhausted, assigning fallback hotkey " + fallbackKey + " to " + item.label);
             }
         } else {
             used[item.hotkey] = true;
@@ -335,7 +357,7 @@ IconShell.prototype.drawFolder = function() {
     this.crumb.clear(BG_BLUE|WHITE);
     this.crumb.home();
     var node = this.stack[this.stack.length-1];
-    // Use instance state for items
+    // Use instance state for items (all children, including up-item if present)
     var items = node.children ? node.children.slice() : [];
     if (this.stack.length > 1) {
         items.unshift({
@@ -346,15 +368,13 @@ IconShell.prototype.drawFolder = function() {
             iconFg: BLACK
         });
     }
-    // Ensure all visible items have hotkeys before building grid/hotspots
+    // Assign hotkeys to all items (not just visible)
     this.assignViewHotkeys(items);
     var total = items.length;
     var selectedNum = this.selection + 1;
     var itemInfo = " (Item " + selectedNum + "/" + total + ")";
     this.crumb.putmsg(" " + names.join(" \x10 ") + " " + itemInfo);
     // build icon frames grid from current folder children
-    // If we're nested, add an automatic 'Up' icon at the start (already handled above)
-    // Determine how many icons fit on screen
     var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 2;
     var cols = Math.max(1, Math.floor(this.view.width / cellW));
     var rows = Math.max(1, Math.floor(this.view.height / cellH));
@@ -389,7 +409,7 @@ IconShell.prototype.drawFolder = function() {
             this.paintIcon(this.grid.cells[selIdx], true, false);
         }
     }
-    // Add mouse hotspots for each icon cell using hotkey
+    // Add mouse hotspots for each icon cell using hotkey (from visibleItems, but hotkeys from full items array)
     if (this.grid && this.grid.cells && typeof console.add_hotspot === 'function') {
         for (var i = 0; i < this.grid.cells.length; i++) {
             var cell = this.grid.cells[i];
@@ -399,6 +419,7 @@ IconShell.prototype.drawFolder = function() {
             var min_x = cell.icon.x;
             var max_x = cell.icon.x + cell.icon.width - 1;
             var y = cell.icon.y;
+            log('[HOTSPOT] i=' + i + ' label=' + (item.label || '') + ' hotkey=' + cmd + ' x=' + min_x + '-' + max_x + ' y=' + y + '-' + (y + cell.icon.height - 1));
             for (var row = 0; row < cell.icon.height; row++) {
                 console.add_hotspot(cmd, true, min_x, max_x, y + row);
             }
