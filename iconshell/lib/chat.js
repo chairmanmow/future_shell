@@ -1,4 +1,6 @@
 load("json-chat.js");
+load("event-timer.js");
+
 // Chat subprogram as a constructor function using JSONChat backend
 function Chat() {
 	this.input = "";
@@ -7,50 +9,32 @@ function Chat() {
 	this.jsonchat = null;
 }
 
-Chat.prototype.enter = function() {
-	log("Enter chat");
-	this.running = true;
-	// Setup JSONChat backend
+Chat.prototype.enter = function(done) {
+	var redrawTimer = new Timer();
+	var redrawInterval = 500; // ms
 	var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
 	var host = bbs.sys_inetaddr || "127.0.0.1";
 	var port = 10088; // Adjust as needed
 	var jsonclient = new JSONClient(host, port);
 	this.jsonchat = new JSONChat(usernum, jsonclient, host, port);
 	this.jsonchat.join(this.channel);
-	// No key polling here; shell will call processKey
-};
-
-Chat.prototype.processKey = function(key) {
-	if (!this.running) return;
-	this.jsonchat.cycle();
-	if (typeof key === 'string' && key.length > 0) {
-		if (key === '\x1B') { // ESC
-			this.running = false;
-			return 'exit';
-		} else if (key === '\r') {
-			if (this.input.trim().length > 0) {
-				this.jsonchat.submit(this.channel, this.input);
-				this.input = "";
-			}
-		} else if (key === '\b' || key === '\x7F') {
-			this.input = this.input.slice(0, -1);
-		} else if (key.length === 1) {
-			this.input += key;
-		}
-	}
-	this.draw();
-};
-	// On exit, restore shell UI
+    redrawTimer.addEvent(1000, true, this.refresh())
+    this.refresh();
+    this.running = true;
+    this.done = done;
+}
 
 Chat.prototype.exit = function() {
+    dbug("Attempting to exit()", "chat");
 	this.running = false;
 	if (this.jsonchat) this.jsonchat.disconnect();
 	this.cleanup();
+    this.done();
 };
 
 Chat.prototype.cleanup = function() {
 	// Release resources, null references, and reset state
-    log("Cleanup() called");
+	dbug("Cleanup() called", "chat");
 	this.input = "";
 	this.jsonchat = null;
 	this.channel = "main";
@@ -59,7 +43,23 @@ Chat.prototype.cleanup = function() {
 
 
 Chat.prototype.handleKey = function(key) {
-	// Not used in new model; input handled in enter loop
+	dbug("Chat.handleKey()" + key, "chat");
+    if (typeof key === 'string' && key.length > 0) {
+    if (key === '\x1B') { // ESC
+        this.running = false;
+        this.exit();
+	dbug("Escape detected" + key, "chat");
+    } else if (key === '\r') {
+        if (this.input.trim().length > 0) {
+            this.jsonchat.submit(this.channel, this.input);
+            this.input = "";
+        }
+    } else if (key === '\b' || key === '\x7F') {
+        this.input = this.input.slice(0, -1);
+    } else if (key.length === 1) {
+        this.input += key;
+    }
+}
 };
 
 Chat.prototype.draw = function() {
@@ -83,6 +83,8 @@ Chat.prototype.draw = function() {
 	console.putmsg("[ESC to exit chat]");
 };
 
-// Export for Synchronet JS module system
-if (typeof exports !== 'undefined') exports.Chat = Chat;
-if (typeof module !== 'undefined') module.exports = Chat;
+Chat.prototype.refresh = function (){
+    this.jsonchat.cycle();
+    this.draw();
+}
+

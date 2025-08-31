@@ -40,7 +40,7 @@ Icon.prototype.render = function() {
                 loaded = true;
                 this.redraw();
             } catch (e1) {
-                log(LOG_ERR, "Error loading bin: " + e1);
+                dbug("Error loading bin: " + e1, "icon");
             }
         } else if (file_exists(ansPath)) {
             try {
@@ -48,10 +48,10 @@ Icon.prototype.render = function() {
                 loaded = true;
                 this.iconFrame.scrollTo(0, 0);
             } catch (e2) {
-                log(LOG_ERR, "Error loading ans: " + e2);
+                dbug("Error loading ans: " + e2, "icon");
             }
         } else {
-            log(LOG_ERR, "Icon file does not exist: " + binPath + " or " + ansPath);
+            dbug("Icon file does not exist: " + binPath + " or " + ansPath, "icon");
         }
     }
     if (!loaded && (hasBg || hasFg)) {

@@ -24,7 +24,7 @@ function main() {
     while (true) {
         try {
             icsh = new IconShell(); // provided by mods/iconshell/iconshell.js
-            icsh.load();
+            icsh.init();
             // If IconShell returns normally, we're done.
             return;
         } catch (e) {

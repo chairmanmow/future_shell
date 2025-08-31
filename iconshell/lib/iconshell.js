@@ -17,8 +17,8 @@ load("load/graphic.js");
 load("iconshell/lib/helpers.js");
 load("iconshell/lib/shelllib.js");
 
-
 function IconShell(){
+        log("Instantiate Icon Shell");
         this.currentView = "view1";  // first set inside init, reset when changing folders
         this.viewHotkeys = {}; // first set inside init, reset when changing folders
         this.init();

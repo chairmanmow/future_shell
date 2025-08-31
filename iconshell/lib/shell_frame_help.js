@@ -45,7 +45,7 @@ IconShell.prototype.flashSelection = function() {
 };
 
 IconShell.prototype.moveSelection = function(dx, dy) {
-    log(this.selection, "move selection " + dx + "," + dy);
+    dbug("Current selection: " + this.selection + ", move " + dx + "," + dy, "nav");
     var grid = this.grid;
     if (!grid || !grid.cells) return;
     var cols = grid.cols, rows = grid.rows;

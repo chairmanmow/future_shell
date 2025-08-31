@@ -72,6 +72,3 @@ function getItemsForXtrnSection(index) {
 	});
 	return items;
 }
-
-// Export for use in iconshell.js
-if (typeof exports !== 'undefined') exports.getGamesMenuItems = getGamesMenuItems;

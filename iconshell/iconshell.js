@@ -17,9 +17,10 @@ load("load/graphic.js");
 load("iconshell/lib/helpers.js");
 load("iconshell/lib/shelllib.js");
 load("iconshell/lib/shell_frame_help.js");
+load("iconshell/lib/debug.js");
 
 function IconShell(){
-    log("WTF");
+    dbug("Starting up IconShell", "init");
     this.currentView = "view1";  // first set inside init, reset when changing folders
     this.viewHotkeys = {}; // first set inside init, reset when changing folders
     this.init();

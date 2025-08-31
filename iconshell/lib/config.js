@@ -1,17 +1,34 @@
+
 load("iconshell/lib/whosonline.js");
 load("iconshell/lib/gamesmenu.js");
 
-var ICSH_CONSTANTS = {
-    "ICON_W":12,
-    "ICON_H":6
-}
+// Centralized color configuration for IconShell
+var ICSH_VALS = {
+	ROOT:   { BG: BG_BLACK,     FG: LIGHTGRAY },
+	VIEW:   { BG: BG_BLACK,     FG: LIGHTGRAY },
+	CRUMB:  { BG: BG_BLUE,      FG: WHITE     },
+	SELECTED: { BG: BG_BLUE,    FG: WHITE     },
+	LABEL:  { BG: BG_BLACK,     FG: LIGHTGRAY },
+	UPITEM: { BG: BG_LIGHTGRAY, FG: BLACK     },
+	ANIMATION: { COLOR: GREEN },
+	EXTERNAL_BG: BG_BLACK,
+	EXTERNAL_FG: LIGHTGRAY
+	// Add more as needed for other UI elements
+};
 
 // IconShell configuration: menu structure, labels, icons, and actions
 var ICSH_CONFIG = {
 	label: "Home",
 	type: "folder",
     "viewId":"view1",
-	children: [
+	children: [{
+			label: "Chat",
+			type: "item",
+			iconFile: "chat",
+			action: function() {
+				this.launchSubprogram("chat", this.chat);
+			}
+		},
 		{
 			label: "Games",
 			type: "folder",
@@ -56,3 +73,11 @@ var ICSH_CONFIG = {
 		{ label: "Exit",      type: "item", iconFile:"exit", action: function(){ throw("Exit Shell"); } }
 	]
 };
+
+// Do not change.
+var ICSH_CONSTANTS = {
+    "ICON_W":12,
+    "ICON_H":6
+}
+
+
