@@ -1,6 +1,8 @@
 
-function Icon(iconFrame, labelFrame, data) {
-    if (!(this instanceof Icon)) return new Icon(iconFrame, labelFrame, data);
+function Icon(iconFrame, labelFrame, data, logit) {
+    this.logit = logit;
+    if(this.logit) log("Icon constructor called with data: " + JSON.stringify(data));
+    //if (!(this instanceof Icon)) return new Icon(iconFrame, labelFrame, data);
     this.iconFrame = iconFrame;
     this.labelFrame = labelFrame;
     this.data = data;
@@ -15,51 +17,67 @@ Icon.prototype.render = function() {
     var hasBg = typeof this.data.iconBg !== 'undefined';
     var hasFg = typeof this.data.iconFg !== 'undefined';
     var loaded = false;
-    // --- Avatar rendering support ---
     if (this.data.avatarObj && this.data.avatarObj.data) {
-        // Draw avatar directly to the iconFrame using load_bin (if available)
-        var bin = base64_decode(this.data.avatarObj.data);
-        if (typeof this.iconFrame.load_bin === 'function') {
-            this.iconFrame.load_bin(bin, 10, 6);
-            loaded = true;
-        } else if (typeof this.iconFrame.blit === 'function') {
-            this.iconFrame.blit(bin, 10, 6, 0, 0);
-            loaded = true;
-        } else {
-            // fallback: just clear the frame
-            this.iconFrame.clear(BG_BLACK|LIGHTGRAY);
-        }
+        loaded = this._renderAvatar(iconW, iconH);
     } else if (this.data.iconFile) {
-        // If iconFile is defined and no avatar, load as before
-        var iconPathBase = "iconshell/lib/icons/" + this.data.iconFile;
-        var binPath = system.mods_dir + iconPathBase + ".bin";
-        var ansPath = system.mods_dir + iconPathBase + ".ans";
-        if (file_exists(binPath)) {
-            try {
-                this.iconFrame.load(binPath, iconW, iconH);
-                loaded = true;
-                this.redraw();
-            } catch (e1) {
-                dbug("Error loading bin: " + e1, "icon");
-            }
-        } else if (file_exists(ansPath)) {
-            try {
-                this.iconFrame.load(ansPath, iconW, iconH);
-                loaded = true;
-                this.iconFrame.scrollTo(0, 0);
-            } catch (e2) {
-                dbug("Error loading ans: " + e2, "icon");
-            }
-        } else {
-            dbug("Icon file does not exist: " + binPath + " or " + ansPath, "icon");
-        }
+        loaded = this._renderIconFile(iconW, iconH);
     }
     if (!loaded && (hasBg || hasFg)) {
-        // fallback: just color background, no graphic, but only if bg/fg was set
-        var iconAttr = (hasBg ? this.data.iconBg : 0) | (hasFg ? this.data.iconFg : 0);
-        this.iconFrame.clear(iconAttr);
+        this._renderFallbackBg(hasBg, hasFg);
     }
-    // Draw label with hotkey highlight
+    this._renderLabel(iconW);
+    this.iconFrame.cycle();
+};
+
+Icon.prototype._renderAvatar = function(iconW, iconH) {
+    var bin = base64_decode(this.data.avatarObj.data);
+    if (typeof this.iconFrame.load_bin === 'function') {
+        this.iconFrame.load_bin(bin, 10, 6);
+        return true;
+    } else if (typeof this.iconFrame.blit === 'function') {
+        this.iconFrame.blit(bin, 10, 6, 0, 0);
+        return true;
+    } else {
+        this.iconFrame.clear(BG_BLACK|LIGHTGRAY);
+        return false;
+    }
+};
+
+Icon.prototype._renderIconFile = function(iconW, iconH) {
+    if(this.logit) log("Loading icon file: " + this.data.iconFile);
+    var iconPathBase = "iconshell/lib/icons/" + this.data.iconFile;
+    var binPath = system.mods_dir + iconPathBase + ".bin";
+    var ansPath = system.mods_dir + iconPathBase + ".ans";
+    if (file_exists(binPath)) {
+        try {
+            this.iconFrame.load(binPath, iconW, iconH);
+            this.redraw();
+            return true;
+        } catch (e1) {
+            dbug("Error loading bin: " + e1, "icon");
+        }
+    } else if (file_exists(ansPath)) {
+        try {
+            this.iconFrame.load(ansPath, iconW, iconH);
+            if(this.logit) log("FOUND ANS" + ansPath)
+            return true;
+        } catch (e2) {
+            dbug("Error loading ans: " + e2, "icon");
+        }
+    } else {
+        if(this.logit) log("COULDNT FIND FILE! ANS OR BIN")
+        dbug("Icon file does not exist: " + binPath + " or " + ansPath, "icon");
+    }
+    return false;
+};
+
+Icon.prototype._renderFallbackBg = function(hasBg, hasFg) {
+    if(this.logit) log("FALLBACK CLEAR: loaded=false, hasBg=" + hasBg + ", hasFg=" + hasFg + ", iconFile=" + this.data.iconFile + ", label=" + this.data.label);
+    var iconAttr = (hasBg ? this.data.iconBg : 0) | (hasFg ? this.data.iconFg : 0);
+    this.iconFrame.clear(iconAttr);
+};
+
+Icon.prototype._renderLabel = function(iconW) {
     this.labelFrame.clear(BG_BLACK|LIGHTGRAY);
     this.labelFrame.home();
     var name = this.data.label || "";
@@ -69,7 +87,7 @@ Icon.prototype.render = function() {
     for (var i = 0; i < name.length; i++) {
         var c = name[i];
         if (!usedHotkey && hotkey && c.toUpperCase() === hotkey) {
-            labelOut += "\x01h\x01b" + c + "\x01n"; // Highlight hotkey in blue
+            labelOut += "\x01h\x01b" + c + "\x01n";
             usedHotkey = true;
         } else {
             labelOut += c;
@@ -89,11 +107,7 @@ Icon.prototype.redraw = function(){
 }
 
 // Utility for centering label
-function repeatChar(ch, n) {
-    var out = "";
-    while (n-- > 0) out += ch;
-    return out;
-}
+
 
 // Make Icon globally available for load()
 this.Icon = Icon;

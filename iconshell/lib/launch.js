@@ -25,7 +25,12 @@ IconShell.prototype.runExternal = function(fn) {
 // Launch a subprogram (e.g., chat)
 IconShell.prototype.launchSubprogram = function(name, handlers) {
     dbug("Launch subprogram " + name, "subprogram");
-    this.activeSubprogram = handlers;
+    // If launching chat, always use the persistent instance
+    if (name === "chat" && this.chat) {
+        this.activeSubprogram = this.chat;
+    } else {
+        this.activeSubprogram = handlers;
+    }
     this.activeSubprogram.enter(this.exitSubprogram.bind(this));
 };
 

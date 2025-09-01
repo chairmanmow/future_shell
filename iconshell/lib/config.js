@@ -32,7 +32,7 @@ var ICSH_CONFIG = {
 		{
 			label: "Games",
 			type: "folder",
-			iconFile: "redman",
+			iconFile: "games",
             "viewId":"view2",
 			get children() {
 				// Always return a fresh array for hotkey assignment
@@ -42,7 +42,7 @@ var ICSH_CONFIG = {
 				{
 			label: "Apps",
 			type: "folder",
-			iconFile: "redman",
+			iconFile: "apps",
             "viewId":"view10",
 			get children() {
 				// Always return a fresh array for hotkey assignment
@@ -61,7 +61,7 @@ var ICSH_CONFIG = {
 				return getOnlineUserIcons();
 			}
 		},
-		{ label: "Settings", type: "item", iconFile: "mario",viewId:"view7", action: function() {
+		{ label: "Settings", type: "item", iconFile: "settings",viewId:"view7", action: function() {
 			if (typeof bbs.user_config === 'function') {
 				bbs.user_config();
 			} else {

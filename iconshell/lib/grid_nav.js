@@ -1,84 +1,87 @@
 load("iconshell/lib/debug.js");
 
-function repeatChar(ch, n) {
-	var out = "";
-	while (n-- > 0) out += ch;
-	return out;
-}
+
 
 // Update openSelection to use changeFolder for both up and down navigation
 IconShell.prototype.openSelection = function() {
     dbug("open Selection", "view");
     this.flashSelection();
-    // Use instance state directly
     var node = this.stack[this.stack.length-1];
     var hasUp = this.stack.length > 1;
-    // Build the current items array (with up if needed)
-    var items = node.children ? node.children.slice() : [];
-    if (hasUp) {
-        items.unshift({
-            label: "..",
-            type: "item",
-            iconBg: BG_LIGHTGRAY,
-            iconFg: BLACK,
-            action: function() {
-                this.changeFolder(null, { direction: 'up' });
-            }.bind(this)
-        });
-    }
+    var items = this._getCurrentItemsWithUp(node, hasUp);
     if (!items.length) return;
     var item = items[this.selection];
     if (!item) return;
 
-    // If '..' is selected, just run its action
     if (hasUp && this.selection === 0) {
-        if (typeof item.action === "function") {
-            item.action();
-            // After going up, always reset selection/scroll and redraw
-            this.selection = 0;
-            this.scrollOffset = 0;
-            this.drawFolder();
-        }
+        this._handleUpSelection(item);
         return;
     }
 
-    // For all other items, adjust index if '..' is present
     var realIndex = hasUp ? this.selection - 1 : this.selection;
     var realChildren = node.children || [];
     if (!realChildren.length || realIndex < 0 || realIndex >= realChildren.length) return;
     var realItem = realChildren[realIndex];
     if (realItem.type === "folder") {
-        // If Who's Online, always rebuild children
-        var childrenChanged = false;
-        var isWhoCmd = realItem.label === "Who" && typeof getOnlineUserIcons === 'function';
-        if (isWhoCmd) {
-            realItem.children = getOnlineUserIcons();
-            this.assignViewHotkeys(realItem.children);
-            childrenChanged = true;
-        }
-        // If Games, always rebuild children and assign hotkeys
-        var isGamesMenu = realItem.label && realItem.label.toLowerCase().indexOf("game") !== -1 && typeof getGamesMenuItems === 'function';
-        if (isGamesMenu) {
-            realItem.children = getGamesMenuItems();
-            this.assignViewHotkeys(realItem.children);
-            childrenChanged = true;
-        }
-        this.changeFolder(realItem, { direction: 'down' });
-        if (childrenChanged) this.drawFolder();
+        this._handleFolderSelection(realItem);
         return;
     }
     if (realItem.type === "item") {
-        // Visual feedback: flash selection, then run action
-        if (typeof realItem.action === "function") {
-            try {
-                realItem.action();
-            } catch(e) {
-                dbug("IconShell action error: " + e, "view");
-                if (e === "Exit Shell") throw e;
-            }
-            // Always re-initialize frames and redraw after action (for external programs)
-            this.drawFolder();
+        this._handleItemSelection(realItem);
+    }
+};
+
+IconShell.prototype._getCurrentItemsWithUp = function(node, hasUp) {
+    var items = node.children ? node.children.slice() : [];
+    if (hasUp) {
+        items.unshift({
+            label: "..",
+            type: "item",
+            iconFile:"back",
+            action: function() {
+                this.changeFolder(null, { direction: 'up' });
+            }.bind(this)
+        });
+    }
+    return items;
+};
+
+IconShell.prototype._handleUpSelection = function(item) {
+    if (typeof item.action === "function") {
+        item.action();
+        this.selection = 0;
+        this.scrollOffset = 0;
+        this.drawFolder();
+    }
+};
+
+IconShell.prototype._handleFolderSelection = function(realItem) {
+    var childrenChanged = false;
+    var isWhoCmd = realItem.label === "Who" && typeof getOnlineUserIcons === 'function';
+    if (isWhoCmd) {
+        realItem.children = getOnlineUserIcons();
+        this.assignViewHotkeys(realItem.children);
+        childrenChanged = true;
+    }
+    var isGamesMenu = realItem.label && realItem.label.toLowerCase().indexOf("game") !== -1 && typeof getGamesMenuItems === 'function';
+    if (isGamesMenu) {
+        realItem.children = getGamesMenuItems();
+        this.assignViewHotkeys(realItem.children);
+        childrenChanged = true;
+    }
+    this.changeFolder(realItem, { direction: 'down' });
+    if (childrenChanged) this.drawFolder();
+};
+
+IconShell.prototype._handleItemSelection = function(realItem) {
+    if (typeof realItem.action === "function") {
+        try {
+            realItem.action();
+        } catch(e) {
+            dbug("IconShell action error: " + e, "view");
+            if (e === "Exit Shell") throw e;
         }
+        this.drawFolder();
     }
 };
 
@@ -118,49 +121,65 @@ IconShell.prototype.changeFolder = function(targetFolder, options) {
 
 IconShell.prototype.drawFolder = function() {
     dbug('selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, "drawFolder");
-    // Close previous icon/label frames if any
+    this._closePreviousFrames();
+    this._clearHotspots();
+    this.view.clear(ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG);
+    var names = [];
+    for (var i=0; i<this.stack.length; i++) names.push(this.stack[i].label || "Untitled");
+    this.crumb.clear(ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG);
+    this.crumb.home();
+    var node = this.stack[this.stack.length-1];
+    var items = node.children ? node.children.slice() : [];
+    if (this.stack.length > 1) {
+        items.unshift({
+            label: "..",
+            type: "item",
+            iconFile:"back",
+            hotkey: '\x1B',
+        });
+    }
+    this.assignViewHotkeys(items);
+    var total = items.length;
+    var selectedNum = this.selection + 1;
+    this._drawBreadcrumb(names, selectedNum, total);
+    var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 2;
+    var cols = Math.max(1, Math.floor(this.view.width / cellW));
+    var rows = Math.max(1, Math.floor(this.view.height / cellH));
+    var maxIcons = cols * rows;
+    this._clampSelection(items);
+    this._adjustScroll(items, cols, maxIcons);
+    var visibleItems = this._calculateVisibleItems(items, maxIcons);
+    this.grid = this.buildIconGrid(this.view, visibleItems);
+    this._highlightSelectedCell();
+    this._addMouseHotspots();
+    this._adjustSelectionWithinBounds(items, maxIcons);
+    this.root.cycle();
+};
+
+IconShell.prototype._closePreviousFrames = function() {
     if (this.grid && this.grid.cells) {
         for (var i = 0; i < this.grid.cells.length; i++) {
             if (this.grid.cells[i].icon && typeof this.grid.cells[i].icon.close === 'function') this.grid.cells[i].icon.close();
             if (this.grid.cells[i].label && typeof this.grid.cells[i].label.close === 'function') this.grid.cells[i].label.close();
         }
     }
-    // Clear all mouse hotspots before redrawing
+};
+
+IconShell.prototype._clearHotspots = function() {
     if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
-    // clear view area
-    this.view.clear(ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG);
-    // compute breadcrumb text
-    var names = [];
-    for (var i=0; i<this.stack.length; i++) names.push(this.stack[i].label || "Untitled");
-    this.crumb.clear(ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG);
-    this.crumb.home();
-    var node = this.stack[this.stack.length-1];
-    // Use instance state for items (all children, including up-item if present)
-    var items = node.children ? node.children.slice() : [];
-    if (this.stack.length > 1) {
-        items.unshift({
-            label: "..",
-            type: "item",
-            hotkey: '\x1B',
-            iconBg: ICSH_VALS.UPITEM.BG,
-            iconFg: ICSH_VALS.UPITEM.FG
-        });
-    }
-    // Assign hotkeys to all items (not just visible)
-    this.assignViewHotkeys(items);
-    var total = items.length;
-    var selectedNum = this.selection + 1;
+};
+
+IconShell.prototype._drawBreadcrumb = function(names, selectedNum, total) {
     var itemInfo = " (Item " + selectedNum + "/" + total + ")";
     this.crumb.putmsg(" " + names.join(" \x10 ") + " " + itemInfo);
-    // build icon frames grid from current folder children
-    var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 2;
-    var cols = Math.max(1, Math.floor(this.view.width / cellW));
-    var rows = Math.max(1, Math.floor(this.view.height / cellH));
-    var maxIcons = cols * rows;
-    // Clamp selection
+};
+
+IconShell.prototype._clampSelection = function(items) {
     if (this.selection < 0) this.selection = 0;
     if (this.selection >= items.length) this.selection = items.length ? items.length-1 : 0;
-    // Only scroll if selection is outside the visible window, and jump by a full page
+};
+
+IconShell.prototype._adjustScroll = function(items, cols, maxIcons) {
     var maxRow = Math.max(0, Math.floor((items.length - 1) / cols));
     var pageRows = Math.max(1, Math.floor(maxIcons / cols));
     var selRow = Math.floor(this.selection / cols);
@@ -174,20 +193,26 @@ IconShell.prototype.drawFolder = function() {
     } else if (selRow > lastVisibleRow) {
         this.scrollOffset = Math.min((selRow) * cols, Math.max(0, items.length - maxIcons));
     }
-    // Only show the visible window of items, pad with empty placeholders if needed
+};
+
+IconShell.prototype._calculateVisibleItems = function(items, maxIcons) {
     var visibleItems = items.slice(this.scrollOffset, this.scrollOffset + maxIcons);
     while (visibleItems.length < maxIcons) {
         visibleItems.push({ label: "", type: "placeholder", isPlaceholder: true });
     }
-    this.grid = this.buildIconGrid(this.view, visibleItems);
-    // Highlight the selected cell
+    return visibleItems;
+};
+
+IconShell.prototype._highlightSelectedCell = function() {
     if (this.grid && this.grid.cells) {
         var selIdx = this.selection - this.scrollOffset;
         if (selIdx >= 0 && selIdx < this.grid.cells.length) {
             this.paintIcon(this.grid.cells[selIdx], true, false);
         }
     }
-    // Add mouse hotspots for each icon cell using hotkey (from visibleItems, but hotkeys from full items array)
+};
+
+IconShell.prototype._addMouseHotspots = function() {
     if (this.grid && this.grid.cells && typeof console.add_hotspot === 'function') {
         for (var i = 0; i < this.grid.cells.length; i++) {
             var cell = this.grid.cells[i];
@@ -203,54 +228,68 @@ IconShell.prototype.drawFolder = function() {
             }
         }
     }
-    // set initial selection within bounds of visible, non-placeholder items
+};
+
+IconShell.prototype._adjustSelectionWithinBounds = function(items, maxIcons) {
     if (this.selection < this.scrollOffset) this.selection = this.scrollOffset;
     var visibleCount = Math.min(items.length - this.scrollOffset, maxIcons);
     if (this.selection >= this.scrollOffset + visibleCount) this.selection = this.scrollOffset + (visibleCount ? visibleCount - 1 : 0);
     if (this.selection < 0) this.selection = 0;
-    // this.updateHighlight();
-    this.root.cycle();
 };
 
 IconShell.prototype.buildIconGrid = function (parentFrame, items) {
-	var iconW = ICSH_CONSTANTS.ICON_W;
-	var iconH = ICSH_CONSTANTS.ICON_H;
-	var labelH = 1;
-	var cellW = iconW + 2;
-	var cellH = iconH + labelH + 2;
-	var cols = Math.max(1, Math.floor(parentFrame.width / cellW));
-	var maxRows = Math.max(1, Math.floor(parentFrame.height / cellH));
-	if (maxRows < 1 || cols < 1) {
-		var msg = "[Screen too small for icons]";
-		var msgX = Math.max(1, Math.floor((parentFrame.width - msg.length) / 2));
-		var msgY = Math.max(1, Math.floor(parentFrame.height / 2));
-		parentFrame.gotoxy(msgX, msgY);
-		parentFrame.putmsg(msg);
-		return { cells: [], cols: 0, rows: 0, iconW: iconW, iconH: iconH };
-	}
-	var maxIcons = cols * maxRows;
-	var cells = [];
-	var Icon = load("iconshell/lib/icon.js");
-	for (var i = 0; i < items.length && i < maxIcons; i++) {
-		var col = i % cols;
-		var row = Math.floor(i / cols);
-		var x = (col * cellW) + 2;
-		var y = (row * cellH) + 1;
-		var hasBg = typeof items[i].iconBg !== 'undefined';
-		var hasFg = typeof items[i].iconFg !== 'undefined';
-		var iconAttr = 0;
-		if (hasBg || hasFg) {
-			iconAttr = (hasBg ? items[i].iconBg : 0) | (hasFg ? items[i].iconFg : 0);
-		}
-		var iconFrame = new Frame(x, y, iconW, iconH, iconAttr, parentFrame);
-		var labelFrame = new Frame(x, y + iconH, iconW, labelH, BG_BLACK|LIGHTGRAY, parentFrame);
-		var iconObj = new Icon(iconFrame, labelFrame, items[i]);
-		iconObj.render();
-		cells.push({ icon: iconFrame, label: labelFrame, item: items[i], iconObj: iconObj });
-	}
-	var rows = Math.ceil(Math.min(items.length, maxIcons) / cols);
-	return { cells: cells, cols: cols, rows: rows, iconW: iconW, iconH: iconH };
-}
+    var dims = this._calculateGridDimensions(parentFrame);
+    if (dims.maxRows < 1 || dims.cols < 1) {
+        return this._handleScreenTooSmall(parentFrame, "[Screen too small for icons]", dims.iconW, dims.iconH);
+    }
+    var maxIcons = dims.cols * dims.maxRows;
+    var cells = [];
+    var Icon = load("iconshell/lib/icon.js");
+    log("render " + items.length + " items. First item" + JSON.stringify(items[0]) + "\r\nSecven:" + JSON.stringify(items[7]));
+    for (var i = 0; i < items.length && i < maxIcons; i++) {
+        var cell = this._createIconCell(i, dims, items, parentFrame, Icon);
+        cells.push(cell);
+    }
+    var rows = Math.ceil(Math.min(items.length, maxIcons) / dims.cols);
+    return { cells: cells, cols: dims.cols, rows: rows, iconW: dims.iconW, iconH: dims.iconH };
+};
+
+IconShell.prototype._calculateGridDimensions = function(parentFrame) {
+    var iconW = ICSH_CONSTANTS.ICON_W;
+    var iconH = ICSH_CONSTANTS.ICON_H;
+    var labelH = 1;
+    var cellW = iconW + 2;
+    var cellH = iconH + labelH + 2;
+    var cols = Math.max(1, Math.floor(parentFrame.width / cellW));
+    var maxRows = Math.max(1, Math.floor(parentFrame.height / cellH));
+    return { iconW: iconW, iconH: iconH, labelH: labelH, cellW: cellW, cellH: cellH, cols: cols, maxRows: maxRows };
+};
+
+IconShell.prototype._createIconCell = function(i, dims, items, parentFrame, Icon) {
+    var col = i % dims.cols;
+    var row = Math.floor(i / dims.cols);
+    var x = (col * dims.cellW) + 2;
+    var y = (row * dims.cellH) + 1;
+    var hasBg = typeof items[i].iconBg !== 'undefined';
+    var hasFg = typeof items[i].iconFg !== 'undefined';
+    var iconAttr = 0;
+    if (hasBg || hasFg) {
+        iconAttr = (hasBg ? items[i].iconBg : 0) | (hasFg ? items[i].iconFg : 0);
+    }
+    var iconFrame = new Frame(x, y, dims.iconW, dims.iconH, iconAttr, parentFrame);
+    var labelFrame = new Frame(x, y + dims.iconH, dims.iconW, dims.labelH, BG_BLACK|LIGHTGRAY, parentFrame);
+    var iconObj = new Icon(iconFrame, labelFrame, items[i], i == 0);
+    iconObj.render();
+    return { icon: iconFrame, label: labelFrame, item: items[i], iconObj: iconObj };
+};
+
+IconShell.prototype._handleScreenTooSmall = function(parentFrame, msg, iconW, iconH) {
+    var msgX = Math.max(1, Math.floor((parentFrame.width - msg.length) / 2));
+    var msgY = Math.max(1, Math.floor(parentFrame.height / 2));
+    parentFrame.gotoxy(msgX, msgY);
+    parentFrame.putmsg(msg);
+    return { cells: [], cols: 0, rows: 0, iconW: iconW, iconH: iconH };
+};
 
 IconShell.prototype.paintIcon = function (cell, selected, invert) {
     dbug('[paintIcon] called for label="' + (cell.item && cell.item.label) + '" selected=' + selected + ' invert=' + invert, "view");

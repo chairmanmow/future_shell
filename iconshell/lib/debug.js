@@ -20,13 +20,13 @@ var DEBUG_CONFIG = {
     external: {active: false, log_color: ANSI_COLORS.RED},
     init: {active: true, log_color: ANSI_COLORS.RED},
     subprogram: {active: true, log_color: ANSI_COLORS.RED},
-    keylog: {active: true, log_color: ANSI_COLORS.CYAN},
-    hotkeys: {active: true, log_color: ANSI_COLORS.CYAN},
+    keylog: {active: false, log_color: ANSI_COLORS.CYAN},
+    hotkeys: {active: false, log_color: ANSI_COLORS.CYAN},
     icons: {active: true, log_color: ANSI_COLORS.CYAN},
     config: {active: true, log_color: ANSI_COLORS.CYAN},
     whosonline: {active: true, log_color: ANSI_COLORS.CYAN},
     settings: {active: true, log_color: ANSI_COLORS.CYAN},
-    view: {active: true, log_color: ANSI_COLORS.CYAN},
+    view: {active: false, log_color: ANSI_COLORS.CYAN},
 };
 	
 

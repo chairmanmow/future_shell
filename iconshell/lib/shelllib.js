@@ -8,13 +8,14 @@ load("iconshell/lib/hotkeys.js");
 load("iconshell/lib/grid_nav.js");
 load("iconshell/lib/launch.js");
 load("iconshell/lib/debug.js");
-
+load("json-client.js")
+load("json-chat.js")
 
 // IconShell prototype extensions for member logic
 // Run time logic
 // Add subprogram state to IconShell
 IconShell.prototype.init = function() {
-    dbug("Initialize icon shell","init")
+    dbug("Initialize icon shell 42A","init")
     // === Instance state ===
     // Main root frame for the entire shell UI
     this.root = new Frame(1, 1, console.screen_columns, console.screen_rows, ICSH_VALS.ROOT.BG | ICSH_VALS.ROOT.FG);
@@ -45,7 +46,26 @@ IconShell.prototype.init = function() {
     // Subprogram state: null or { name, handlers }
     this.activeSubprogram = null;
     // === End instance state ===
-    this.chat = new Chat();
+    // Persistent chat backend (JSONChat)
+    var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
+    var host = bbs.sys_inetaddr || "127.0.0.1";
+    var port = 10088; // Adjust as needed
+    var jsonclient = new JSONClient(host, port);
+    this.jsonchat = new JSONChat(usernum, jsonclient, host, port);
+    this.jsonchat.join("main");
+    // Wrap update() to log incoming messages for notification/debugging
+
+    this.chatNotifications = [];
+    // Chat subprogram gets reference to persistent backend
+    this.chat = new Chat(this.jsonchat);
+    var origUpdate = this.jsonchat.update;
+    var self = this;
+    this.jsonchat.update = function(packet) {
+        if (packet && packet.oper && packet.oper.toUpperCase() === "WRITE") {
+            dbug(!!self.activeSubprogram + "Incoming chat messageABC: " + JSON.stringify(packet), "chat");
+            if(self.activeSubprogram && self.activeSubprogram.updateChat) self.activeSubprogram.updateChat(packet);
+        return origUpdate.call(this, packet)}
+    }
     // Assign hotkeys for root view
     this.assignViewHotkeys(ICSH_CONFIG.children);
     this.drawFolder();
@@ -58,14 +78,16 @@ IconShell.prototype.main = function() {
     try {
         while (!js.terminated) {
             this.recreateFramesIfNeeded();
-            // If a subprogram is active and has an enter() method, let it run exclusively
-
-            var key = console.getkey(K_NOECHO|K_NOSPIN);
-
-             if (typeof key === 'string' && key.length > 0) {
-                var ch = key;
-                dbug("Key:" + ch,"keylog")
-                this.processKeyboardInput(ch);
+            // Always cycle chat backend for notifications
+            if (this.jsonchat) {
+                this.jsonchat.cycle();
+                // TODO: notification logic (step 4)
+            }
+            // Non-blocking input: 100ms timeout
+            var key = console.inkey(K_NOECHO|K_NOSPIN, 100);
+            if (typeof key === 'string' && key.length > 0) {
+                dbug("Key:" + key, "keylog");
+                this.processKeyboardInput(key);
             }
             yield(true);
         }
@@ -76,16 +98,26 @@ IconShell.prototype.main = function() {
 
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function(ch) {
-    dbug("Shell processing keyboard input:" + ch,"keylog")
-        if (this.activeSubprogram) {
-            dbug("received key " + ch + " to proxy to active subprogram","subprogram")
-            if (typeof this.activeSubprogram.handleKey === 'function') {
-                dbug("subprogram has handleKey() function","subprogram")
-                this.activeSubprogram.handleKey(ch);
-            }
-            return;
-        }
-    // Navigation keys
+    dbug("Shell processing keyboard input:" + ch, "keylog");
+    if (this.activeSubprogram) {
+        this._handleSubprogramKey(ch);
+        return;
+    }
+    if (this._handleNavigationKey(ch)) return true;
+    if (this._handleHotkeyAction(ch)) return true;
+    if (this._handleHotkeyItemSelection(ch)) return true;
+    return false;
+};
+
+IconShell.prototype._handleSubprogramKey = function(ch) {
+    dbug("received key " + ch + " to proxy to active subprogram", "subprogram");
+    if (typeof this.activeSubprogram.handleKey === 'function') {
+        dbug("subprogram has handleKey() function", "subprogram");
+        this.activeSubprogram.handleKey(ch);
+    }
+};
+
+IconShell.prototype._handleNavigationKey = function(ch) {
     switch (ch) {
         case KEY_LEFT:  this.moveSelection(-1, 0); return true;
         case KEY_RIGHT: this.moveSelection( 1, 0); return true;
@@ -104,47 +136,52 @@ IconShell.prototype.processKeyboardInput = function(ch) {
             }
             return true;
         default:
-            // Use viewHotkeys for currentView
-            var viewId = this.currentView || (this.generateViewId ? this.generateViewId() : "root");
-            var hotkeyMap = this.viewHotkeys[viewId] || {};
-            dbug("Checking view " + viewId + " hot keys." + JSON.stringify(hotkeyMap), "hotkeys");
-            // Try all forms: raw, uppercase, lowercase
-            var action = hotkeyMap[ch];
-            if (typeof action === 'function') {
-                dbug("Executing hotkey action for " + ch + " in view " + viewId, "hotkeys");
-                action();
-                if (this.folderChanged) {
-                    this.folderChanged = false;
-                    this.drawFolder();
-                }
-                return true;
-            }
-            // If not a function, try to find the item and open it (for folders/items)
-            var node = this.stack[this.stack.length-1];
-            var items = node.children ? node.children.slice() : [];
-            if (this.stack.length > 1) {
-                items.unshift({ label: "..", type: "item", hotkey: "\x1B" });
-            }
-            var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 2;
-            var cols = Math.max(1, Math.floor(this.view.width / cellW));
-            var rows = Math.max(1, Math.floor(this.view.height / cellH));
-            var maxIcons = cols * rows;
-            var visibleItems = items.slice(this.scrollOffset, this.scrollOffset + maxIcons);
-            for (var i = 0; i < visibleItems.length; i++) {
-                var item = visibleItems[i];
-                if (item.hotkey && ch === item.hotkey) {
-                    dbug(item.hotkey + ":" + item.label, "hotkeys")
-                    this.selection = this.scrollOffset + i;
-                    this.openSelection();
-                    if (this.folderChanged) {
-                        this.folderChanged = false;
-                        this.drawFolder();
-                    }
-                    return true;
-                }
-            }
             return false;
     }
+};
+
+IconShell.prototype._handleHotkeyAction = function(ch) {
+    var viewId = this.currentView || (this.generateViewId ? this.generateViewId() : "root");
+    var hotkeyMap = this.viewHotkeys[viewId] || {};
+    dbug("Checking view " + viewId + " hot keys." + JSON.stringify(hotkeyMap), "hotkeys");
+    var action = hotkeyMap[ch];
+    if (typeof action === 'function') {
+        dbug("Executing hotkey action for " + ch + " in view " + viewId, "hotkeys");
+        action();
+        if (this.folderChanged) {
+            this.folderChanged = false;
+            this.drawFolder();
+        }
+        return true;
+    }
+    return false;
+};
+
+IconShell.prototype._handleHotkeyItemSelection = function(ch) {
+    var node = this.stack[this.stack.length-1];
+    var items = node.children ? node.children.slice() : [];
+    if (this.stack.length > 1) {
+        items.unshift({ label: "..", type: "item", hotkey: "\x1B", iconFile: "back" });
+    }
+    var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 2;
+    var cols = Math.max(1, Math.floor(this.view.width / cellW));
+    var rows = Math.max(1, Math.floor(this.view.height / cellH));
+    var maxIcons = cols * rows;
+    var visibleItems = items.slice(this.scrollOffset, this.scrollOffset + maxIcons);
+    for (var i = 0; i < visibleItems.length; i++) {
+        var item = visibleItems[i];
+        if (item.hotkey && ch === item.hotkey) {
+            dbug(item.hotkey + ":" + item.label, "hotkeys");
+            this.selection = this.scrollOffset + i;
+            this.openSelection();
+            if (this.folderChanged) {
+                this.folderChanged = false;
+                this.drawFolder();
+            }
+            return true;
+        }
+    }
+    return false;
 };
 
 
