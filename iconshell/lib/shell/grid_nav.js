@@ -1,7 +1,3 @@
-load("iconshell/lib/debug.js");
-
-
-
 // Update openSelection to use changeFolder for both up and down navigation
 IconShell.prototype.openSelection = function() {
     dbug("open Selection", "view");
@@ -286,7 +282,7 @@ IconShell.prototype.buildIconGrid = function (parentFrame, items) {
     }
     var maxIcons = dims.cols * dims.maxRows;
     var cells = [];
-    var Icon = load("iconshell/lib/icon.js");
+    // var Icon = load("iconshell/lib/icon.js");
     log("render " + items.length + " items. First item" + JSON.stringify(items[0]) + "\r\nSecven:" + JSON.stringify(items[7]));
     for (var i = 0; i < items.length && i < maxIcons; i++) {
         var cell = this._createIconCell(i, dims, items, parentFrame, Icon);

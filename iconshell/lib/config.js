@@ -1,6 +1,6 @@
 
-load("iconshell/lib/whosonline.js");
-load("iconshell/lib/gamesmenu.js");
+load("iconshell/lib/subfunctions/whosonline.js");
+load("iconshell/lib/subfunctions/gamesmenu.js");
 
 // Centralized color configuration for IconShell
 var ICSH_VALS = {

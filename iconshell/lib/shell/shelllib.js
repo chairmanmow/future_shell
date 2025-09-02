@@ -1,18 +1,4 @@
 
-// Run an external program and always refresh the shell UI after
-load("iconshell/lib/eye_candy.js");
-load('iconshell/lib/chat.js');
-load("sbbsdefs.js");
-load("iconshell/lib/helpers.js");
-load("iconshell/lib/config.js");
-load("iconshell/lib/hotkeys.js");
-load("iconshell/lib/grid_nav.js");
-load("iconshell/lib/launch.js");
-load("iconshell/lib/debug.js");
-load("json-client.js")
-load("json-chat.js")
-load("iconshell/lib/toast.js");
-
 // IconShell prototype extensions for member logic
 // Run time logic
 // Add subprogram state to IconShell
@@ -85,7 +71,9 @@ IconShell.prototype.init = function() {
                      });
                 }
             }
-            if(self.activeSubprogram && self.activeSubprogram.updateChat) self.activeSubprogram.updateChat(packet);
+           if (self.activeSubprogram && typeof self.activeSubprogram.updateChat === 'function') {
+                self.activeSubprogram.updateChat(packet.data);
+            }
         }
         return origUpdate.call(this, packet);
     }

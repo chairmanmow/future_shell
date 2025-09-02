@@ -3,7 +3,6 @@
  */
 
 load("sbbsdefs.js"); // LOG_* and K_* constants
-load("iconshell/lib/mouse_hotspot_test.js");
 
 function BasicShell(onReloadAdvancedShell) {
     console.clear();

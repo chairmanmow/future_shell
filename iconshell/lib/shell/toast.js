@@ -1,10 +1,6 @@
 
 var MAX_TOAST_WIDTH = 40;
-var DEFAULT_TOAST_TIMEOUT = 3000; // 3 seconds
-
-load("load/frame.js");
-load("iconshell/lib/eye_candy.js");
-
+var DEFAULT_TOAST_TIMEOUT = 30000; // 30 seconds
 
 function Toast(options) {
     // log("Creating Toast " + JSON.stringify(options));

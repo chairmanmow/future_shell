@@ -5,20 +5,14 @@
  * - ESC to go up a level, Q to log off
  */
 
-load("sbbsdefs.js");
-if (typeof K_MOUSE === 'undefined')
-    var K_MOUSE = 0x80000000;
-load("load/frame.js"); // Frame, Display, etc.
-load("iconshell/lib/icon.js");
 
 load("iconshell/lib/config.js");
-load("load/graphic.js");
 // -------------------- Helpers --------------------
-load("iconshell/lib/helpers.js");
-load("iconshell/lib/shelllib.js");
+
+load("iconshell/lib/shell/index.js");
 
 function IconShell(){
-        log("Instantiate Icon Shell");
+        log("Instantiate Icon Shell 22");
         this.currentView = "view1";  // first set inside init, reset when changing folders
         this.viewHotkeys = {}; // first set inside init, reset when changing folders
         this.init();
