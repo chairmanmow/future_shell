@@ -125,57 +125,6 @@ Chat.prototype.cleanup = function(){
     }
     this.messageFrames = [];
 }
-// Helper to render a message and (optionally) avatar on a given side and row
-// Helper to render a message line and (optionally) avatar on a given side and row
-Chat.prototype.renderMessage = function(params) {
-    var {msg, side, y, avatarLib, lastSender, drawAvatar, centerMsgFrame, leftAvatarFrame, rightAvatarFrame, centerWidth, avatarHeight, padding, lineText} = params;
-    var from = msg.nick.name;
-    var usernum = (msg.nick.number && !isNaN(msg.nick.number)) ? msg.nick.number : system.matchuser(from);
-    var avatarArt = null;
-    if (drawAvatar && usernum && typeof avatarLib.read === 'function') {
-        var avatarObj = avatarLib.read(usernum, from);
-        if (avatarObj && avatarObj.data) avatarArt = base64_decode(avatarObj.data);
-    }
-    // Draw avatar if needed
-    if (side === 'left') {
-        if (drawAvatar) {
-            if (avatarArt && typeof leftAvatarFrame.load_bin === 'function') {
-                leftAvatarFrame.gotoxy(1, y);
-                leftAvatarFrame.load_bin(avatarArt, 10, avatarHeight);
-            } else {
-                leftAvatarFrame.gotoxy(1, y);
-                leftAvatarFrame.putmsg("[ ]");
-            }
-        }
-        // Clear right avatar area for this row
-        rightAvatarFrame.gotoxy(1, y);
-        rightAvatarFrame.putmsg("          ");
-    } else {
-        if (drawAvatar) {
-            if (avatarArt && typeof rightAvatarFrame.load_bin === 'function') {
-                rightAvatarFrame.gotoxy(1, y);
-                rightAvatarFrame.load_bin(avatarArt, 10, avatarHeight);
-            } else {
-                rightAvatarFrame.gotoxy(1, y);
-                rightAvatarFrame.putmsg("[ ]");
-            }
-        }
-        // Clear left avatar area for this row
-        leftAvatarFrame.gotoxy(1, y);
-        leftAvatarFrame.putmsg("          ");
-    }
-    // Render the message line directly into the center message frame
-    if (side === 'left') {
-        centerMsgFrame.gotoxy(2, y);
-        centerMsgFrame.putmsg(lineText);
-    } else {
-        var pad = centerMsgFrame.width - lineText.length - 1;
-        centerMsgFrame.gotoxy(Math.max(2, pad), y);
-        centerMsgFrame.putmsg(lineText);
-    }
-        this.lastSender = from; // Update last sender
-        this.lastRow = y; // Update last rendered row
-};
 
 
 Chat.prototype.initFrames = function() {
@@ -202,61 +151,59 @@ Chat.prototype.initFrames = function() {
 	this.chatInputFrame.open();
 };
 
-
 Chat.prototype.refresh = function(){
 	this.jsonchat.cycle();
 	this.draw();
 }
 
 Chat.prototype.draw = function(newMsg) {
-    // Helper to generate divider string for a side
-
-    // Clear and redraw chat frames
     if (!this.leftAvatarFrame || !this.centerMsgFrame || !this.rightAvatarFrame || !this.chatInputFrame) this.initFrames();
-    // Optionally clear frames here if needed
-
     var chan = this.jsonchat ? this.jsonchat.channels[this.channel.toUpperCase()] : null;
     var messages = chan ? chan.messages : [];
     if(newMsg) {
         messages.push(newMsg);
         log("Pushing new message to chat.draw(newMsg)")
-    }   
+    }
     var maxRows = this.centerMsgFrame.height;
-
     var centerWidth = this.centerMsgFrame.width;
-    var maxRows = this.centerMsgFrame.height;
     var avatarHeight = 6;
     var avatarWidth = 10;
-    var maxMsgWidth = Math.floor(centerWidth / 2);
-
     var maxMsgWidth = Math.floor(centerWidth / 2);
     this.messageFrames = [];
     var avatarLib = load({}, '../exec/load/avatar_lib.js');
 
-    // 1. First pass: collect avatar placement requests
+    // Refactored steps
+    var senderGroups = this._collectSenderGroups(messages, maxRows, maxMsgWidth, avatarHeight);
+    var avatarMap = this._collectAvatarMap(senderGroups, avatarLib, avatarWidth, avatarHeight);
+    this._drawAvatars(avatarMap, avatarLib, avatarWidth, avatarHeight);
+    var lastMsgInfo = this._renderMessages(messages, maxRows, maxMsgWidth, centerWidth, senderGroups);
+    this._drawLastDivider(messages, maxMsgWidth, centerWidth, lastMsgInfo.row, lastMsgInfo.side);
+    this._drawInputFrame();
+    this.parentFrame.cycle();
+}
+
+// Helper: collect sender groups and avatar placements
+Chat.prototype._collectSenderGroups = function(messages, maxRows, maxMsgWidth, avatarHeight) {
     var avatarPlacements = { left: [], right: [] };
     var yCursor = 1;
     var lastSender = null;
     var side = 'left';
-    var i, msg, from, isFirstMessage, msgText, wrapWidth, lines, col;
     var senderGroups = [];
     var currentGroup = null;
-    for (i = Math.max(0, messages.length - maxRows); i < messages.length; i++) {
-        msg = messages[i];
+    for (var i = Math.max(0, messages.length - maxRows); i < messages.length; i++) {
+        var msg = messages[i];
         if (msg && msg.nick && msg.nick.name && (msg.str || msg.text)) {
-            from = msg.nick.name;
-            isFirstMessage = (lastSender === null);
-            msgText = from + ': ' + (msg.str || msg.text || '');
-            lines = wrapText(msgText, maxMsgWidth);
+            var from = msg.nick.name;
+            var isFirstMessage = (lastSender === null);
+            var msgText = from + ': ' + (msg.str || msg.text || '');
+            var lines = wrapText(msgText, maxMsgWidth);
             if (isFirstMessage || from !== lastSender) {
                 side = (side === 'left') ? 'right' : 'left';
-                col = (side === 'left') ? 'left' : 'right';
+                var col = (side === 'left') ? 'left' : 'right';
                 avatarPlacements[col].push({ user: from, y: yCursor, height: avatarHeight });
-                // Start new group
                 if (currentGroup) senderGroups.push(currentGroup);
                 currentGroup = { sender: from, start: yCursor, end: yCursor + lines.length - 1 };
             } else {
-                // Extend current group
                 if (currentGroup) currentGroup.end = yCursor + lines.length - 1;
             }
             yCursor += lines.length;
@@ -264,16 +211,26 @@ Chat.prototype.draw = function(newMsg) {
         }
     }
     if (currentGroup) senderGroups.push(currentGroup);
+    senderGroups.avatarPlacements = avatarPlacements;
+    return senderGroups;
+}
 
-    var avatarMap = { left: packAvatars(avatarPlacements.left), right: packAvatars(avatarPlacements.right) };
+// Helper: collect avatar map
+Chat.prototype._collectAvatarMap = function(senderGroups, avatarLib, avatarWidth, avatarHeight) {
+    return {
+        left: packAvatars(senderGroups.avatarPlacements.left),
+        right: packAvatars(senderGroups.avatarPlacements.right)
+    };
+}
 
-    // 3. Third pass: draw avatars at packed positions
+// Helper: draw avatars
+Chat.prototype._drawAvatars = function(avatarMap, avatarLib, avatarWidth, avatarHeight) {
     var avatarDrawn = { left: {}, right: {} };
     var colnames = ['left', 'right'];
     for (var c = 0; c < colnames.length; c++) {
         var col = colnames[c];
         var oppositeFrame = (col === 'left') ? this.rightAvatarFrame : this.leftAvatarFrame;
-        for (i = 0; i < avatarMap[col].length; i++) {
+        for (var i = 0; i < avatarMap[col].length; i++) {
             var a = avatarMap[col][i];
             if (avatarDrawn[col][a.user]) continue;
             var usernum = system.matchuser(a.user);
@@ -292,33 +249,29 @@ Chat.prototype.draw = function(newMsg) {
             avatarDrawn[col][a.user] = true;
         }
     }
+}
 
-    // 4. Render messages as before
-
+// Helper: render messages
+Chat.prototype._renderMessages = function(messages, maxRows, maxMsgWidth, centerWidth, senderGroups) {
     var y = 1;
-    lastSender = null;
-    side = 'left';
-    var groupIdx = 0;
-    var nextGroup = senderGroups[groupIdx] || null;
-    var lastDividerRow = null;
-    var lastDividerSide = null;
+    var lastSender = null;
+    var side = 'left';
     var firstGroup = true;
     var prevMsg = null;
-    for (i = Math.max(0, messages.length - maxRows); i < messages.length; i++) {
-        msg = messages[i];
+    var lastMsgSide = 'left';
+    for (var i = Math.max(0, messages.length - maxRows); i < messages.length; i++) {
+        var msg = messages[i];
         var prevMsg = (i > Math.max(0, messages.length - maxRows)) ? messages[i - 1] : null;
-        // Deduplicate: skip if same sender and timestamp as previous
         if (prevMsg && msg.nick && prevMsg.nick && msg.nick.name === prevMsg.nick.name && msg.time === prevMsg.time) {
             continue;
         }
         if (msg && msg.nick && msg.nick.name && (msg.str || msg.text)) {
-            from = msg.nick.name;
-            isFirstMessage = (lastSender === null);
-            msgText = from + ': ' + (msg.str || msg.text || '');
-            lines = wrapText(msgText, maxMsgWidth);
+            var from = msg.nick.name;
+            var isFirstMessage = (lastSender === null);
+            var msgText = from + ': ' + (msg.str || msg.text || '');
+            var lines = wrapText(msgText, maxMsgWidth);
             var senderChanged = isFirstMessage || from !== lastSender;
             if (senderChanged) {
-                // ...existing code for divider and first message rendering...
                 if (!firstGroup && y > 1 && prevMsg) {
                     var curTime = (msg && typeof msg.time !== 'undefined') ? msg.time : undefined;
                     var prevTime = (prevMsg && typeof prevMsg.time !== 'undefined') ? prevMsg.time : undefined;
@@ -334,8 +287,6 @@ Chat.prototype.draw = function(newMsg) {
                             : Array((maxMsgWidth - lines[0].length)).join(' ') + lines[0];
                         this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
                         this.centerMsgFrame.putmsg(rightHalf);
-                        lastDividerRow = drawY;
-                        lastDividerSide = 'left';
                     } else {
                         var msgPadLen = maxMsgWidth - lines[0].length;
                         if (msgPadLen < 0) msgPadLen = 0;
@@ -344,8 +295,6 @@ Chat.prototype.draw = function(newMsg) {
                         this.centerMsgFrame.putmsg(leftHalf);
                         this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
                         this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
-                        lastDividerRow = drawY;
-                        lastDividerSide = 'right';
                     }
                     this.messageFrames.push({msg: msg, y: drawY, side: (side === 'left') ? 'right' : 'left'});
                     y += 1;
@@ -369,12 +318,8 @@ Chat.prototype.draw = function(newMsg) {
                     this.messageFrames.push({msg: msg, y: drawY, side: (side === 'left') ? 'right' : 'left'});
                     y += 1;
                 }
-                if (!firstGroup) {
-                    side = (side === 'left') ? 'right' : 'left';
-                }
-                firstGroup = false;
                 for (var l = 1; l < lines.length; l++) {
-                    drawY = y;
+                    var drawY = y;
                     var msgStr = lines[l];
                     this.centerMsgFrame.gotoxy(2, drawY);
                     this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
@@ -394,6 +339,10 @@ Chat.prototype.draw = function(newMsg) {
                     this.messageFrames.push({msg: msg, y: drawY, side: side});
                     y += 1;
                 }
+                if (!firstGroup) {
+                    side = (side === 'left') ? 'right' : 'left';
+                }
+                firstGroup = false;
             } else {
                 for (var l = 0; l < lines.length; l++) {
                     var drawY = y;
@@ -418,32 +367,42 @@ Chat.prototype.draw = function(newMsg) {
                 }
             }
             lastSender = from;
+            lastMsgSide = side;
             prevMsg = msg;
         } else {
             try { log('[CHAT:SKIP] ' + JSON.stringify(msg)); } catch (e) {}
         }
     }
-// Always draw divider for last sender at the end for visual consistency
-if (messages.length > 0 && prevMsg) {
-    var lastTime = (prevMsg && typeof prevMsg.time !== 'undefined') ? prevMsg.time : undefined;
-    var dividerStr = getDividerString(side, maxMsgWidth, lastTime, lastTime);
-    var drawY = y;
-    this.centerMsgFrame.gotoxy(2, drawY);
-    this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
-    if (side === 'left') {
+    return { row: y, side: lastMsgSide };
+}
+
+// Helper: draw last divider
+Chat.prototype._drawLastDivider = function(messages, maxMsgWidth, centerWidth) {
+    var prevMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+    var y = arguments.length > 3 ? arguments[3] : this.centerMsgFrame.height;
+    var side = arguments.length > 4 ? arguments[4] : 'left';
+    if (messages.length > 0 && prevMsg) {
+        var lastTime = (prevMsg && typeof prevMsg.time !== 'undefined') ? prevMsg.time : undefined;
+        var dividerStr = getDividerString(side, maxMsgWidth, lastTime, lastTime);
+        var drawY = y;
         this.centerMsgFrame.gotoxy(2, drawY);
-        this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
-    } else {
-        this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
-        this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
+        this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
+        if (side === 'left') {
+            this.centerMsgFrame.gotoxy(2, drawY);
+            this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
+        } else {
+            this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
+            this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
+        }
     }
 }
 
+// Helper: draw input frame
+Chat.prototype._drawInputFrame = function() {
     this.chatInputFrame.gotoxy(2, 1);
     this.chatInputFrame.putmsg('You: ' + this.input + '_');
     this.chatInputFrame.gotoxy(2, 2);
     this.chatInputFrame.putmsg('[ESC to exit chat]');
-    this.parentFrame.cycle();
 }
 
 
