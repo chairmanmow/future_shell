@@ -126,8 +126,25 @@ IconShell.prototype.drawFolder = function() {
     this.view.clear(ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG);
     var names = [];
     for (var i=0; i<this.stack.length; i++) names.push(this.stack[i].label || "Untitled");
+    // Recreate crumb and mouse indicator frames to fit screen
+    var mouseIndicatorWidth = 10; // Allow extra space for full text
+    var screenWidth = (typeof console !== 'undefined' && console.screen_columns) ? console.screen_columns : this.root.width;
+    var crumbWidth = screenWidth - mouseIndicatorWidth;
+    if (crumbWidth < 1) crumbWidth = 1;
+    // Dispose old frames if they exist
+    if (this.crumb && typeof this.crumb.close === 'function') this.crumb.close();
+    if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') this.mouseIndicator.close();
+    // Create crumb frame (left)
+    this.crumb = new Frame(1, this.root.height, crumbWidth, 1, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.root);
+    this.crumb.open();
     this.crumb.clear(ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG);
     this.crumb.home();
+    // Create mouse indicator frame (right)
+    var mouseX = crumbWidth + 1;
+    var mouseY = this.root.height;
+    this.mouseIndicator = new Frame(mouseX, mouseY, mouseIndicatorWidth, 1, ICSH_VALS.MOUSE_ON.BG | ICSH_VALS.MOUSE_ON.FG, this.root);
+    this.mouseIndicator.open();
+    this._updateMouseIndicator();
     var node = this.stack[this.stack.length-1];
     var items = node.children ? node.children.slice() : [];
     if (this.stack.length > 1) {
@@ -156,6 +173,20 @@ IconShell.prototype.drawFolder = function() {
     this.root.cycle();
 };
 
+IconShell.prototype._updateMouseIndicator = function() {
+    if (!this.mouseIndicator) return;
+    var isActive = !!this.mouseActive;
+    var vals = isActive ? ICSH_VALS.MOUSE_ON : ICSH_VALS.MOUSE_OFF;
+    this.mouseIndicator.attr = vals.BG | vals.FG;
+    this.mouseIndicator.clear();
+    this.mouseIndicator.gotoxy(1, 1);
+    // Always write exactly 10 chars, pad if needed
+    var msg = isActive ? "MOUSE ON" : "MOUSE OFF";
+    if (msg.length < 10) msg += Array(11 - msg.length).join(' ');
+    this.mouseIndicator.putmsg(msg);
+    this.mouseIndicator.cycle();
+};
+
 IconShell.prototype._closePreviousFrames = function() {
     if (this.grid && this.grid.cells) {
         for (var i = 0; i < this.grid.cells.length; i++) {
@@ -170,8 +201,19 @@ IconShell.prototype._clearHotspots = function() {
 };
 
 IconShell.prototype._drawBreadcrumb = function(names, selectedNum, total) {
-    var itemInfo = " (Item " + selectedNum + "/" + total + ")";
-    this.crumb.putmsg(" " + names.join(" \x10 ") + " " + itemInfo);
+    // Compose path as /folder1/folder2/...
+    var path = '/' + names.join('/');
+    // Get user and bbs info if available
+    var userName = (typeof user !== 'undefined' && user.name) ? user.name : 'user';
+    var bbsName = (typeof system !== 'undefined' && system.name) ? system.name : 'bbs';
+    // Get selected item name if available
+    var selectedItemName = '';
+    if (this.grid && this.grid.cells && this.selection >= 0 && this.selection < this.grid.cells.length) {
+        var item = this.grid.cells[this.selection].item;
+        if (item && item.label) selectedItemName = item.label;
+    }
+    var crumbText = userName + '@' + bbsName + ':' + path + '/' + selectedItemName + '$';
+    this.crumb.putmsg(crumbText);
 };
 
 IconShell.prototype._clampSelection = function(items) {

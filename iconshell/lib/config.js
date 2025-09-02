@@ -12,7 +12,9 @@ var ICSH_VALS = {
 	UPITEM: { BG: BG_LIGHTGRAY, FG: BLACK     },
 	ANIMATION: { COLOR: GREEN },
 	EXTERNAL_BG: BG_BLACK,
-	EXTERNAL_FG: LIGHTGRAY
+	EXTERNAL_FG: LIGHTGRAY,
+	MOUSE_ON:  { BG: BG_BLUE, FG: WHITE },
+	MOUSE_OFF: { BG: BG_RED,  FG: WHITE }
 	// Add more as needed for other UI elements
 };
 

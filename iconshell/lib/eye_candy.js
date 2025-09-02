@@ -123,3 +123,36 @@ function wipeRight(theFrame,wipeSize,color,delay) {
 		}
 	}
 }
+
+function wipeLeft(theFrame, wipeSize, color, delay) {
+		if (typeof(wipeSize) === "undefined") { wipeSize = 5; }
+		if (typeof(color) === "undefined") { color = BLACK; }
+		if (typeof(delay) === "undefined") { delay = 1; }
+
+		var x, y, xl, yl, p, pixelArray = [];
+		xl = theFrame.width;
+		yl = theFrame.height;
+
+		for (x = xl - 1; x >= 0; x -= wipeSize) {
+			for (p = 0; p < wipeSize; p++) {
+				pixelArray[p] = [];
+				for (y = 0; y < yl; y++) {
+					pixelArray[p].push(y);
+				}
+			}
+			while (pixelArray[0].length > 0) {
+				for (p = 0; p < wipeSize; p++) {
+					var randomIndex = Math.floor(Math.random() * pixelArray[p].length);
+					var randomPixel = pixelArray[p].splice(randomIndex, 1);
+					theFrame.setData(x - p, randomPixel, ascii(219), color);
+					theFrame.cycle();
+					if (typeof Sprite !== 'undefined') {
+						Sprite.cycle();
+					}
+					if (delay > 0) {
+						mswait(delay);
+					}
+				}
+			}
+		}
+	}

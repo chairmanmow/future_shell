@@ -166,7 +166,7 @@ Chat.prototype.updateChat = function(packet) {
         return;
     }
 
-    // Render each line of the new message
+    // Render each line of the new message directly into the center message frame
     for (var l = 0; l < lines.length; l++) {
         var lineY = y + l;
         var params = {
@@ -181,12 +181,12 @@ Chat.prototype.updateChat = function(packet) {
             rightAvatarFrame: this.rightAvatarFrame,
             centerWidth: centerWidth,
             avatarHeight: avatarHeight,
-            padding: padding
+            padding: padding,
+            lineText: lines[l]
         };
         this.renderMessage(params);
         this.messageFrames.push({msg: msg, y: lineY, side: side});
     }
-
     // Update input frame
     this.updateInputFrame();
 };
@@ -215,19 +215,16 @@ Chat.prototype.cleanup = function(){
     this.messageFrames = [];
 }
 // Helper to render a message and (optionally) avatar on a given side and row
+// Helper to render a message line and (optionally) avatar on a given side and row
 Chat.prototype.renderMessage = function(params) {
-    var {msg, side, y, avatarLib, lastSender, drawAvatar, centerMsgFrame, leftAvatarFrame, rightAvatarFrame, centerWidth, avatarHeight, padding} = params;
+    var {msg, side, y, avatarLib, lastSender, drawAvatar, centerMsgFrame, leftAvatarFrame, rightAvatarFrame, centerWidth, avatarHeight, padding, lineText} = params;
     var from = msg.nick.name;
-    var text = msg.str || msg.text || "";
     var usernum = (msg.nick.number && !isNaN(msg.nick.number)) ? msg.nick.number : system.matchuser(from);
     var avatarArt = null;
     if (drawAvatar && usernum && typeof avatarLib.read === 'function') {
         var avatarObj = avatarLib.read(usernum, from);
         if (avatarObj && avatarObj.data) avatarArt = base64_decode(avatarObj.data);
     }
-    // Message subframe width
-    var msgFrameWidth = centerWidth - padding;
-    var msgFrameX = (side === 'left') ? 2 : (centerWidth - msgFrameWidth);
     // Draw avatar if needed
     if (side === 'left') {
         if (drawAvatar) {
@@ -256,14 +253,16 @@ Chat.prototype.renderMessage = function(params) {
         leftAvatarFrame.gotoxy(1, y);
         leftAvatarFrame.putmsg("          ");
     }
-    // Message subframe in center
-    var msgFrame = new Frame(msgFrameX, y, msgFrameWidth, avatarHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, centerMsgFrame);
-    msgFrame.open();
-    msgFrame.gotoxy(1, 1);
-    msgFrame.putmsg(from + ": " + text);
-    return msgFrame;
+    // Render the message line directly into the center message frame
+    if (side === 'left') {
+        centerMsgFrame.gotoxy(2, y);
+        centerMsgFrame.putmsg(lineText);
+    } else {
+        var pad = centerMsgFrame.width - lineText.length - 1;
+        centerMsgFrame.gotoxy(Math.max(2, pad), y);
+        centerMsgFrame.putmsg(lineText);
+    }
 };
-
 Chat.prototype.draw = function() {
     // Clear and redraw chat frames
     if (!this.leftAvatarFrame || !this.centerMsgFrame || !this.rightAvatarFrame || !this.chatInputFrame) this.initFrames();

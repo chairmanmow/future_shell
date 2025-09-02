@@ -101,22 +101,16 @@ IconShell.prototype.moveSelection = function(dx, dy) {
         if (grid.cells[newIdx]) this.paintIcon(grid.cells[newIdx], true, false);
         // Update breadcrumb bar to show current selection
         if (typeof this.crumb !== 'undefined' && this.crumb) {
-            this.crumb.clear(BG_BLUE|WHITE);
-            this.crumb.home();
-            var node = this.stack[this.stack.length-1];
-            var items = node.children ? node.children.slice() : [];
-            if (this.stack.length > 1) {
-                items.unshift({ label: "..", type: "item" });
-            }
-            var total = items.length;
-            var selectedNum = this.selection + 1;
-            var selectedLabel = (items[this.selection] && items[this.selection].label) ? items[this.selection].label : "";
+            // Use unified breadcrumb formatting
             var names = [];
             for (var i=0; i<this.stack.length; i++) names.push(this.stack[i].label || "Untitled");
-            var itemInfo = " (Item " + selectedNum + "/" + total + ")";
-            var crumbText = " " + names.join(" \x10 ") + " " + itemInfo;
-            if (selectedLabel) crumbText += " | " + selectedLabel;
-            this.crumb.putmsg(crumbText);
+            var total = (this.stack[this.stack.length-1].children || []).length;
+            var selectedNum = this.selection + 1;
+            if (typeof this._drawBreadcrumb === 'function') {
+                this.crumb.clear(BG_BLUE|WHITE);
+                this.crumb.home();
+                this._drawBreadcrumb(names, selectedNum, total);
+            }
         }
         this.root.cycle();
     }

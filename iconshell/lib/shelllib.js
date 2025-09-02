@@ -1,3 +1,4 @@
+
 // Run an external program and always refresh the shell UI after
 load("iconshell/lib/eye_candy.js");
 load('iconshell/lib/chat.js');
@@ -10,6 +11,7 @@ load("iconshell/lib/launch.js");
 load("iconshell/lib/debug.js");
 load("json-client.js")
 load("json-chat.js")
+load("iconshell/lib/toast.js");
 
 // IconShell prototype extensions for member logic
 // Run time logic
@@ -18,13 +20,20 @@ IconShell.prototype.init = function() {
     dbug("Initialize icon shell 42A","init")
     // === Instance state ===
     // Main root frame for the entire shell UI
-    this.root = new Frame(1, 1, console.screen_columns, console.screen_rows, ICSH_VALS.ROOT.BG | ICSH_VALS.ROOT.FG);
+    var rootW = Math.max(1, console.screen_columns);
+    var rootH = Math.max(1, console.screen_rows);
+    this.root = new Frame(1, 1, rootW, rootH, ICSH_VALS.ROOT.BG | ICSH_VALS.ROOT.FG);
     this.root.open();
     // Main icon view area (excludes crumb bar)
-    this.view = new Frame(1, 1, this.root.width, this.root.height - 1, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.root);
+    var viewH = Math.max(1, this.root.height - 1);
+    this.view = new Frame(1, 1, this.root.width, viewH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.root);
     this.view.open();
     // Breadcrumb bar at the bottom
-    this.crumb = new Frame(1, this.root.height, this.root.width, 1, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.root);
+    var crumbY = this.root.height;
+    var crumbH = 1;
+    if (crumbY < 1) crumbY = 1;
+    if (crumbY + crumbH - 1 > this.root.height) crumbH = Math.max(1, this.root.height - crumbY + 1);
+    this.crumb = new Frame(1, crumbY, this.root.width, crumbH, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.root);
     this.crumb.open();
     // Stack of folder nodes (for navigation)
     this.stack = [ICSH_CONFIG];
@@ -45,6 +54,10 @@ IconShell.prototype.init = function() {
     this.viewHotkeys = {};
     // Subprogram state: null or { name, handlers }
     this.activeSubprogram = null;
+    // Mouse support detection
+    this.mouseActive = this.detectMouseSupport();
+    // Toast tracking
+    this.toasts = [];
     // === End instance state ===
     // Persistent chat backend (JSONChat)
     var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
@@ -63,8 +76,18 @@ IconShell.prototype.init = function() {
     this.jsonchat.update = function(packet) {
         if (packet && packet.oper && packet.oper.toUpperCase() === "WRITE") {
             dbug(!!self.activeSubprogram + "Incoming chat messageABC: " + JSON.stringify(packet), "chat");
+            // If not in chat subprogram, show toast
+            if (!self.activeSubprogram || self.activeSubprogram !== self.chat) {
+                // Only show if message has text
+                if (packet.data && packet.data.str) {
+                     self.showToast({
+                        message: packet.data.nick.name + ': ' + packet.data.str
+                     });
+                }
+            }
             if(self.activeSubprogram && self.activeSubprogram.updateChat) self.activeSubprogram.updateChat(packet);
-        return origUpdate.call(this, packet)}
+        }
+        return origUpdate.call(this, packet);
     }
     // Assign hotkeys for root view
     this.assignViewHotkeys(ICSH_CONFIG.children);
@@ -89,6 +112,12 @@ IconShell.prototype.main = function() {
                 dbug("Key:" + key, "keylog");
                 this.processKeyboardInput(key);
             }
+            // Cycle all toasts for auto-dismiss
+            if (this.toasts && this.toasts.length > 0) {
+                for (var i = 0; i < this.toasts.length; i++) {
+                    if (typeof this.toasts[i].cycle === 'function') this.toasts[i].cycle();
+                }
+            }
             yield(true);
         }
     } finally {
@@ -99,6 +128,17 @@ IconShell.prototype.main = function() {
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function(ch) {
     dbug("Shell processing keyboard input:" + ch, "keylog");
+    // If any toasts are active, ESC dismisses the oldest
+    if (this.toasts && this.toasts.length > 0) {
+        if (ch === '\x1B') { // ESC
+            var toast = this.toasts[0];
+            log("clearing toasts");
+            if (toast && typeof toast.dismiss === 'function') toast.dismiss();
+            return true;
+        }
+        // Block other input while toast(s) are present
+        return true;
+    }
     if (this.activeSubprogram) {
         this._handleSubprogramKey(ch);
         return;
@@ -182,6 +222,38 @@ IconShell.prototype._handleHotkeyItemSelection = function(ch) {
         }
     }
     return false;
+};
+
+// Detect if the terminal supports mouse events
+IconShell.prototype.detectMouseSupport = function() {
+    // 1. Check user.settings for USER_MOUSE if available
+    if (typeof user !== 'undefined' && typeof USER_MOUSE !== 'undefined' && (user.settings & USER_MOUSE)) {
+        log('Mouse support detected via user.settings/USER_MOUSE');
+        return true;
+    }
+    // TODO: 2. Fallback: check runtime terminal support for mouse flags
+    // var mouseFlags = [MOUSE_MODE_NORM, MOUSE_MODE_X10, MOUSE_MODE_ANY, MOUSE_MODE_BTN, MOUSE_MODE_EXT];
+    // for (var i = 0; i < mouseFlags.length; i++) {
+    //     if (typeof mouseFlags[i] !== 'undefined' && console.term_supports && console.term_supports(mouseFlags[i])) {
+    //         log('Mouse support detected via console.term_supports: ' + mouseFlags[i]);
+    //         return true;
+    //     }
+    // }
+    log('Mouse support NOT detected');
+    return false;
+};
+
+IconShell.prototype.showToast = function(params) {
+    var self = this;
+    var opts = params || {};
+    opts.parentFrame = this.root;
+    opts.onDone = function(t) {
+        var idx = self.toasts.indexOf(t);
+        if (idx !== -1) self.toasts.splice(idx, 1);
+    };
+    var toast = new Toast(opts);
+    this.toasts.push(toast);
+    return toast;
 };
 
 
