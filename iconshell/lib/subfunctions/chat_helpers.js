@@ -51,22 +51,33 @@ function createTimestamp(currentMsgTime, lastMsgTime) {
     // If different days
     return curDateStr + ' ' + curTimeStr;
 }
+
 function wrapText(text, width) {
+    width = width - 3;
     var lines = [];
     var words = text.split(' ');
     var line = '';
     for (var i = 0; i < words.length; i++) {
-        if ((line.length ? line + ' ' : '') + words[i].length > width) {
+        var word = words[i];
+        // If the word itself is longer than width, break it up
+        while (word.length > width) {
+            if (line.length > 0) {
+                lines.push(line);
+                line = '';
+            }
+            lines.push(word.slice(0, width));
+            word = word.slice(width);
+        }
+        if ((line.length ? line.length + 1 : 0) + word.length > width) {
             if (line.length > 0) lines.push(line);
-            line = words[i];
+            line = word;
         } else {
-            line += (line.length ? ' ' : '') + words[i];
+            line += (line.length ? ' ' : '') + word;
         }
     }
     if (line.length > 0) lines.push(line);
     return lines;
-};
-
+}
 
 function getDividerString(side, width, currentMsgTime, lastMsgTime) {
     var ts = createTimestamp(currentMsgTime, lastMsgTime);
@@ -127,7 +138,7 @@ function packAvatars(placements, maxRows) {
     }
     packed.sort(function(a, b) { return a.y - b.y; });
     return packed;
-};
+}
 
 // Helper to blit a decoded avatar block into a frame at (dstX, dstY)
 function blitAvatarToFrame(frame, avatarData, width, height, dstX, dstY) {
@@ -138,6 +149,55 @@ function blitAvatarToFrame(frame, avatarData, width, height, dstX, dstY) {
             var ch = avatarData.substr(offset++, 1);
             var attr = ascii(avatarData.substr(offset++, 1));
             frame.setData(dstX + x - 1, dstY + y - 1, ch, attr, false);
+        }
+    }
+}
+
+// New helper function to render message frames
+function renderMessageFrames(messageFrames, centerMsgFrame, maxMsgWidth) {
+    // Clear the frame first
+    centerMsgFrame.clear();
+    
+    for (var i = 0; i < messageFrames.length; i++) {
+        var frame = messageFrames[i];
+        var y = frame.y;
+        var side = frame.side;
+        var msg = frame.msg;
+        var text = frame.text || '';  // Support for divider text
+        var isDivider = frame.isDivider || false;
+        var color = frame.color || undefined;
+        
+        // Skip rendering if outside visible area
+        if (y < 1 || y > centerMsgFrame.height) continue;
+        
+        // Clear the line first
+        centerMsgFrame.gotoxy(2, y);
+        centerMsgFrame.putmsg(Array(centerMsgFrame.width - 1).join(' '));
+        
+        if (isDivider) {
+            // Render divider with color if specified
+            if (side === 'left') {
+                centerMsgFrame.gotoxy(2, y);
+                centerMsgFrame.putmsg(text, color);
+            } else {
+                centerMsgFrame.gotoxy(2 + maxMsgWidth, y);
+                centerMsgFrame.putmsg(text, color);
+            }
+        } else if (text) {
+            // Render regular message
+            if (side === 'left') {
+                var msgPadLen = maxMsgWidth - text.length;
+                if (msgPadLen < 0) msgPadLen = 0;
+                var leftHalf = text + Array(msgPadLen + 1).join(' ');
+                centerMsgFrame.gotoxy(2, y);
+                centerMsgFrame.putmsg(leftHalf, color);
+            } else {
+                var rightHalf = (text.length >= maxMsgWidth)
+                    ? text.slice(-maxMsgWidth)
+                    : Array((maxMsgWidth - text.length)).join(' ') + text;
+                centerMsgFrame.gotoxy(2 + maxMsgWidth, y);
+                centerMsgFrame.putmsg(rightHalf, color);
+            }
         }
     }
 }

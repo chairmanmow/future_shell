@@ -1,5 +1,6 @@
 load("iconshell/lib/subfunctions/chat_helpers.js");
 
+
 function Chat(jsonchat) {
     log("CREATING CHAT 2");
     this.input = "";
@@ -16,19 +17,23 @@ function Chat(jsonchat) {
     this.lastSender = null; // State tracking for last sender
     this.lastRow = 0; // State tracking for last rendered row
     // Configurable group line color and pad character
-        this.groupLineColor = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_GROUP_LINE) ? ICSH_VALS.CHAT_GROUP_LINE : MAGENTA;
-        this.padChar = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_PAD_CHAR) ? ICSH_VALS.CHAT_PAD_CHAR : '.';
-        this.padColor = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_PAD_COLOR) ? ICSH_VALS.CHAT_PAD_COLOR : DARKGRAY;
+    this.groupLineColor = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_GROUP_LINE) ? ICSH_VALS.CHAT_GROUP_LINE : MAGENTA;
 }
-
-Chat.prototype.enter = function(done){
+    Chat.prototype.enter = function(done){
     this.done = done;
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
     this.initFrames();
     this.draw();
+    // Start periodic redraw timer (every minute) using Synchronet Timer
 }
 
 Chat.prototype.exit = function(){
+    // Stop periodic redraw timer
+        // Abort periodic redraw event
+        if (this._redrawEvent) {
+            this._redrawEvent.abort = true;
+            this._redrawEvent = null;
+        }
     this.cleanup();
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
     this.done();
@@ -96,6 +101,11 @@ Chat.prototype.updateInputFrame = function() {
 Chat.prototype.updateChat = function(packet) {
     // Efficiently append a new message using renderMessage, only redraw if needed
     dbug("Called update chat", "chat");
+    // Clear frames before redraw
+    if (this.leftAvatarFrame) this.leftAvatarFrame.clear();
+    if (this.centerMsgFrame) this.centerMsgFrame.clear();
+    if (this.rightAvatarFrame) this.rightAvatarFrame.clear();
+    if (this.chatInputFrame) this.chatInputFrame.clear();
     // Always refresh to ensure model is up-to-date before rendering
     this.draw(packet);
     this.refresh();
@@ -164,6 +174,10 @@ Chat.prototype.draw = function(newMsg) {
         messages.push(newMsg);
         log("Pushing new message to chat.draw(newMsg)")
     }
+    // Filter out messages without a valid nick.name property
+    messages = messages.filter(function(msg) {
+        return msg && msg.nick && typeof msg.nick.name === 'string' && msg.nick.name.length > 0;
+    });
     var maxRows = this.centerMsgFrame.height;
     var centerWidth = this.centerMsgFrame.width;
     var avatarHeight = 6;
@@ -273,9 +287,9 @@ Chat.prototype._renderMessages = function(messages, maxRows, maxMsgWidth, center
             var senderChanged = isFirstMessage || from !== lastSender;
             if (senderChanged) {
                 if (!firstGroup && y > 1 && prevMsg) {
-                    var curTime = (msg && typeof msg.time !== 'undefined') ? msg.time : undefined;
-                    var prevTime = (prevMsg && typeof prevMsg.time !== 'undefined') ? prevMsg.time : undefined;
-                    var dividerStr = getDividerString(side, maxMsgWidth, curTime, prevTime);
+                    var curTime = Date.now();
+                    var prevTime = (prevMsg && typeof prevMsg.time === 'number') ? prevMsg.time : undefined;
+                    var dividerStr = getDividerString(side, maxMsgWidth, prevTime, curTime);
                     var drawY = y;
                     this.centerMsgFrame.gotoxy(2, drawY);
                     this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
@@ -370,7 +384,9 @@ Chat.prototype._renderMessages = function(messages, maxRows, maxMsgWidth, center
             lastMsgSide = side;
             prevMsg = msg;
         } else {
-            try { log('[CHAT:SKIP] ' + JSON.stringify(msg)); } catch (e) {}
+            try { 
+                // log('[CHAT:SKIP] ' + JSON.stringify(msg));
+            } catch (e) {}
         }
     }
     return { row: y, side: lastMsgSide };
@@ -379,11 +395,14 @@ Chat.prototype._renderMessages = function(messages, maxRows, maxMsgWidth, center
 // Helper: draw last divider
 Chat.prototype._drawLastDivider = function(messages, maxMsgWidth, centerWidth) {
     var prevMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+    log("DRAW DIVIDER prev msg", JSON.stringify(prevMsg));
     var y = arguments.length > 3 ? arguments[3] : this.centerMsgFrame.height;
     var side = arguments.length > 4 ? arguments[4] : 'left';
     if (messages.length > 0 && prevMsg) {
-        var lastTime = (prevMsg && typeof prevMsg.time !== 'undefined') ? prevMsg.time : undefined;
-        var dividerStr = getDividerString(side, maxMsgWidth, lastTime, lastTime);
+        var lastMsgTime = prevMsg.time;
+        // (prevMsg && typeof prevMsg.time === 'number') ? new Date(prevMsg.time) : undefined;
+        var currentMsgTime = Date.now();
+        var dividerStr = getDividerString(side, maxMsgWidth, lastMsgTime, currentMsgTime );
         var drawY = y;
         this.centerMsgFrame.gotoxy(2, drawY);
         this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));

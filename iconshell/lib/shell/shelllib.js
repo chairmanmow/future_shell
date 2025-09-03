@@ -1,4 +1,6 @@
 
+load("event-timer.js");
+
 // IconShell prototype extensions for member logic
 // Run time logic
 // Add subprogram state to IconShell
@@ -77,6 +79,19 @@ IconShell.prototype.init = function() {
         }
         return origUpdate.call(this, packet);
     }
+
+    // Inject Timer for periodic chat redraw
+    log("checking for Timer library")
+    if (typeof Timer === 'function') {
+        log("Creating timer");
+        this.timer = new Timer();
+        this._chatRedrawEvent = this.timer.addEvent(60000, true, function() {
+            if (self.activeSubprogram && typeof self.activeSubprogram.updateChat === 'function') {
+                self.activeSubprogram.updateChat();
+            }
+        }); // 60 seconds
+    }
+
     // Assign hotkeys for root view
     this.assignViewHotkeys(ICSH_CONFIG.children);
     this.drawFolder();
@@ -94,6 +109,9 @@ IconShell.prototype.main = function() {
                 this.jsonchat.cycle();
                 // TODO: notification logic (step 4)
             }
+            if(this.timer){
+                this.timer.cycle();
+            }
             // Non-blocking input: 100ms timeout
             var key = console.inkey(K_NOECHO|K_NOSPIN, 100);
             if (typeof key === 'string' && key.length > 0) {
@@ -109,6 +127,10 @@ IconShell.prototype.main = function() {
             yield(true);
         }
     } finally {
+        // Abort periodic chat redraw event on exit
+        if (this._chatRedrawEvent && this._chatRedrawEvent.abort !== undefined) {
+            this._chatRedrawEvent.abort = true;
+        }
         if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
     }
 };
