@@ -3,58 +3,51 @@ load("iconshell/lib/subfunctions/subprogram.js"); // Base class
 
 
 function Chat(jsonchat) {
-    // Call Subprogram base constructor
-    Subprogram.call(this, { name: 'chat' });
     this.input = "";
+    this.running = false;
     this.channel = "main";
     this.jsonchat = jsonchat; // persistent backend instance
-    // Frame references (created lazily by initFrames / draw)
+    this.parentFrame = null;
     this.chatInputFrame = null;
     this.leftAvatarFrame = null;
     this.centerMsgFrame = null;
     this.rightAvatarFrame = null;
     this.messageFrames = [];
-    this.done = null; // external completion callback
+    this.done = null;
     this.lastSender = null; // State tracking for last sender
     this.lastRow = 0; // State tracking for last rendered row
-    this._redrawEvent = null; // placeholder for future timer event
     // Configurable group line color and pad character
     this.groupLineColor = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_GROUP_LINE) ? ICSH_VALS.CHAT_GROUP_LINE : MAGENTA;
 }
 
-// Inherit from Subprogram
-if (typeof extend === 'function') {
-    extend(Chat, Subprogram);
-} else {
-    // Fallback simple inheritance if extend() not present
-    Chat.prototype = Object.create(Subprogram.prototype);
-    Chat.prototype.constructor = Chat;
+// // Inherit from Subprogram
+// if (typeof extend === 'function') {
+//     extend(Chat, Subprogram);
+// } else {
+//     // Fallback simple inheritance if extend() not present
+//     Chat.prototype = Object.create(Subprogram.prototype);
+//     Chat.prototype.constructor = Chat;
+// }
+
+    Chat.prototype.enter = function(done){
+    this.done = done;
+    if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
+    this.initFrames();
+    this.draw();
+    // Start periodic redraw timer (every minute) using Synchronet Timer
 }
 
-Chat.prototype.enter = function(done){
-    this.done = (typeof done === 'function') ? done : function(){};
-    if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
-    // Use base enter to setup frame & running state; provide wrapper to restore mouse & call original done
-    var self = this;
-    Subprogram.prototype.enter.call(this, function(){
-        if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true; // safety if base exit triggers callback
-        try { self.done(); } catch(e) {}
-    });
-    // Ensure frames exist before first draw (draw will call initFrames if needed)
-    // (Already handled inside draw via lazy init)
-    // Start periodic redraw timer (future enhancement placeholder)
-};
-
 Chat.prototype.exit = function(){
-    // Stop periodic redraw timer (if implemented)
-    if (this._redrawEvent) {
-        this._redrawEvent.abort = true;
-        this._redrawEvent = null;
-    }
+    // Stop periodic redraw timer
+        // Abort periodic redraw event
+        if (this._redrawEvent) {
+            this._redrawEvent.abort = true;
+            this._redrawEvent = null;
+        }
+    this.cleanup();
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
-    // Let base handle running flag + cleanup + callback
-    Subprogram.prototype.exit.call(this);
-};
+    this.done();
+}
 Chat.prototype.handleKey = function(key){
     // ESC key (string '\x1B')
     if (key === '\x1B') {
@@ -410,6 +403,7 @@ Chat.prototype._renderMessages = function(messages, maxRows, maxMsgWidth, center
 // Helper: draw last divider
 Chat.prototype._drawLastDivider = function(messages, maxMsgWidth, centerWidth) {
     var prevMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+    log("DRAW DIVIDER prev msg", JSON.stringify(prevMsg));
     var y = arguments.length > 3 ? arguments[3] : this.centerMsgFrame.height;
     var side = arguments.length > 4 ? arguments[4] : 'left';
     if (messages.length > 0 && prevMsg) {

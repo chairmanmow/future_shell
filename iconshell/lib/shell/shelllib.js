@@ -23,8 +23,18 @@ IconShell.prototype.init = function() {
     if (crumbY + crumbH - 1 > this.root.height) crumbH = Math.max(1, this.root.height - crumbY + 1);
     this.crumb = new Frame(1, crumbY, this.root.width, crumbH, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.root);
     this.crumb.open();
+    // Ensure view id generator exists BEFORE assigning any _viewId
+    if (typeof this.generateViewId !== 'function') {
+        this._viewSeq = 0;
+        this.generateViewId = function() { return 'view_' + (++this._viewSeq); };
+    }
     // Stack of folder nodes (for navigation)
     this.stack = [ICSH_CONFIG];
+    // Ensure root node has a stable internal view id
+        if (!ICSH_CONFIG._viewId) {
+            ICSH_CONFIG._viewId = 'root';
+            dbug('[init] Assigned root _viewId=root', 'nav');
+    }
     // Current selection index (absolute, not relative to scroll)
     this.selection = 0;
     // Current icon grid (object with .cells, .cols, .rows)
@@ -36,8 +46,8 @@ IconShell.prototype.init = function() {
     // Last known screen size (for resize detection)
     this.lastCols = console.screen_columns;
     this.lastRows = console.screen_rows;
-    // Current view ID (for dynamic menus)
-    this.currentView = "view1";
+    // Current view ID (assigned lazily); using dynamic generator avoids coupling to config
+    this.currentView = null; // set just-in-time (root assigned above)
     // Hotkey map for current view
     this.viewHotkeys = {};
     // Subprogram state: null or { name, handlers }
@@ -92,6 +102,8 @@ IconShell.prototype.init = function() {
     }
 
     // Assign hotkeys for root view
+    // Set currentView explicitly to root's id before assigning hotkeys
+    this.currentView = ICSH_CONFIG._viewId;
     this.assignViewHotkeys(ICSH_CONFIG.children);
     this.drawFolder();
     // Enable mouse mode for hotspots
@@ -166,6 +178,13 @@ IconShell.prototype._handleSubprogramKey = function(ch) {
 };
 
 IconShell.prototype._handleNavigationKey = function(ch) {
+    // Defensive: ensure selection/index not out of sync with current visible items (especially root view)
+    try {
+        var node = this.stack[this.stack.length-1];
+        var items = node && node.children ? node.children : [];
+        if (this.selection < 0) this.selection = 0;
+        if (this.selection >= items.length) this.selection = items.length ? items.length - 1 : 0;
+    } catch(e) {}
     switch (ch) {
         case KEY_LEFT:  this.moveSelection(-1, 0); return true;
         case KEY_RIGHT: this.moveSelection( 1, 0); return true;

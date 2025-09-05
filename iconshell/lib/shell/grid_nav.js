@@ -1,29 +1,50 @@
 // Update openSelection to use changeFolder for both up and down navigation
 IconShell.prototype.openSelection = function() {
-    dbug("open Selection", "view");
+    dbug('[openSelection] selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, 'nav');
+    if (this.grid && this.grid.cells) {
+        var cellIdx = this.selection - this.scrollOffset;
+        if (cellIdx >=0 && cellIdx < this.grid.cells.length) {
+            var citem = this.grid.cells[cellIdx].item;
+            dbug('[openSelection] gridCellIdx=' + cellIdx + ' gridItemLabel=' + (citem && citem.label), 'nav');
+        } else {
+            dbug('[openSelection] gridCellIdx out of range: ' + cellIdx + ' cells=' + this.grid.cells.length, 'nav');
+        }
+    } else {
+        dbug('[openSelection] grid missing when activating', 'nav');
+    }
     this.flashSelection();
     var node = this.stack[this.stack.length-1];
+    // Stable children snapshot for this folder
+    if (!node._cachedChildren) {
+        try {
+            var rawChildren = node.children ? node.children.slice() : [];
+            node._cachedChildren = rawChildren;
+            dbug('[cache] snapshot children for ' + (node.label||'') + ' count=' + rawChildren.length, 'nav');
+        } catch(e) { node._cachedChildren = []; }
+    }
     var hasUp = this.stack.length > 1;
-    var items = this._getCurrentItemsWithUp(node, hasUp);
-    if (!items.length) return;
+    var tmpNode = { children: node._cachedChildren };
+    var items = this._getCurrentItemsWithUp(tmpNode, hasUp);
+    if (!items || !items.length) return;
+    // Clamp selection defensively
+    if (this.selection < 0) this.selection = 0;
+    if (this.selection >= items.length) this.selection = items.length - 1;
     var item = items[this.selection];
     if (!item) return;
-
+    // Up navigation
     if (hasUp && this.selection === 0) {
+        dbug('[openSelection] UP action triggered', 'nav');
         this._handleUpSelection(item);
         return;
     }
-
-    var realIndex = hasUp ? this.selection - 1 : this.selection;
-    var realChildren = node.children || [];
-    if (!realChildren.length || realIndex < 0 || realIndex >= realChildren.length) return;
-    var realItem = realChildren[realIndex];
-    if (realItem.type === "folder") {
-        this._handleFolderSelection(realItem);
+    // Directly use the chosen item object (avoid recomputing index -> mismatch bugs)
+    dbug('[openSelection] activating label=' + (item.label||'') + ' type=' + item.type, 'nav');
+    if (item.type === 'folder') {
+        this._handleFolderSelection(item);
         return;
     }
-    if (realItem.type === "item") {
-        this._handleItemSelection(realItem);
+    if (item.type === 'item') {
+        this._handleItemSelection(item);
     }
 };
 
@@ -34,24 +55,34 @@ IconShell.prototype._getCurrentItemsWithUp = function(node, hasUp) {
             label: "..",
             type: "item",
             iconFile:"back",
-            action: function() {
-                this.changeFolder(null, { direction: 'up' });
-            }.bind(this)
+            action: function() { this.changeFolder(null, { direction: 'up' }); }.bind(this)
         });
+    }
+    // Ensure each real item action is bound exactly once (so 'this' is IconShell)
+    for (var i=0;i<items.length;i++) {
+        var it = items[i];
+        if (it && typeof it.action === 'function' && !it._icshBound) {
+            it.action = it.action.bind(this);
+            it._icshBound = true;
+        }
     }
     return items;
 };
 
 IconShell.prototype._handleUpSelection = function(item) {
+    // Up action executes changeFolder(up) via bound action. Do NOT reset selection;
+    // changeFolder already restores parent's stored selection & scrollOffset.
     if (typeof item.action === "function") {
-        item.action();
-        this.selection = 0;
-        this.scrollOffset = 0;
+        item.action(); // already bound with .bind(this) in _getCurrentItemsWithUp
         this.drawFolder();
     }
 };
 
 IconShell.prototype._handleFolderSelection = function(realItem) {
+    if (!realItem._viewId && typeof this.generateViewId === 'function') {
+        realItem._viewId = this.generateViewId();
+        dbug('[folder] assign _viewId=' + realItem._viewId + ' label=' + realItem.label, 'folder');
+    }
     var childrenChanged = false;
     var isWhoCmd = realItem.label === "Who" && typeof getOnlineUserIcons === 'function';
     if (isWhoCmd) {
@@ -65,14 +96,21 @@ IconShell.prototype._handleFolderSelection = function(realItem) {
         this.assignViewHotkeys(realItem.children);
         childrenChanged = true;
     }
+    dbug('[folder] ENTER child label=' + realItem.label + ' children=' + (realItem.children?realItem.children.length:0), 'folder');
     this.changeFolder(realItem, { direction: 'down' });
-    if (childrenChanged) this.drawFolder();
+    // ALWAYS redraw after entering a folder. Previously we only redrew when childrenChanged.
+    // That left the grid showing the OLD (parent) folder icons while the stack now pointed
+    // at the NEW folder's child list. Result: selection index (against new folder items)
+    // didn't match what was visibly highlighted (old grid), so activating selection opened
+    // the wrong target (e.g. grid said "Apps" but we launched "Assassin").
+    this.drawFolder();
 };
 
 IconShell.prototype._handleItemSelection = function(realItem) {
     if (typeof realItem.action === "function") {
         try {
-            realItem.action();
+            // Ensure the action runs with IconShell as 'this' (was unbound, breaking runExternal etc.)
+            realItem.action.call(this);
         } catch(e) {
             dbug("IconShell action error: " + e, "view");
             if (e === "Exit Shell") throw e;
@@ -88,31 +126,55 @@ IconShell.prototype._handleItemSelection = function(realItem) {
  * @param {Object} [options] - Optional: { direction: 'up'|'down' }.
  */
 IconShell.prototype.changeFolder = function(targetFolder, options) {
-    dbug("change folder?", "view");
+    dbug('[changeFolder] direction=' + (options && options.direction) + ' target=' + (targetFolder?targetFolder.label:'<up>') + ' stackDepth=' + this.stack.length, 'nav');
     options = options || {};
     var direction = options.direction || (targetFolder ? 'down' : 'up');
     if (direction === 'down' && targetFolder) {
+        // Store current selection on the parent so we can restore it when coming back
+        var parentNode = this.stack[this.stack.length-1];
+        parentNode._lastSelectionForChildren = this.selection;
+    parentNode._lastScrollOffsetForChildren = this.scrollOffset;
+        dbug('[changeFolder] storing parent selection=' + this.selection + ' for ' + (parentNode.label||''), 'nav');
         this.stack.push(targetFolder);
     } else if (direction === 'up') {
         if (this.stack.length > 1) {
-            this.stack.pop();
+            var removed = this.stack.pop();
+            dbug('[changeFolder] popped ' + (removed && removed.label), 'nav');
         }
     }
     // Always update currentView and viewHotkeys to match the new top of stack
     var currentNode = this.stack[this.stack.length-1];
-    if (currentNode && currentNode.viewId) {
-        this.currentView = currentNode.viewId;
-    } else {
-        this.currentView = this.generateViewId();
+    if (currentNode) {
+        if (!currentNode._viewId) currentNode._viewId = this.generateViewId();
+        this.currentView = currentNode._viewId;
     }
     this.viewHotkeys = {};
-    this.selection = 0;
-    this.scrollOffset = 0;
+    if (direction === 'down') {
+        // Reset selection at entry to new folder
+        this.selection = 0;
+        this.scrollOffset = 0;
+    } else if (direction === 'up') {
+        // Restore previous selection if available
+        var restoreSel = (typeof currentNode._lastSelectionForChildren === 'number') ? currentNode._lastSelectionForChildren : 0;
+    var restoreScroll = (typeof currentNode._lastScrollOffsetForChildren === 'number') ? currentNode._lastScrollOffsetForChildren : 0;
+    this.selection = restoreSel;
+    this.scrollOffset = restoreScroll;
+    dbug('[changeFolder] restored selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' for ' + (currentNode.label||''), 'nav');
+    }
     this.folderChanged = true;
     if (currentNode && currentNode.children) {
         this.assignViewHotkeys(currentNode.children);
     }
-    dbug("Change folder to view " + this.currentView + " (" + direction + ")", "view");
+    dbug('[changeFolder] now at label=' + (currentNode && currentNode.label) + ' view=' + this.currentView + ' depth=' + this.stack.length, 'nav');
+    // Ensure folder change is immediately reflected visually (especially for non-dynamic folders)
+    // Without this, the grid could remain from the previous folder until the next redraw trigger,
+    // causing selection/action mismatches.
+    if (direction === 'down') {
+        // Avoid double-draw when caller already explicitly called drawFolder right after changeFolder.
+        // We rely on caller _handleFolderSelection always drawing now, but keep this for safety
+        // if changeFolder is invoked directly elsewhere in future.
+        if (!this._suppressAutoDraw) this.drawFolder();
+    }
 };
 
 IconShell.prototype.drawFolder = function() {
@@ -142,7 +204,14 @@ IconShell.prototype.drawFolder = function() {
     this.mouseIndicator.open();
     this._updateMouseIndicator();
     var node = this.stack[this.stack.length-1];
-    var items = node.children ? node.children.slice() : [];
+    if (!node._cachedChildren) {
+        try {
+            var rawChildren = node.children ? node.children.slice() : [];
+            node._cachedChildren = rawChildren;
+            dbug('[cache] snapshot (draw) children for ' + (node.label||'') + ' count=' + rawChildren.length, 'nav');
+        } catch(e) { node._cachedChildren = []; }
+    }
+    var items = node._cachedChildren.slice();
     if (this.stack.length > 1) {
         items.unshift({
             label: "..",

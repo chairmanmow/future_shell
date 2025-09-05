@@ -55,11 +55,96 @@ var BUILTIN_ACTIONS = {
 	exit: function(){ throw('Exit Shell'); }
 };
 
+// Enumerate known external program codes (best-effort; varies by Synchronet version)
+function _listExternalCodes() {
+	var codes = [];
+	try {
+		if (system && system.xtrn_area && system.xtrn_area.length) {
+			for (var i=0;i<system.xtrn_area.length;i++) {
+				var area = system.xtrn_area[i];
+				if (!area) continue;
+				// Common property naming: area.xtrn (array of program objects)
+				if (area.xtrn && area.xtrn.length) {
+					for (var j=0;j<area.xtrn.length;j++) {
+						var prog = area.xtrn[j];
+						if (prog && prog.code) codes.push(prog.code);
+					}
+				}
+				// Fallback: sometimes prog_list or programs might exist
+				if (area.prog_list && area.prog_list.length) {
+					for (var k=0;k<area.prog_list.length;k++) {
+						var p2 = area.prog_list[k];
+						if (p2 && p2.code && codes.indexOf(p2.code)===-1) codes.push(p2.code);
+					}
+				}
+			}
+		}
+	} catch(e) { /* swallow */ }
+	return codes;
+}
+
+function _externalExists(code) {
+	var list = _listExternalCodes();
+	if (!list.length) return true; // Can't verify -> assume OK
+	return list.indexOf(code) !== -1;
+}
+
+function _informUser(shell, msg) {
+	try {
+		if (shell && typeof shell.showToast === 'function') {
+			shell.showToast({ message: msg });
+		} else if (typeof console !== 'undefined' && console.putmsg) {
+			console.putmsg('\r\n'+msg+'\r\n');
+		}
+	} catch(e) {}
+}
+
+function makeExecXtrnAction(code) {
+	code = (code||'').trim();
+	if (code.charAt(0) === ":")
+        code =  code.substring(1);
+	return function() {
+		var self = this;
+		try {
+			if (!code) {
+				_icsh_err('Empty external program code specified');
+				_informUser(self, 'No program code specified');
+				return;
+			}
+			if (!_externalExists(code)) {
+				var avail = _listExternalCodes();
+				_icsh_err('Invalid external program specified: ' + code + (avail.length? (' (available: '+avail.join(', ')+')') : '')); 
+				_informUser(self, 'Program not found: ' + code);
+				return;
+			}
+			self.runExternal(function(){
+				try {
+					bbs.exec_xtrn(code);
+				} catch(ex) {
+					_icsh_err('exec_xtrn('+code+') failed: ' + ex);
+					_informUser(self, 'Launch failed: ' + code);
+				}
+			});
+		} catch(e) {
+			_icsh_err('Unhandled error launching external '+code+': '+e);
+			_informUser(self, 'Error launching: '+code);
+		}
+	};
+}
+
 function makeCommandAction(spec) {
 	if(!spec) return null;
 	if(spec.indexOf('exec_xtrn:')===0) {
 		var code = spec.substring(9).trim();
-		return function(){ this.runExternal(function(){ bbs.exec_xtrn(code); }); };
+		return makeExecXtrnAction(code);
+	}
+	// Shorthand: leading ':' means external door code (":ECREADER" -> ECREADER)
+	if (spec.charAt(0) === ':' && spec.length > 1) {
+		return makeExecXtrnAction(spec.substring(1).trim());
+	}
+	// Shorthand: bare word with no spaces & no prefix assumed to be external code
+	if (/^[A-Za-z0-9_]{2,}$/.test(spec)) {
+		return makeExecXtrnAction(spec.trim());
 	}
 	if(spec.indexOf('js:')===0) {
 		var body = spec.substring(3);
@@ -76,7 +161,6 @@ function buildDynamicConfig() {
 	if(!ini.Menu || !ini.Menu.items) { _icsh_warn('No [Menu]/items in guishell.ini'); return null; }
 	var order = ini.Menu.items.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
 	if(!order.length) { _icsh_warn('Empty items list in [Menu]'); return null; }
-	var viewCounter = 1;
 	var children = [];
 	for(var i=0;i<order.length;i++) {
 		var key = order[i];
@@ -85,13 +169,12 @@ function buildDynamicConfig() {
 		var type = (sect.type||'').toLowerCase();
 		var label = sect.label || key.charAt(0).toUpperCase()+key.substring(1);
 		var icon = sect.icon || key;
-		var viewId = sect.view || ('view'+(viewCounter++));
-		var obj = { label: label, iconFile: icon, viewId: viewId };
+		var obj = { label: label, iconFile: icon };
 		if(type === 'builtin') {
 			var bname = (sect.builtin||'').toLowerCase();
 			var act = BUILTIN_ACTIONS[bname];
 			if(!act) { _icsh_warn('Unknown builtin '+bname+' for item '+key); continue; }
-			obj.type='item'; obj.action = act;
+			obj.type='item'; obj.action = act; // bound later at use-site
 		} else if(type === 'xtrn_section') {
 			var secNum = parseInt(sect.section,10);
 			if(isNaN(secNum) || secNum < 0) { _icsh_warn('Bad section number for '+key); continue; }
@@ -104,7 +187,7 @@ function buildDynamicConfig() {
 			var actSpec = sect.command;
 			var actionFn = makeCommandAction(actSpec);
 			if(!actionFn) { _icsh_warn('Invalid command action for '+key); continue; }
-			obj.type='item'; obj.action = actionFn;
+			obj.type='item'; obj.action = actionFn; // bound later
 		} else {
 			_icsh_warn('Unknown type '+type+' for item '+key); continue;
 		}
@@ -112,7 +195,7 @@ function buildDynamicConfig() {
 	}
 	if(!children.length) { _icsh_warn('No valid menu items built; fallback to static'); return null; }
 	_icsh_log('Dynamic menu built with '+children.length+' items');
-	return { label:'Home', type:'folder', viewId:'root', children: children };
+	return { label:'Home', type:'folder', children: children };
 }
 
 var _DYNAMIC_ICSH_CONFIG = buildDynamicConfig();
@@ -136,19 +219,18 @@ var ICSH_VALS = {
 
 // IconShell configuration: menu structure, labels, icons, and actions
 var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
-	// Static fallback (original definition)
+	// Static fallback (original definition) without fixed viewIds; runtime assigns
 	label: "Home",
 	type: "folder",
-	viewId: "view1",
 	children: [
-		{ label: "Chat", type: "item", iconFile: "chat", action: BUILTIN_ACTIONS.chat, viewId:"view2" },
-		{ label: "Games", type: "folder", iconFile: "games", viewId:"view3", get children(){ return getItemsForXtrnSection(1);} },
-		{ label: "Apps", type: "folder", iconFile: "apps", viewId:"view4", get children(){ return getItemsForXtrnSection(0);} },
-		{ label: "Messages", type: "item", iconFile:"messages", viewId:"view5", action: function(){ this.runExternal(function(){ bbs.exec_xtrn("ECREADER"); }); } },
-		{ label: "Files", type: "item", iconFile:"folder", viewId:"view6", action: function(){ this.runExternal(function(){ bbs.exec_xtrn("ANSIVIEW"); }); } },
-		{ label: "Who", type: "folder", iconFile:"whosonline", viewId:"view7", get children(){ return getOnlineUserIcons(); } },
-		{ label: "Settings", type: "item", iconFile:"settings", viewId:"view8", action: BUILTIN_ACTIONS.settings },
-		{ label: "Exit", type: "item", iconFile:"exit", viewId:"view9", action: BUILTIN_ACTIONS.exit }
+		{ label: "Chat", type: "item", iconFile: "chat", action: BUILTIN_ACTIONS.chat },
+		{ label: "Games", type: "folder", iconFile: "games", get children(){ return getItemsForXtrnSection(1);} },
+		{ label: "Apps", type: "folder", iconFile: "apps", get children(){ return getItemsForXtrnSection(0);} },
+		{ label: "Messages", type: "item", iconFile:"messages", action: makeExecXtrnAction("ECREADER") },
+		{ label: "Files", type: "item", iconFile:"folder", action: makeExecXtrnAction("ANSIVIEW") },
+		{ label: "Who", type: "folder", iconFile:"whosonline", get children(){ return getOnlineUserIcons(); } },
+		{ label: "Settings", type: "item", iconFile:"settings", action: BUILTIN_ACTIONS.settings },
+		{ label: "Exit", type: "item", iconFile:"exit", action: BUILTIN_ACTIONS.exit }
 	]
 };
 
