@@ -30,6 +30,33 @@ var ICON_LOOKUP = {
     "WORDEM":"wordem"
 }
 
+// Dynamically build an icon filename lookup from the icons directory (.ans/.bin)
+// Key: UPPERCASE base filename (without extension) -> value: original base name
+var DYNAMIC_ICON_FILES = (function () {
+	var map = {};
+	try {
+		// js.exec_dir ends with subfunctions/ for this script; go up one to lib/ and into icons/
+		var iconPathBase = "iconshell/lib/icons/"
+    	var iconDir = system.mods_dir + iconPathBase;
+		var list = directory(iconDir) || [];
+		var patterns = [iconDir + "*.ans", iconDir + "*.bin"];
+		for (var p = 0; p < patterns.length; p++) {
+			var list = directory(patterns[p]) || [];
+			for (var i = 0; i < list.length; i++) {
+				var full = list[i];
+				var name = full.substring(full.lastIndexOf('/') + 1); // filename.ext
+				var base = name.replace(/\.(ans|bin)$/i, '');
+				if (!base) continue;
+				map[base.toUpperCase()] = base; // store original base (without extension)
+			}
+		}
+	} catch (e) {
+		log("[ERR] getting icons for icon dir" + JSON.stringify(e));
+		// Swallow any FS errors silently; fallback logic will still work
+	}
+	return map;
+})();
+
 function getItemsForXtrnSection(index) {
 	if (typeof xtrn_area === 'undefined' || !xtrn_area.sec_list) return [];
 	var items = [];
@@ -55,9 +82,17 @@ function getItemsForXtrnSection(index) {
 				return function() { this.runExternal(function(){ bbs.exec_xtrn(code)}); };
 			})(prog.code, prog.name)
 		};
-		if (ICON_LOOKUP.hasOwnProperty(prog.code.toUpperCase())) {
-			item.iconFile = ICON_LOOKUP[prog.code.toUpperCase()];
-		} else {
+		var codeUpper = prog.code.toUpperCase();
+		// 1) User-specified custom icon mapping (explicit override)
+		if (ICON_LOOKUP.hasOwnProperty(codeUpper)) {
+			item.iconFile = ICON_LOOKUP[codeUpper];
+		}
+		// 2) Else if a matching .ans/.bin file exists (case-insensitive base name match)
+		else if (DYNAMIC_ICON_FILES.hasOwnProperty(codeUpper)) {
+			item.iconFile = DYNAMIC_ICON_FILES[codeUpper];
+		}
+		// 3) Fallback to generated color tile
+		else {
 			item.iconBg = iconBg;
 			item.iconFg = iconFg;
 		}

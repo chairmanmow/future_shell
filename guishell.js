@@ -9,6 +9,24 @@ load("sbbsdefs.js"); // LOG_* and K_* constants
 load("iconshell/iconshell.js");
 load("iconshell/basicshell.js");
 
+// Load guishell.ini (INI-style configuration)
+var guishellIni;
+try {
+    guishellIni = new File(system.mods_dir + "guishell.ini");
+    if (guishellIni.open("r")) {
+        var iniContents = guishellIni.readAll().join("\n");
+        guishellIni.close();
+        // Simple parse for a single key (WelcomeMessage) under [GuiShell]
+        var welcomeMatch = iniContents.match(/\[GuiShell\][^\[]*?WelcomeMessage\s*=\s*(.*)/i);
+        if (welcomeMatch) {
+            var welcomeValue = welcomeMatch[1].trim();
+            try { log(LOG_INFO, "[guishell] Loaded WelcomeMessage from INI: " + welcomeValue); } catch(_) {}
+        }
+    }
+} catch(e) {
+    try { log(LOG_WARNING, "[guishell] Failed to load guishell.ini: " + e); } catch(_) {}
+}
+
 // ---- Supervisor config ----
 var MAX_BASIC_RESTARTS = 5;   // stop after N crashes in a row (0 = infinite)
 var BASIC_BACKOFF_MS   = 1500;
@@ -20,7 +38,6 @@ var icsh;
 
 function main() {
     // Try the advanced shell first
-    log("Load supervisor Shell WTFSDSSDWEWE")
     while (true) {
         try {
             icsh = new IconShell(); // provided by mods/iconshell/iconshell.js

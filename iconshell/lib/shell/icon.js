@@ -1,8 +1,6 @@
 
 function Icon(iconFrame, labelFrame, data, logit) {
     this.logit = logit;
-    if(this.logit) log("Icon constructor called with data: " + JSON.stringify(data));
-    //if (!(this instanceof Icon)) return new Icon(iconFrame, labelFrame, data);
     this.iconFrame = iconFrame;
     this.labelFrame = labelFrame;
     this.data = data;
@@ -44,7 +42,6 @@ Icon.prototype._renderAvatar = function(iconW, iconH) {
 };
 
 Icon.prototype._renderIconFile = function(iconW, iconH) {
-    if(this.logit) log("Loading icon file: " + this.data.iconFile);
     var iconPathBase = "iconshell/lib/icons/" + this.data.iconFile;
     var binPath = system.mods_dir + iconPathBase + ".bin";
     var ansPath = system.mods_dir + iconPathBase + ".ans";
@@ -59,20 +56,17 @@ Icon.prototype._renderIconFile = function(iconW, iconH) {
     } else if (file_exists(ansPath)) {
         try {
             this.iconFrame.load(ansPath, iconW, iconH);
-            if(this.logit) log("FOUND ANS" + ansPath)
             return true;
         } catch (e2) {
             dbug("Error loading ans: " + e2, "icon");
         }
     } else {
-        if(this.logit) log("COULDNT FIND FILE! ANS OR BIN")
         dbug("Icon file does not exist: " + binPath + " or " + ansPath, "icon");
     }
     return false;
 };
 
 Icon.prototype._renderFallbackBg = function(hasBg, hasFg) {
-    if(this.logit) log("FALLBACK CLEAR: loaded=false, hasBg=" + hasBg + ", hasFg=" + hasFg + ", iconFile=" + this.data.iconFile + ", label=" + this.data.label);
     var iconAttr = (hasBg ? this.data.iconBg : 0) | (hasFg ? this.data.iconFg : 0);
     this.iconFrame.clear(iconAttr);
 };

@@ -13,9 +13,9 @@ console.putmsg("[ CLICK HERE WITH MOUSE ]");
 
 if (typeof console.add_hotspot === 'function') {
     console.add_hotspot("M", true, x1, x2, y);
-    log("Hotspot added: x1="+x1+", x2="+x2+", y="+y);
+    console.putmsg("Hotspot added: x1="+x1+", x2="+x2+", y="+y);
 } else {
-    log("console.add_hotspot not available");
+    console.putmsg("console.add_hotspot not available");
 }
 
 console.putmsg("\r\nWaiting for mouse click (or press Q to quit)...\r\n");
@@ -23,7 +23,7 @@ console.putmsg("\r\nWaiting for mouse click (or press Q to quit)...\r\n");
 while (!js.terminated) {
     var key = console.inkey(K_NOECHO|K_NOSPIN, 5000);
     if (key) {
-        log("Key received: " + JSON.stringify(key) + " (charCode: " + (typeof key === 'string' ? key.charCodeAt(0) : key) + ")");
+        console.putmsg("Key received: " + JSON.stringify(key) + " (charCode: " + (typeof key === 'string' ? key.charCodeAt(0) : key) + ")");
         if (key === 'Q' || key === 'q') break;
         if (key === 'M') {
             console.putmsg("\r\nMouse hotspot clicked!\r\n");

@@ -81,7 +81,6 @@ IconShell.prototype.init = function() {
     }
 
     // Inject Timer for periodic chat redraw
-    log("checking for Timer library")
     if (typeof Timer === 'function') {
         log("Creating timer");
         this.timer = new Timer();
@@ -142,7 +141,6 @@ IconShell.prototype.processKeyboardInput = function(ch) {
     if (this.toasts && this.toasts.length > 0) {
         if (ch === '\x1B') { // ESC
             var toast = this.toasts[0];
-            log("clearing toasts");
             if (toast && typeof toast.dismiss === 'function') toast.dismiss();
             return true;
         }
@@ -238,7 +236,6 @@ IconShell.prototype._handleHotkeyItemSelection = function(ch) {
 IconShell.prototype.detectMouseSupport = function() {
     // 1. Check user.settings for USER_MOUSE if available
     if (typeof user !== 'undefined' && typeof USER_MOUSE !== 'undefined' && (user.settings & USER_MOUSE)) {
-        log('Mouse support detected via user.settings/USER_MOUSE');
         return true;
     }
     // TODO: 2. Fallback: check runtime terminal support for mouse flags
@@ -249,7 +246,6 @@ IconShell.prototype.detectMouseSupport = function() {
     //         return true;
     //     }
     // }
-    log('Mouse support NOT detected');
     return false;
 };
 

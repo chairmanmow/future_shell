@@ -283,7 +283,6 @@ IconShell.prototype.buildIconGrid = function (parentFrame, items) {
     var maxIcons = dims.cols * dims.maxRows;
     var cells = [];
     // var Icon = load("iconshell/lib/icon.js");
-    log("render " + items.length + " items. First item" + JSON.stringify(items[0]) + "\r\nSecven:" + JSON.stringify(items[7]));
     for (var i = 0; i < items.length && i < maxIcons; i++) {
         var cell = this._createIconCell(i, dims, items, parentFrame, Icon);
         cells.push(cell);

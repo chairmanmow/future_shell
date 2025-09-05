@@ -18,7 +18,7 @@ var getOnlineUserIcons = function() {
 			// hotkey: (n % 10).toString(), // 1-9, 0 for 10
 			action: function() {
 				// Show user info popup (placeholder)
-				log(JSON.stringify(user));
+				log(JSON.stringify(user));  // Todo show details
 				// console.clear();
 				// console.putmsg("User: " + user.alias + "\r\nNode: " + n + "\r\n");
 				// mswait(1000);

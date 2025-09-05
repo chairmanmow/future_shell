@@ -3,7 +3,6 @@ var MAX_TOAST_WIDTH = 40;
 var DEFAULT_TOAST_TIMEOUT = 30000; // 30 seconds
 
 function Toast(options) {
-    // log("Creating Toast " + JSON.stringify(options));
     if (!options || typeof options !== 'object') options = {};
     var message = options.message || "";
     var timeout = (typeof options.timeout === 'number') ? options.timeout : DEFAULT_TOAST_TIMEOUT;
@@ -18,7 +17,6 @@ function Toast(options) {
     var y = 1;
 
     this.parentFrame = options.parentFrame || undefined;
-    log("Parent frame exists", !!this.parentFrame);
     this.frame = new Frame(x, y, width, height, BG_GREEN|LIGHTGRAY, this.parentFrame);
     this.frame.attr = BG_GREEN|LIGHTGRAY;
     this.frame.transparent = false;
@@ -34,7 +32,6 @@ function Toast(options) {
     var self = this;
     this.dismiss = function(parentFrame) {
         if (self._dismissed) return;
-        log('[TOAST] Dismissing toast: ' + message);
         self._dismissed = true;
         self.frame.clear();
         self.frame.close();
