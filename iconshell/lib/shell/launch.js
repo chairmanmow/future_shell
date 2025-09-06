@@ -22,6 +22,15 @@ IconShell.prototype.runExternal = function(fn) {
     }
 };
 
+// Queue a subprogram launch so the triggering key (e.g. ENTER) is fully processed
+// before the subprogram begins receiving keystrokes.
+IconShell.prototype.queueSubprogramLaunch = function(name, instance) {
+    dbug('Queue subprogram launch: ' + name, 'subprogram');
+    this._pendingSubLaunch = { name: name, instance: instance };
+    // Mark that we just processed a CR; swallow subsequent LF if present
+    this._swallowNextLF = true;
+};
+
 // Launch a subprogram (e.g., chat)
 IconShell.prototype.launchSubprogram = function(name, handlers) {
     dbug("Launch subprogram " + name, "subprogram");

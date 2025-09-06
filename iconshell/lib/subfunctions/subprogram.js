@@ -23,6 +23,9 @@ Subprogram.prototype.exit = function() {
 };
 
 Subprogram.prototype.handleKey = function(key) {
+    if(this._handleKey && typeof this._handleKey === 'function') {
+        return this._handleKey(key);
+    }
     if (key === '\x1B') this.exit();
 };
 
@@ -30,6 +33,9 @@ Subprogram.prototype.draw = function(){};
 Subprogram.prototype.refresh = function(){ this.draw(); };
 Subprogram.prototype.cleanup = function(){
     if (this.parentFrame) { this.parentFrame.close(); this.parentFrame = null; }
+    if(this._cleanup && typeof this._cleanup === 'function') {
+        this._cleanup();
+    }
 };
 
 Subprogram.prototype.setParentFrame = function(f){ this.parentFrame = f; return this; };

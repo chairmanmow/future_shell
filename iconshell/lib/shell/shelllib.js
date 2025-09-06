@@ -123,8 +123,24 @@ IconShell.prototype.main = function() {
             if(this.timer){
                 this.timer.cycle();
             }
+            // If a subprogram launch was queued, process it now (after previous key fully handled)
+            if (this._pendingSubLaunch) {
+                var p = this._pendingSubLaunch; delete this._pendingSubLaunch;
+                this.launchSubprogram(p.name, p.instance);
+            }
             // Non-blocking input: 100ms timeout
             var key = console.inkey(K_NOECHO|K_NOSPIN, 100);
+            // Normalize CRLF: if CR received, peek for immediate LF next loop; treat as single ENTER
+            if (key === '\r') {
+                this._lastWasCR = true;
+            } else if (this._lastWasCR && key === '\n') {
+                // Swallow the LF partner
+                this._lastWasCR = false;
+                dbug('Swallowed LF following CR', 'keylog');
+                continue;
+            } else {
+                this._lastWasCR = false;
+            }
             if (typeof key === 'string' && key.length > 0) {
                 dbug("Key:" + key, "keylog");
                 this.processKeyboardInput(key);

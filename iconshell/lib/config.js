@@ -1,6 +1,12 @@
 
 load("iconshell/lib/subfunctions/whosonline.js");
 load("iconshell/lib/subfunctions/gamesmenu.js");
+// Hello World demo subprogram
+load("iconshell/lib/subfunctions/hello-world.js");
+load("iconshell/lib/subfunctions/file_area.js");
+load("iconshell/lib/subfunctions/calendar.js");
+load("iconshell/lib/subfunctions/clock.js");
+load("iconshell/lib/subfunctions/rawgate.js");
 
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
@@ -18,6 +24,57 @@ load("iconshell/lib/subfunctions/gamesmenu.js");
 function _icsh_log(msg) { try { log(LOG_INFO, '[icsh-config] '+msg); } catch(e) {} }
 function _icsh_warn(msg){ try { log(LOG_WARNING,'[icsh-config] '+msg);} catch(e){} }
 function _icsh_err(msg) { try { log(LOG_ERR, '[icsh-config] '+msg); } catch(e) {} }
+
+// Builtin actions mapping
+var BUILTIN_ACTIONS = {
+	chat: function(){ this.queueSubprogramLaunch('chat', this.chat); },
+	settings: function(){ if (typeof bbs.user_config==='function') bbs.user_config(); else { console.clear(); console.putmsg('\x01h\x01cUser settings editor not available.\x01n\r\n'); mswait(800);} },
+	hello: function(){ if(!this.helloWorld) this.helloWorld = new HelloWorld(); this.queueSubprogramLaunch('hello-world', this.helloWorld); },
+	exit: function(){ throw('Exit Shell'); },
+	privatemsg: function(){
+		try { if(typeof PrivateMsg !== 'function') load('iconshell/lib/subfunctions/private_msg.js'); } catch(e) { dbug('subprogram', 'Failed loading private_msg.js '+e); return; }
+		if(typeof PrivateMsg !== 'function') { dbug('subprogram','PrivateMsg class missing after load'); return; }
+		if(!this.privateMsg) this.privateMsg = new PrivateMsg({ parentFrame: this.subFrame });
+		// always reassign parentFrame in case shell recreated frames
+		this.privateMsg.setParentFrame(this.subFrame);
+		this.queueSubprogramLaunch('private-msg', this.privateMsg);
+	},
+	userlist: function(){
+		try { if(typeof UserList !== 'function') load('iconshell/lib/subfunctions/user_list.js'); } catch(e) { dbug('subprogram','Failed loading user_list.js '+e); return; }
+		if(typeof UserList !== 'function') { dbug('subprogram','UserList class missing after load'); return; }
+		if(!this.userList) this.userList = new UserList({ parentFrame: this.subFrame });
+		this.userList.setParentFrame(this.subFrame);
+		this.queueSubprogramLaunch('user-list', this.userList);
+	},
+	filearea: function(){
+		try { if(typeof FileArea !== 'function') load('iconshell/lib/subfunctions/file_area.js'); } catch(e) { dbug('subprogram','Failed loading file_area.js '+e); return; }
+		if(typeof FileArea !== 'function') { dbug('subprogram','FileArea class missing after load'); return; }
+		if(!this.fileArea) this.fileArea = new FileArea({ parentFrame: this.subFrame });
+		// this.fileArea.setParentFrame(this.subFrame);
+		this.queueSubprogramLaunch('file-area', this.fileArea);
+	},
+	calendar: function(){
+		try { if(typeof CalendarSub !== 'function') load('iconshell/lib/subfunctions/calendar.js'); } catch(e) { dbug('subprogram','Failed loading calendar.js '+e); return; }
+		if(typeof CalendarSub !== 'function') { dbug('subprogram','CalendarSub class missing after load'); return; }
+		if(!this.calendarSub) this.calendarSub = new CalendarSub({ parentFrame: this.subFrame });
+		this.calendarSub.setParentFrame && this.calendarSub.setParentFrame(this.subFrame);
+		this.queueSubprogramLaunch('calendar', this.calendarSub);
+	},
+	clock: function(){
+		try { if(typeof ClockSub !== 'function') load('iconshell/lib/subfunctions/clock.js'); } catch(e) { dbug('subprogram','Failed loading clock.js '+e); return; }
+		if(typeof ClockSub !== 'function') { dbug('subprogram','ClockSub class missing after load'); return; }
+		if(!this.clockSub) this.clockSub = new ClockSub({ parentFrame: this.subFrame, shell: this });
+		else this.clockSub.setParentFrame && this.clockSub.setParentFrame(this.subFrame);
+		this.queueSubprogramLaunch('clock', this.clockSub);
+	},
+	rawgate: function(){
+		try { if(typeof RawGateSub !== 'function') load('iconshell/lib/subfunctions/rawgate.js'); } catch(e) { dbug('subprogram','Failed loading rawgate.js '+e); return; }
+		if(typeof RawGateSub !== 'function') { dbug('subprogram','RawGateSub class missing after load'); return; }
+		if(!this.rawGateSub) this.rawGateSub = new RawGateSub({ parentFrame: this.subFrame, shell: this });
+		else this.rawGateSub.setParentFrame && this.rawGateSub.setParentFrame(this.subFrame);
+		this.queueSubprogramLaunch('rawgate', this.rawGateSub);
+	},
+};
 
 function readIniFile(path) {
 	var f = new File(path);
@@ -48,12 +105,6 @@ function parseIni(raw) {
 	return data;
 }
 
-// Builtin actions mapping
-var BUILTIN_ACTIONS = {
-	chat: function(){ this.launchSubprogram('chat', this.chat); },
-	settings: function(){ if (typeof bbs.user_config==='function') bbs.user_config(); else { console.clear(); console.putmsg('\x01h\x01cUser settings editor not available.\x01n\r\n'); mswait(800);} },
-	exit: function(){ throw('Exit Shell'); }
-};
 
 // Enumerate known external program codes (best-effort; varies by Synchronet version)
 function _listExternalCodes() {
@@ -154,6 +205,59 @@ function makeCommandAction(spec) {
 	return null;
 }
 
+// Recursive builder for items (supports new type=folder with nested items list)
+function _buildItemRecursive(key, ini, ancestry) {
+	ancestry = ancestry || [];
+	if(ancestry.indexOf(key)!==-1) { _icsh_warn('Cycle detected for item '+key+' path '+ancestry.join('>')); return null; }
+	var sect = ini['Item.'+key];
+	if(!sect) { _icsh_warn('Missing section [Item.'+key+']'); return null; }
+	var type = (sect.type||'').toLowerCase();
+	var label = sect.label || key.charAt(0).toUpperCase()+key.substring(1);
+	var icon = sect.icon || key;
+	var obj = { label: label, iconFile: icon };
+	if(type === 'builtin') {
+		var bname = (sect.builtin||'').toLowerCase();
+		var act = BUILTIN_ACTIONS[bname];
+		if(!act) { _icsh_warn('Unknown builtin '+bname+' for item '+key); return null; }
+		obj.type='item'; obj.action = act;
+		return obj;
+	}
+	if(type === 'command') {
+		var actSpec = sect.command;
+		var actionFn = makeCommandAction(actSpec);
+		if(!actionFn) { _icsh_warn('Invalid command action for '+key); return null; }
+		obj.type='item'; obj.action = actionFn; return obj;
+	}
+	if(type === 'xtrn_section') {
+		var secNum = parseInt(sect.section,10);
+		if(isNaN(secNum) || secNum < 0) { _icsh_warn('Bad section number for '+key); return null; }
+		obj.type='folder';
+		(function(secNumRef){ Object.defineProperty(obj,'children',{ configurable:true, enumerable:true, get:function(){ return getItemsForXtrnSection(secNumRef); }}); })(secNum);
+		return obj;
+	}
+	if(type === 'who') {
+		obj.type='folder';
+		Object.defineProperty(obj,'children',{ configurable:true, enumerable:true, get:function(){ return getOnlineUserIcons(); }});
+		return obj;
+	}
+	if(type === 'folder') {
+		obj.type='folder';
+		var listRaw = sect.items || sect.children || '';
+		if(!listRaw) { _icsh_warn('Folder '+key+' has no items list'); obj.children = []; return obj; }
+		var childKeys = listRaw.split(',').map(function(s){return s.trim();}).filter(Boolean);
+		var kids = [];
+		for(var i=0;i<childKeys.length;i++) {
+			var ck = childKeys[i];
+			var childObj = _buildItemRecursive(ck, ini, ancestry.concat([key]));
+			if(childObj) kids.push(childObj);
+		}
+		obj.children = kids;
+		return obj;
+	}
+	_icsh_warn('Unknown type '+type+' for item '+key);
+	return null;
+}
+
 function buildDynamicConfig() {
 	var iniRaw = readIniFile(system.mods_dir + 'guishell.ini');
 	if(!iniRaw) { _icsh_warn('guishell.ini not found – using static config'); return null; }
@@ -163,38 +267,11 @@ function buildDynamicConfig() {
 	if(!order.length) { _icsh_warn('Empty items list in [Menu]'); return null; }
 	var children = [];
 	for(var i=0;i<order.length;i++) {
-		var key = order[i];
-		var sect = ini['Item.'+key];
-		if(!sect) { _icsh_warn('Missing section [Item.'+key+']'); continue; }
-		var type = (sect.type||'').toLowerCase();
-		var label = sect.label || key.charAt(0).toUpperCase()+key.substring(1);
-		var icon = sect.icon || key;
-		var obj = { label: label, iconFile: icon };
-		if(type === 'builtin') {
-			var bname = (sect.builtin||'').toLowerCase();
-			var act = BUILTIN_ACTIONS[bname];
-			if(!act) { _icsh_warn('Unknown builtin '+bname+' for item '+key); continue; }
-			obj.type='item'; obj.action = act; // bound later at use-site
-		} else if(type === 'xtrn_section') {
-			var secNum = parseInt(sect.section,10);
-			if(isNaN(secNum) || secNum < 0) { _icsh_warn('Bad section number for '+key); continue; }
-			obj.type='folder';
-			(function(secNumRef){ Object.defineProperty(obj,'children',{ configurable:true, enumerable:true, get:function(){ return getItemsForXtrnSection(secNumRef); }}); })(secNum);
-		} else if(type === 'who') {
-			obj.type='folder';
-			Object.defineProperty(obj,'children',{ configurable:true, enumerable:true, get:function(){ return getOnlineUserIcons(); }});
-		} else if(type === 'command') {
-			var actSpec = sect.command;
-			var actionFn = makeCommandAction(actSpec);
-			if(!actionFn) { _icsh_warn('Invalid command action for '+key); continue; }
-			obj.type='item'; obj.action = actionFn; // bound later
-		} else {
-			_icsh_warn('Unknown type '+type+' for item '+key); continue;
-		}
-		children.push(obj);
+		var built = _buildItemRecursive(order[i], ini, []);
+		if(built) children.push(built);
 	}
 	if(!children.length) { _icsh_warn('No valid menu items built; fallback to static'); return null; }
-	_icsh_log('Dynamic menu built with '+children.length+' items');
+	_icsh_log('Dynamic menu built with '+children.length+' top-level items (folders supported)');
 	return { label:'Home', type:'folder', children: children };
 }
 
@@ -229,6 +306,7 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 		{ label: "Messages", type: "item", iconFile:"messages", action: makeExecXtrnAction("ECREADER") },
 		{ label: "Files", type: "item", iconFile:"folder", action: makeExecXtrnAction("ANSIVIEW") },
 		{ label: "Who", type: "folder", iconFile:"whosonline", get children(){ return getOnlineUserIcons(); } },
+		{ label: "Hello", type: "item", iconFile:"folder", action: BUILTIN_ACTIONS.hello },
 		{ label: "Settings", type: "item", iconFile:"settings", action: BUILTIN_ACTIONS.settings },
 		{ label: "Exit", type: "item", iconFile:"exit", action: BUILTIN_ACTIONS.exit }
 	]
