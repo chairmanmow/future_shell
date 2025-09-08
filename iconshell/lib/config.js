@@ -338,6 +338,27 @@ function buildDynamicConfig() {
 
 var _DYNAMIC_ICSH_CONFIG = buildDynamicConfig();
 
+// Global shell settings (e.g., inactivity -> matrix rain) loaded from guishell.ini if present.
+var ICSH_SETTINGS = (function(){
+	var out = { inactivityMinutes: 3 }; // default 3 minutes
+	try {
+		var iniRaw = readIniFile(system.mods_dir + 'guishell.ini');
+		if(iniRaw){
+			var ini = parseIni(iniRaw);
+			// Allow either [Shell] or [Idle] section, key: inactivity_minutes
+			var val = null;
+			if(ini.Shell && ini.Shell.inactivity_minutes !== undefined) val = ini.Shell.inactivity_minutes;
+			else if(ini.Idle && ini.Idle.inactivity_minutes !== undefined) val = ini.Idle.inactivity_minutes;
+			else if(ini.GuiShell && ini.GuiShell.inactivity_minutes !== undefined) val = ini.GuiShell.inactivity_minutes; // backwards compat / existing section
+			if(val !== null){
+				var mins = parseInt(val,10);
+				if(!isNaN(mins)) out.inactivityMinutes = mins; // can be -1 to disable
+			}
+		}
+	} catch(e){ _icsh_warn('Error loading ICSH_SETTINGS: '+e); }
+	return out;
+})();
+
 
 // Centralized color configuration for IconShell
 var ICSH_VALS = {

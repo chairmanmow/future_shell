@@ -1,5 +1,6 @@
 
 load("event-timer.js");
+try { load('iconshell/lib/effects/matrix_rain.js'); } catch(e) {}
 
 // IconShell prototype extensions for member logic
 // Run time logic
@@ -57,6 +58,12 @@ IconShell.prototype.init = function() {
     // Toast tracking
     this.toasts = [];
     // === End instance state ===
+    // Inactivity tracking for background effects
+    this._lastActivityTs = Date.now();
+    // Configure inactivity threshold from ICSH_SETTINGS (minutes) if available.
+    var _mins = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && typeof ICSH_SETTINGS.inactivityMinutes === 'number') ? ICSH_SETTINGS.inactivityMinutes : 3;
+    if(_mins === -1) this.inactivityThresholdMs = -1; // disabled
+    else this.inactivityThresholdMs = Math.max(0, _mins) * 60000;
     // Persistent chat backend (JSONChat)
     var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
     var host = bbs.sys_inetaddr || "127.0.0.1";
@@ -99,6 +106,10 @@ IconShell.prototype.init = function() {
                 self.activeSubprogram.updateChat();
             }
         }); // 60 seconds
+        // If matrix rain already instantiated, attach it to the shared timer
+        if(this._matrixRain && typeof this._matrixRain.attachTimer === 'function'){
+            this._matrixRain.attachTimer(this.timer);
+        }
     }
 
     // Assign hotkeys for root view
@@ -106,6 +117,12 @@ IconShell.prototype.init = function() {
     this.currentView = ICSH_CONFIG._viewId;
     this.assignViewHotkeys(ICSH_CONFIG.children);
     this.drawFolder();
+    // Background matrix rain effect (behind content)
+    // NOTE: Do NOT start immediately; main loop will start it after inactivity threshold.
+    if (typeof MatrixRain === 'function') {
+        this._matrixRain = new MatrixRain({ parent: this.view });
+        // Defer start; will activate after inactivity.
+    }
     // Enable mouse mode for hotspots
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
 };
@@ -120,6 +137,10 @@ IconShell.prototype.main = function() {
                 this.jsonchat.cycle();
                 // TODO: notification logic (step 4)
             }
+            // Background rain animation cycle (only if no timer event attached)
+            if(this._matrixRain && this._matrixRain.running && !this._matrixRain._timerEvent){
+                this._matrixRain.cycle();
+            }
             if(this.timer){
                 this.timer.cycle();
             }
@@ -128,9 +149,11 @@ IconShell.prototype.main = function() {
                 var p = this._pendingSubLaunch; delete this._pendingSubLaunch;
                 this.launchSubprogram(p.name, p.instance);
             }
-            // Non-blocking input: 100ms timeout
+            // Non-blocking input: shorter timeout when rain active for faster responsiveness
+            var _pollMs = (this._matrixRain && this._matrixRain.running) ? 40 : 100;
             var key = console.inkey(K_NOECHO|K_NOSPIN, 100);
             // Normalize CRLF: if CR received, peek for immediate LF next loop; treat as single ENTER
+            if(key) log("main() KEY:", key);
             if (key === '\r') {
                 this._lastWasCR = true;
             } else if (this._lastWasCR && key === '\n') {
@@ -143,7 +166,24 @@ IconShell.prototype.main = function() {
             }
             if (typeof key === 'string' && key.length > 0) {
                 dbug("Key:" + key, "keylog");
+                // User activity resets inactivity timer and stops rain if active
+                this._lastActivityTs = Date.now();
+
+                if(this._matrixRain && this._matrixRain.running){
+                    // Stop rain without an immediate full-frame clear (expensive & causes lag).
+                    // Foreground redraw overwrites rain cells.
+                        if(typeof this._matrixRain.requestInterrupt === 'function') this._matrixRain.requestInterrupt();
+                    this._matrixRain.stop();
+                    if(this.activeSubprogram && typeof this.activeSubprogram.draw==='function') this.activeSubprogram.draw();
+                    else this.drawFolder();
+                }
                 this.processKeyboardInput(key);
+            }
+            // Inactivity trigger (disabled if inactivityThresholdMs === -1)
+            if(this._matrixRain && !this._matrixRain.running && this.inactivityThresholdMs !== -1){
+                if(Date.now() - this._lastActivityTs > this.inactivityThresholdMs){
+                    this._matrixRain.start();
+                }
             }
             // Cycle all toasts for auto-dismiss
             if (this.toasts && this.toasts.length > 0) {

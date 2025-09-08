@@ -373,6 +373,13 @@ IconShell.prototype._createIconCell = function(i, dims, items, parentFrame, Icon
     var row = Math.floor(i / dims.cols);
     var x = (col * dims.cellW) + 2;
     var y = (row * dims.cellH) + 1;
+    // If this is a placeholder (padding cell), don't create visible frames.
+    // Preserve a cell object so selection math & hotspots (which skip placeholders) still work.
+    if (items[i] && items[i].isPlaceholder) {
+        return { icon: { x:x, y:y, width:dims.iconW, height:dims.iconH, isPlaceholder:true },
+                 label: { x:x, y:y + dims.iconH, width:dims.iconW, height:dims.labelH, isPlaceholder:true },
+                 item: items[i], iconObj: null };
+    }
     var hasBg = typeof items[i].iconBg !== 'undefined';
     var hasFg = typeof items[i].iconFg !== 'undefined';
     var iconAttr = 0;
@@ -397,6 +404,7 @@ IconShell.prototype._handleScreenTooSmall = function(parentFrame, msg, iconW, ic
 IconShell.prototype.paintIcon = function (cell, selected, invert) {
     dbug('[paintIcon] called for label="' + (cell.item && cell.item.label) + '" selected=' + selected + ' invert=' + invert, "view");
     var item = cell.item;
+    if (item && item.isPlaceholder) return; // nothing to paint
     if (typeof item.iconBg !== 'undefined' && typeof item.iconFg !== 'undefined') {
         cell.icon.clear(item.iconBg | item.iconFg);
     }

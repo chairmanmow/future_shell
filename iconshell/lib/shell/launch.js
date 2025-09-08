@@ -1,9 +1,9 @@
 IconShell.prototype.runExternal = function(fn) {
     try {
         // Optional: dissolve animation before clearing and launching external
-        if (this.view && typeof dissolve === 'function') {
-            dissolve(this.view, ICSH_VALS.ANIMATION.COLOR, 0); // 2ms delay for visible effect
-        }
+        // if (this.view && typeof dissolve === 'function') {
+        //     dissolve(this.view, ICSH_VALS.ANIMATION.COLOR, 0); // 2ms delay for visible effect
+        // }
         console.attr = ICSH_VALS.EXTERNAL_BG | ICSH_VALS.EXTERNAL_FG;
         console.clear();
         dbug("RUNNING EXTERNAL PROGRAM WRAPPER", "external");
@@ -19,6 +19,12 @@ IconShell.prototype.runExternal = function(fn) {
             this.assignViewHotkeys(node.children);
         }
         this.drawFolder();
+        // Reset inactivity so rain won't instantly start; also ensure rain stopped.
+        this._lastActivityTs = Date.now();
+        if(this._matrixRain && this._matrixRain.running){
+            this._matrixRain.stop();
+            this._matrixRain.clear();
+        }
     }
 };
 
