@@ -7,6 +7,8 @@ load("iconshell/lib/subfunctions/file_area.js");
 load("iconshell/lib/subfunctions/calendar.js");
 load("iconshell/lib/subfunctions/clock.js");
 load("iconshell/lib/subfunctions/rawgate.js");
+load("iconshell/lib/subfunctions/mail.js");
+load("iconshell/lib/subfunctions/system_info.js");
 
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
@@ -15,7 +17,7 @@ load("iconshell/lib/subfunctions/rawgate.js");
 // [Item.chat]\n type=builtin\n label=Chat\n icon=chat\n builtin=chat
 // [Item.games]\n type=xtrn_section\n section=1\n label=Games\n icon=games
 // [Item.apps]\n type=xtrn_section\n section=0\n label=Apps\n icon=apps
-// [Item.who]\n type=who\n label=Who\n icon=whosonline
+// (Deprecated) legacy who item removed; use builtin + subprogram instead
 // [Item.messages]\n type=command\n command=exec_xtrn:ECREADER\n label=Messages\n icon=messages
 // [Item.files]\n type=command\n command=exec_xtrn:ANSIVIEW\n label=Files\n icon=folder
 // [Item.settings]\n type=builtin\n builtin=settings\n label=Settings\n icon=settings
@@ -73,6 +75,27 @@ var BUILTIN_ACTIONS = {
 		if(!this.rawGateSub) this.rawGateSub = new RawGateSub({ parentFrame: this.subFrame, shell: this });
 		else this.rawGateSub.setParentFrame && this.rawGateSub.setParentFrame(this.subFrame);
 		this.queueSubprogramLaunch('rawgate', this.rawGateSub);
+	},
+	mail: function(){
+		try { if(typeof Mail !== 'function') load('iconshell/lib/subfunctions/mail.js'); } catch(e) { dbug('subprogram','Failed loading mail.js '+e); return; }
+		if(typeof Mail !== 'function') { dbug('subprogram','Mail class missing after load'); return; }
+		if(!this.mailSub) this.mailSub = new Mail({ parentFrame: this.subFrame, shell: this });
+		else { this.mailSub.parentFrame = this.subFrame; this.mailSub.shell = this; }
+		this.queueSubprogramLaunch('mail', this.mailSub);
+	},
+	sysinfo: function(){
+		try { if(typeof SystemInfo !== 'function') load('iconshell/lib/subfunctions/system_info.js'); } catch(e) { dbug('subprogram','Failed loading system_info.js '+e); return; }
+		if(typeof SystemInfo !== 'function') { dbug('subprogram','SystemInfo class missing after load'); return; }
+		if(!this.systemInfoSub) this.systemInfoSub = new SystemInfo({ parentFrame: this.subFrame, shell: this });
+		else { this.systemInfoSub.parentFrame = this.subFrame; this.systemInfoSub.shell = this; }
+		this.queueSubprogramLaunch('system-info', this.systemInfoSub);
+	},
+	who_list: function(){
+		try { if(typeof WhoOnline !== 'function') load('iconshell/lib/subfunctions/whosonline.js'); } catch(e) { dbug('subprogram','Failed loading whosonline.js '+e); return; }
+		if(typeof WhoOnline !== 'function') { dbug('subprogram','WhoOnline class missing after load'); return; }
+		if(!this.whoOnlineSub) this.whoOnlineSub = new WhoOnline({ parentFrame: this.subFrame, shell: this });
+		else { this.whoOnlineSub.parentFrame = this.subFrame; this.whoOnlineSub.shell = this; }
+		this.queueSubprogramLaunch('who-online', this.whoOnlineSub);
 	},
 };
 
@@ -211,10 +234,36 @@ function _buildItemRecursive(key, ini, ancestry) {
 	if(ancestry.indexOf(key)!==-1) { _icsh_warn('Cycle detected for item '+key+' path '+ancestry.join('>')); return null; }
 	var sect = ini['Item.'+key];
 	if(!sect) { _icsh_warn('Missing section [Item.'+key+']'); return null; }
+	// Access gating check (inline, minimal) – returns true if allowed or user data not ready
+	function _allow(sect){
+		// Centralize user level resolution (prefer security.level if present)
+		function _usrLvl(){
+			if (typeof user === 'undefined') return null;
+			if (user.security && typeof user.security.level === 'number') return user.security.level;
+			if (typeof user.level === 'number') return user.level;
+			return null;
+		}
+		var ulev = _usrLvl();
+		if (ulev === null) { _icsh_err('user object missing or no usable level (security.level / level) during gating; denying item'); return false; }
+		if (sect.min_level !== undefined) { var ml=parseInt(sect.min_level,10); if(!isNaN(ml) && ulev < ml) return false; }
+		if (sect.require_sysop !== undefined && /^(1|true|yes)$/i.test(sect.require_sysop)) {
+			var isSys = (user.is_sysop===true)||(user.security&&user.security.level>=90)||ulev>=90; if(!isSys) return false;
+		}
+		if (sect.require_flag !== undefined) {
+			var f=(''+sect.require_flag).trim().toUpperCase();
+			if(f.length===1){ var sets=[user.flags1,user.flags2,user.flags3,user.flags4]; var ok=false; for(var i=0;i<sets.length && !ok;i++) if(sets[i]&&sets[i].indexOf(f)!==-1) ok=true; if(!ok && user.security){ var ss=user.security; var more=[ss.flags1,ss.flags2,ss.flags3,ss.flags4]; for(var m=0;m<more.length && !ok;m++) if(more[m]&&more[m].indexOf(f)!==-1) ok=true; } if(!ok) return false; }
+		}
+		return true;
+	}
+	if(!_allow(sect)) { _icsh_log('Filtered (gating) '+key); return null; }
 	var type = (sect.type||'').toLowerCase();
 	var label = sect.label || key.charAt(0).toUpperCase()+key.substring(1);
 	var icon = sect.icon || key;
 	var obj = { label: label, iconFile: icon };
+	// Lightweight gating metadata copied directly (evaluation deferred to one central filter)
+	if(sect.min_level!==undefined) obj.min_level = parseInt(sect.min_level,10);
+	if(sect.require_sysop!==undefined) obj.require_sysop = /^(1|true|yes)$/i.test(sect.require_sysop);
+	if(sect.require_flag!==undefined) obj.require_flag = (''+sect.require_flag).trim().toUpperCase();
 	if(type === 'builtin') {
 		var bname = (sect.builtin||'').toLowerCase();
 		var act = BUILTIN_ACTIONS[bname];
@@ -233,11 +282,6 @@ function _buildItemRecursive(key, ini, ancestry) {
 		if(isNaN(secNum) || secNum < 0) { _icsh_warn('Bad section number for '+key); return null; }
 		obj.type='folder';
 		(function(secNumRef){ Object.defineProperty(obj,'children',{ configurable:true, enumerable:true, get:function(){ return getItemsForXtrnSection(secNumRef); }}); })(secNum);
-		return obj;
-	}
-	if(type === 'who') {
-		obj.type='folder';
-		Object.defineProperty(obj,'children',{ configurable:true, enumerable:true, get:function(){ return getOnlineUserIcons(); }});
 		return obj;
 	}
 	if(type === 'folder') {
@@ -271,6 +315,23 @@ function buildDynamicConfig() {
 		if(built) children.push(built);
 	}
 	if(!children.length) { _icsh_warn('No valid menu items built; fallback to static'); return null; }
+	// Concise gating filter (single pass)
+	// Post-build filter (only if we have a resolvable user level). Uses same logic as _allow but on built objects.
+	function _userLevel(){ if(typeof user==='undefined') return null; if(user.security && typeof user.security.level==='number') return user.security.level; if(typeof user.level==='number') return user.level; return null; }
+	var __ulev = _userLevel();
+	if(__ulev !== null){
+		children = children.filter(function(c){
+			if(c.min_level!==undefined && !isNaN(c.min_level) && __ulev < c.min_level) return false;
+			if(c.require_sysop){ var isSys = (user.is_sysop===true)||(user.security&&user.security.level>=90)||__ulev>=90; if(!isSys) return false; }
+			if(c.require_flag && c.require_flag.length===1){
+				var sets=[user.flags1,user.flags2,user.flags3,user.flags4]; var ok=false;
+				for(var i=0;i<sets.length && !ok;i++) if(sets[i] && typeof sets[i]==='string' && sets[i].indexOf(c.require_flag)!==-1) ok=true;
+				if(!ok && user.security){ var ss=user.security; var more=[ss.flags1,ss.flags2,ss.flags3,ss.flags4]; for(var m=0;m<more.length && !ok;m++) if(more[m] && typeof more[m]==='string' && more[m].indexOf(c.require_flag)!==-1) ok=true; }
+				if(!ok) return false;
+			}
+			return true;
+		});
+	}
 	_icsh_log('Dynamic menu built with '+children.length+' top-level items (folders supported)');
 	return { label:'Home', type:'folder', children: children };
 }
@@ -305,8 +366,19 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 		{ label: "Apps", type: "folder", iconFile: "apps", get children(){ return getItemsForXtrnSection(0);} },
 		{ label: "Messages", type: "item", iconFile:"messages", action: makeExecXtrnAction("ECREADER") },
 		{ label: "Files", type: "item", iconFile:"folder", action: makeExecXtrnAction("ANSIVIEW") },
-		{ label: "Who", type: "folder", iconFile:"whosonline", get children(){ return getOnlineUserIcons(); } },
+		{ label: "Who", type: "folder", iconFile:"whosonline", get children(){
+			try {
+				if(typeof WhoOnline !== 'function') load('iconshell/lib/subfunctions/whosonline.js');
+				if(typeof WhoOnline !== 'function') return [];
+				if (typeof global !== 'undefined' && global.__icsh_shell && global.__icsh_shell.whoOnlineSub)
+					return global.__icsh_shell.whoOnlineSub.getOnlineUserIcons();
+				if(!this._whoTemp) this._whoTemp = new WhoOnline({ parentFrame: null, shell: null });
+				return this._whoTemp.getOnlineUserIcons();
+			} catch(e){ return []; }
+		} },
+		{ label: "Who List", type: "item", iconFile:"whosonline", action: BUILTIN_ACTIONS.who_list },
 		{ label: "Hello", type: "item", iconFile:"folder", action: BUILTIN_ACTIONS.hello },
+		{ label: "Sys Info", type: "item", iconFile:"kingcomputer", action: BUILTIN_ACTIONS.sysinfo },
 		{ label: "Settings", type: "item", iconFile:"settings", action: BUILTIN_ACTIONS.settings },
 		{ label: "Exit", type: "item", iconFile:"exit", action: BUILTIN_ACTIONS.exit }
 	]

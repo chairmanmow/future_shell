@@ -1,11 +1,13 @@
 
 var MAX_TOAST_WIDTH = 40;
-var DEFAULT_TOAST_TIMEOUT = 30000; // 30 seconds
+var DEFAULT_TOAST_TIMEOUT = 3000; // 3 seconds
 
-// Position keywords: 'top-left','top-right','bottom-left','bottom-right','center'
-// For now we implement corner logic + center; bottom variants offset 1 row above bottom to avoid crumb bar.
+load("load/frame.js");
+load("iconshell/lib/eye_candy.js");
+
 
 function Toast(options) {
+    // log("Creating Toast " + JSON.stringify(options));
     if (!options || typeof options !== 'object') options = {};
     var message = options.message || "";
     var timeout = (typeof options.timeout === 'number') ? options.timeout : DEFAULT_TOAST_TIMEOUT;
@@ -15,30 +17,12 @@ function Toast(options) {
     var height = 3;
     if (height < 1) height = 1;
     if (height > console.screen_rows) height = console.screen_rows;
-    var pos = options.position || 'bottom-right';
-    var scrW = console.screen_columns || 80;
-    var scrH = console.screen_rows || 24;
-    var x=1, y=1;
-    function clamp(v,min,max){ return v<min?min:(v>max?max:v); }
-    switch(pos){
-        case 'top-right':
-            x = scrW - width + 1; y = 1; break;
-        case 'bottom-left':
-            x = 1; y = scrH - height; break; // leave last line for crumb
-        case 'bottom-right':
-            x = scrW - width + 1; y = scrH - height; break;
-        case 'center':
-            x = Math.max(1, Math.floor((scrW - width)/2) + 1);
-            y = Math.max(1, Math.floor((scrH - height)/2) + 1);
-            break;
-        case 'top-left':
-        default:
-            x = 1; y = 1; break;
-    }
-    x = clamp(x,1, Math.max(1, scrW - width + 1));
-    y = clamp(y,1, Math.max(1, scrH - height + 1));
+    // Always display at top left for now
+    var x = 1;
+    var y = 1;
 
     this.parentFrame = options.parentFrame || undefined;
+    log("Parent frame exists", !!this.parentFrame);
     this.frame = new Frame(x, y, width, height, BG_GREEN|LIGHTGRAY, this.parentFrame);
     this.frame.attr = BG_GREEN|LIGHTGRAY;
     this.frame.transparent = false;
@@ -54,6 +38,7 @@ function Toast(options) {
     var self = this;
     this.dismiss = function(parentFrame) {
         if (self._dismissed) return;
+        log('[TOAST] Dismissing toast: ' + message);
         self._dismissed = true;
         self.frame.clear();
         self.frame.close();

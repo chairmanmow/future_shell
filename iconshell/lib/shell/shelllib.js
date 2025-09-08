@@ -165,6 +165,8 @@ IconShell.prototype.main = function() {
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function(ch) {
     dbug("Shell processing keyboard input:" + ch, "keylog");
+    // Ignore filler hotspot command (used to swallow empty grid area clicks)
+    if (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined' && ch === ICSH_HOTSPOT_FILL_CMD) return true;
     // If any toasts are active, ESC dismisses the oldest
     if (this.toasts && this.toasts.length > 0) {
         if (ch === '\x1B') { // ESC

@@ -14,6 +14,8 @@ load("iconshell/lib/shell/index.js");
 function IconShell(){
         this.currentView = "view1";  // first set inside init, reset when changing folders
         this.viewHotkeys = {}; // first set inside init, reset when changing folders
+        // conio.init("ANSI");
+        // conio.setfont(0);
         this.init();
         this.main();
 }

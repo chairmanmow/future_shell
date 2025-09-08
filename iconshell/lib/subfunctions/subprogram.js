@@ -1,9 +1,12 @@
+load('sbbsdefs.js');
 function Subprogram(opts) {
     opts = opts || {};
     this.name = opts.name || 'subprogram';
     this.parentFrame = opts.parentFrame || null;
     this.running = false;
     this._done = null;
+    // Optional reference to the parent shell (IconShell) so subprograms can access shared services
+    this.shell = opts.shell; 
 }
 
 Subprogram.prototype.enter = function(done) {
@@ -39,6 +42,27 @@ Subprogram.prototype.cleanup = function(){
 };
 
 Subprogram.prototype.setParentFrame = function(f){ this.parentFrame = f; return this; };
+
+// Unified toast helper available to every subprogram.
+// Usage: this._showToast({ message:'Hello', timeout:5000, position:'bottom-right' })
+Subprogram.prototype._showToast = function(opts) {
+    log("Subprogram._showToast called with " +JSON.stringify(opts));
+    opts = opts || {};
+    try {
+        if (this.shell && typeof this.shell.showToast === 'function') {
+            // Ensure parentFrame defaults to shell root if not provided
+            if (!opts.parentFrame && this.shell.root) opts.parentFrame = this.shell.root;
+            mswait(500);
+            log("waiting half a second to show toast");
+            return this.shell.showToast(opts);
+        }
+        // Fallback: console output if no shell toast system
+        if (opts.message && typeof console !== 'undefined' && console.putmsg) {
+            console.putmsg('\r\n' + opts.message + '\r\n');
+        }
+    } catch(e) { /* swallow */ }
+    return null;
+};
 
 function extend(Sub, Super) {
     Sub.prototype = Object.create(Super.prototype);

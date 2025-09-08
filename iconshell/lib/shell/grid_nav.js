@@ -1,20 +1,7 @@
 // Update openSelection to use changeFolder for both up and down navigation
 IconShell.prototype.openSelection = function() {
     dbug('[openSelection] selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, 'nav');
-    if (this.grid && this.grid.cells) {
-        var cellIdx = this.selection - this.scrollOffset;
-        if (cellIdx >=0 && cellIdx < this.grid.cells.length) {
-            var citem = this.grid.cells[cellIdx].item;
-            dbug('[openSelection] gridCellIdx=' + cellIdx + ' gridItemLabel=' + (citem && citem.label), 'nav');
-        } else {
-            dbug('[openSelection] gridCellIdx out of range: ' + cellIdx + ' cells=' + this.grid.cells.length, 'nav');
-        }
-    } else {
-        dbug('[openSelection] grid missing when activating', 'nav');
-    }
-    this.flashSelection();
     var node = this.stack[this.stack.length-1];
-    // Stable children snapshot for this folder
     if (!node._cachedChildren) {
         try {
             var rawChildren = node.children ? node.children.slice() : [];
@@ -26,18 +13,18 @@ IconShell.prototype.openSelection = function() {
     var tmpNode = { children: node._cachedChildren };
     var items = this._getCurrentItemsWithUp(tmpNode, hasUp);
     if (!items || !items.length) return;
-    // Clamp selection defensively
     if (this.selection < 0) this.selection = 0;
     if (this.selection >= items.length) this.selection = items.length - 1;
     var item = items[this.selection];
     if (!item) return;
-    // Up navigation
+    // If it's not a folder (or up), show selection flash; skip for folder to avoid extra repaint before redraw
+    var isFolderNav = (item.type === 'folder') || (hasUp && this.selection === 0);
+    if(!isFolderNav) this.flashSelection();
     if (hasUp && this.selection === 0) {
         dbug('[openSelection] UP action triggered', 'nav');
         this._handleUpSelection(item);
         return;
     }
-    // Directly use the chosen item object (avoid recomputing index -> mismatch bugs)
     dbug('[openSelection] activating label=' + (item.label||'') + ' type=' + item.type, 'nav');
     if (item.type === 'folder') {
         this._handleFolderSelection(item);
@@ -84,12 +71,6 @@ IconShell.prototype._handleFolderSelection = function(realItem) {
         dbug('[folder] assign _viewId=' + realItem._viewId + ' label=' + realItem.label, 'folder');
     }
     var childrenChanged = false;
-    var isWhoCmd = realItem.label === "Who" && typeof getOnlineUserIcons === 'function';
-    if (isWhoCmd) {
-        realItem.children = getOnlineUserIcons();
-        this.assignViewHotkeys(realItem.children);
-        childrenChanged = true;
-    }
     var isGamesMenu = realItem.label && realItem.label.toLowerCase().indexOf("game") !== -1 && typeof getGamesMenuItems === 'function';
     if (isGamesMenu) {
         realItem.children = getGamesMenuItems();
@@ -169,12 +150,7 @@ IconShell.prototype.changeFolder = function(targetFolder, options) {
     // Ensure folder change is immediately reflected visually (especially for non-dynamic folders)
     // Without this, the grid could remain from the previous folder until the next redraw trigger,
     // causing selection/action mismatches.
-    if (direction === 'down') {
-        // Avoid double-draw when caller already explicitly called drawFolder right after changeFolder.
-        // We rely on caller _handleFolderSelection always drawing now, but keep this for safety
-        // if changeFolder is invoked directly elsewhere in future.
-        if (!this._suppressAutoDraw) this.drawFolder();
-    }
+    // Model A: changeFolder never draws; caller must call drawFolder() once.
 };
 
 IconShell.prototype.drawFolder = function() {
@@ -236,6 +212,8 @@ IconShell.prototype.drawFolder = function() {
     this._addMouseHotspots();
     this._adjustSelectionWithinBounds(items, maxIcons);
     this.root.cycle();
+    // Rendering complete; clear pending change flag
+    this.folderChanged = false;
 };
 
 IconShell.prototype._updateMouseIndicator = function() {
@@ -320,18 +298,37 @@ IconShell.prototype._highlightSelectedCell = function() {
 };
 
 IconShell.prototype._addMouseHotspots = function() {
+    // Note: Passing swallow=false to avoid "hungry" hotspots that appear to consume
+    // clicks beyond their intended horizontal bounds on partially filled rows.
     if (this.grid && this.grid.cells && typeof console.add_hotspot === 'function') {
+        var FILL_CMD = (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined') ? ICSH_HOTSPOT_FILL_CMD : '\x7F';
+        var perRow = {}; // rowIndex -> { y, iconHeight, rightMost }
         for (var i = 0; i < this.grid.cells.length; i++) {
             var cell = this.grid.cells[i];
             var item = cell.item;
-            if (!item.hotkey) continue;
+            if (!item.hotkey || item.type === 'placeholder') continue; // skip placeholders
             var cmd = item.hotkey;
             var min_x = cell.icon.x;
-            var max_x = cell.icon.x + cell.icon.width - 1;
+            var max_x = cell.icon.x + cell.icon.width - 1; // strictly icon width
             var y = cell.icon.y;
-            dbug('[HOTSPOT] i=' + i + ' label=' + (item.label || '') + ' hotkey=' + cmd + ' x=' + min_x + '-' + max_x + ' y=' + y + '-' + (y + cell.icon.height - 1), "hotspots");
+            dbug('[HOTSPOT] i=' + i + ' label=' + (item.label || '') + ' hotkey=' + cmd + ' x=' + min_x + '-' + max_x + ' y=' + y + '-' + (y + cell.icon.height - 1), 'hotspots');
             for (var row = 0; row < cell.icon.height; row++) {
-                console.add_hotspot(cmd, true, min_x, max_x, y + row);
+                try { console.add_hotspot(cmd, false, min_x, max_x, y + row); } catch(e) {}
+            }
+            // Optionally include label line for easier clicking (keep within same horizontal bounds)
+            try { console.add_hotspot(cmd, false, min_x, max_x, y + cell.icon.height); } catch(e) {}
+            var rIdx = Math.floor(i / this.grid.cols);
+            if (!perRow[rIdx]) perRow[rIdx] = { y: y, iconHeight: cell.icon.height, rightMost: max_x };
+            else if (max_x > perRow[rIdx].rightMost) perRow[rIdx].rightMost = max_x;
+        }
+        // Add filler hotspots (swallow clicks) for gap area to the right of last real icon in each row
+        var viewRight = this.view.x + this.view.width - 1;
+        for (var rk in perRow) {
+            var info = perRow[rk];
+            if (info.rightMost < viewRight) {
+                for (var ry = 0; ry <= info.iconHeight; ry++) { // cover icon + label line
+                    try { console.add_hotspot(FILL_CMD, false, info.rightMost + 1, viewRight, info.y + ry); } catch(e) {}
+                }
             }
         }
     }

@@ -19,7 +19,7 @@ var DEBUG_CONFIG = {
     nav: {active: true, log_color: ANSI_COLORS.YELLOW},
     external: {active: false, log_color: ANSI_COLORS.RED},
     init: {active: false, log_color: ANSI_COLORS.RED},
-    subprogram: {active: true, log_color: ANSI_COLORS.RED},
+    subprogram: {active: false, log_color: ANSI_COLORS.RED},
     keylog: {active: false, log_color: ANSI_COLORS.CYAN},
     hotkeys: {active: false, log_color: ANSI_COLORS.CYAN},
     icons: {active: false, log_color: ANSI_COLORS.CYAN},
