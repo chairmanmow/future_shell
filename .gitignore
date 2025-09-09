@@ -4,7 +4,7 @@
 *.ini
 
 # Ignore specific JS files (add more as needed)
-customlogon.js
+customlogin.js
 SlyEdit.js
 lbshelledited.js
 LogonMtx/DDLoginMatrix.js

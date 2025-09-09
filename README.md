@@ -123,6 +123,9 @@ If you want to fall back to the classic interface for low‑speed connections, w
 - Command item does nothing: Confirm prefix `exec_xtrn:` or `js:` is exact (case-sensitive). Errors in inline JS are logged.
 - Chat not updating: Verify your JSON chat backend object (`jsonchat`) cycles and submit functions are wired.
 
+## fTelnet and matrix rain screensaver settings
+Set `AllowModernScrollback`to false with your fTelnet connection - If you don't change this / turn off the screensaver, the UI will become unresponsive. Something to be maybe be aware of in other terminals too, disabling screensaver in .ini file also works.
+
 ## Safety Notes
 
 `js:` command items run arbitrary code in the shell context. Only grant edit access to trusted sysops.

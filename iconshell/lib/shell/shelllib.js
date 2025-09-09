@@ -120,7 +120,7 @@ IconShell.prototype.init = function() {
     // Background matrix rain effect (behind content)
     // NOTE: Do NOT start immediately; main loop will start it after inactivity threshold.
     if (typeof MatrixRain === 'function') {
-        this._matrixRain = new MatrixRain({ parent: this.view });
+        this._matrixRain = new MatrixRain({ parent: this.view, deterministic: true });
         // Defer start; will activate after inactivity.
     }
     // Enable mouse mode for hotspots

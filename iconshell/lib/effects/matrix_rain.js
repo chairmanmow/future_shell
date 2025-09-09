@@ -25,6 +25,9 @@
     this._stoppedDirty = false;
     this._interrupt = false; // interrupt flag for early abort
     this.safeMode = (opts.safeMode !== undefined) ? opts.safeMode : true; // reduce attr churn
+    this.deterministic = !!opts.deterministic; // cycle instead of random
+    this._pairIdx = 0;
+    this._trailIdx = 0;
     // Trail color palette (adds gray/white variation)
     // Static grayscale trio always available
     this._neutralColors = [WHITE, LIGHTGRAY, DARKGRAY].filter(function(c){return typeof c!=='undefined';});
@@ -40,12 +43,34 @@
     if(!this._colorPairs.length){ // fallback single pair (green)
         if(typeof GREEN!=='undefined' && typeof LIGHTGREEN!=='undefined') this._colorPairs.push({low:GREEN, high:LIGHTGREEN});
     }
+    // Precompute color pools per pair (pair.low, pair.high + neutrals) to avoid per-frame allocation
+    for(var cp=0; cp<this._colorPairs.length; cp++){
+        var p=this._colorPairs[cp];
+        p.colorPool = [p.low, p.high].concat(this._neutralColors);
+    }
+    // Object pool for drops to reduce GC churn
+    this._dropPool = [];
+    this._maxPool = 256;
     }
 
     MatrixRain.prototype._spawn = function(col){
-        var len = 3 + Math.floor(Math.random()* (this.maxTrail-2));
-        var pair = this._colorPairs[Math.floor(Math.random()*this._colorPairs.length)] || {low:GREEN, high:LIGHTGREEN};
-        this.drops.push({ c:col, y:1, trail:len, pair:pair });
+        var len;
+        if(this.deterministic){
+            var span = Math.max(1, this.maxTrail-2);
+            len = 3 + (this._pairIdx % span);
+        } else {
+            len = 3 + Math.floor(Math.random()* (this.maxTrail-2));
+        }
+        var pair;
+        if(this.deterministic){
+            pair = this._colorPairs[this._pairIdx % this._colorPairs.length];
+            this._pairIdx++;
+        } else {
+            pair = this._colorPairs[Math.floor(Math.random()*this._colorPairs.length)] || this._colorPairs[0];
+        }
+        var d = (this._dropPool.length ? this._dropPool.pop() : {});
+        d.c = col; d.y = 1; d.trail = len; d.pair = pair; d.seq = this._pairIdx; d.pool = pair.colorPool;
+        this.drops.push(d);
     };
 
     MatrixRain.prototype._step = function(){
@@ -68,24 +93,40 @@
                 this._spawn(col);
             }
         }
-        var remaining=[];
-        for(var i=0;i<this.drops.length && !this._interrupt;i++){
-            var d=this.drops[i];
+        var drops = this.drops;
+        var write = 0;
+        var originalLen = drops.length;
+        for(var i=0;i<originalLen && !this._interrupt;i++){
+            var d=drops[i];
             // Draw head (single attribute)
-            var headChar = this.chars.charAt(Math.floor(Math.random()*this.chars.length));
-            // Head uses the high color of its pair; occasional white flash for variation
-            var headAttr = (Math.random() < 0.10 && typeof WHITE !== 'undefined') ? (WHITE|BG_BLACK) : (d.pair.high|BG_BLACK);
+            var headChar = this.deterministic
+                ? this.chars.charAt(d.seq % this.chars.length)
+                : this.chars.charAt(Math.floor(Math.random()*this.chars.length));
+            var headAttr;
+            if(this.deterministic){
+                // Every 10th drop head white (if available)
+                headAttr = (typeof WHITE!=='undefined' && (d.seq % 10 === 0)) ? (WHITE|BG_BLACK) : (d.pair.high|BG_BLACK);
+            } else {
+                headAttr = (Math.random() < 0.10 && typeof WHITE !== 'undefined') ? (WHITE|BG_BLACK) : (d.pair.high|BG_BLACK);
+            }
             try { f.setData(d.c-1, d.y-1, headChar, headAttr, false); } catch(e){ this._interrupt = true; break; }
-            if(Date.now() - startTime < this.timeBudgetMs){
+            if((i & 1) === 0 && (Date.now() - startTime) >= this.timeBudgetMs){
+                // Early time budget check every other drop
+            } else if(Date.now() - startTime < this.timeBudgetMs){
                 var maxTrailRender = d.trail;
                 for(var t=1;t<maxTrailRender && !this._interrupt;t++){
                     var yy = d.y - t; if(yy < 1) break;
                     var attr;
                     if(this.safeMode) {
-                        // Random from pair (low/high) plus neutrals
-                        var pool = [d.pair.low, d.pair.high].concat(this._neutralColors);
-                        var sel = pool[Math.floor(Math.random()*pool.length)];
-                        attr = sel|BG_BLACK;
+                        var pool = d.pool; // precomputed
+                        if(this.deterministic){
+                            var sel = pool[this._trailIdx % pool.length];
+                            this._trailIdx++;
+                            attr = sel|BG_BLACK;
+                        } else {
+                            var selR = pool[Math.floor(Math.random()*pool.length)];
+                            attr = selR|BG_BLACK;
+                        }
                     } else {
                         // Intensity-based gradient: high -> low -> light gray -> dark gray
                         var intensity = (d.trail - t)/d.trail;
@@ -102,14 +143,22 @@
                 }
             }
             d.y++;
-            if(d.y - d.trail < this.rows) remaining.push(d); // keep while any part visible
+            if(d.y - d.trail < this.rows) {
+                drops[write++] = d; // keep
+            } else {
+                // recycle finished drop
+                if(this._dropPool.length < this._maxPool) this._dropPool.push(d);
+            }
             if(Date.now() - startTime >= this.timeBudgetMs) {
-                // Keep remaining drops for next tick without processing further
-                for(var j=i+1;j<this.drops.length;j++) remaining.push(this.drops[j]);
+                // Copy remaining unprocessed drops as-is
+                for(var j=i+1;j<originalLen;j++) {
+                    var od = drops[j];
+                    if(od.y - od.trail < this.rows) drops[write++] = od; else if(this._dropPool.length < this._maxPool) this._dropPool.push(od);
+                }
                 break;
             }
         }
-        this.drops = remaining;
+        drops.length = write;
         try { f.cycle(); } catch(e){}
     };
 
@@ -133,7 +182,19 @@
         return true;
     };
 
-    MatrixRain.prototype.start = function(){ this.running = true; };
+    MatrixRain.prototype.start = function(){
+        this.running = true;
+        // Disable scrollback/history on parent if possible to avoid memory growth
+        try {
+            if(this.parent){
+                if(typeof this.parent.v_scroll !== 'undefined') this.parent.v_scroll = false;
+                if(this.parent.lines && this.parent.lines.length > (this.parent.height*2)){
+                    // Trim any accumulated off-screen history
+                    this.parent.lines = this.parent.lines.slice(0, this.parent.height);
+                }
+            }
+        } catch(e){}
+    };
     MatrixRain.prototype.stop = function(){
         this.running = false;
         this._stoppedDirty = true;
@@ -147,7 +208,9 @@
             try { this.parent.clear(); } catch(e){}
             this._stoppedDirty = false;
         }
-        this.drops = [];
+    // Recycle existing drops instead of abandoning array references
+    for(var i=0;i<this.drops.length;i++) if(this._dropPool.length < this._maxPool) this._dropPool.push(this.drops[i]);
+    this.drops.length = 0;
     };
 
     MatrixRain.prototype.resize = function(){
