@@ -537,6 +537,9 @@ WhoOnline.prototype.enter = function(done){
 WhoOnline.prototype.cleanup = function(){
 	try { if(this.listFrame) this.listFrame.close(); } catch(e){}
 	try { if(this.statusFrame) this.statusFrame.close(); } catch(e){}
+	// Release any hotspots we created so they don't leak into other subprograms
+	if(typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch(e){} }
+	this._hotspotMap = {};
 	this._destroyTiles();
 	this.listFrame=null; this.statusFrame=null;
 	Subprogram.prototype.cleanup.call(this);

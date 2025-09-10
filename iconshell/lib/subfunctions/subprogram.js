@@ -41,6 +41,10 @@ Subprogram.prototype.cleanup = function(){
     }
 };
 
+Subprogram.prototype.pauseForReason = function(reason){};
+
+Subprogram.prototype.resumeForReason = function(){};
+
 Subprogram.prototype.setParentFrame = function(f){ this.parentFrame = f; return this; };
 
 // Unified toast helper available to every subprogram.

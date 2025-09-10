@@ -9,6 +9,7 @@ load("iconshell/lib/subfunctions/clock.js");
 load("iconshell/lib/subfunctions/rawgate.js");
 load("iconshell/lib/subfunctions/mail.js");
 load("iconshell/lib/subfunctions/system_info.js");
+load("iconshell/lib/subfunctions/message_boards.js");
 
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
@@ -30,9 +31,24 @@ function _icsh_err(msg) { try { log(LOG_ERR, '[icsh-config] '+msg); } catch(e) {
 // Builtin actions mapping
 var BUILTIN_ACTIONS = {
 	chat: function(){ this.queueSubprogramLaunch('chat', this.chat); },
+	// Dedicated IRC chat section (distinct from generic 'chat')
+	irc_chat: function(){
+		try { if(typeof IrcSection !== 'function') load('iconshell/lib/subfunctions/irc.js'); } catch(e) { dbug('subprogram','Failed loading irc.js '+e); return; }
+		if(typeof IrcSection !== 'function') { dbug('subprogram','IrcSection class missing after load'); return; }
+		if(!this.ircChatSub) this.ircChatSub = new IrcSection({ parentFrame: this.subFrame, shell: this });
+		else { this.ircChatSub.parentFrame = this.subFrame; this.ircChatSub.shell = this; }
+		this.queueSubprogramLaunch('irc-chat', this.ircChatSub);
+	},
 	settings: function(){ if (typeof bbs.user_config==='function') bbs.user_config(); else { console.clear(); console.putmsg('\x01h\x01cUser settings editor not available.\x01n\r\n'); mswait(800);} },
 	hello: function(){ if(!this.helloWorld) this.helloWorld = new HelloWorld(); this.queueSubprogramLaunch('hello-world', this.helloWorld); },
 	exit: function(){ throw('Exit Shell'); },
+	msg_boards: function(){
+		try { if(typeof MessageBoard !== 'function') load('iconshell/lib/subfunctions/message_boards.js'); } catch(e) { dbug('subprogram','Failed loading message_boards.js '+e); return; }
+		if(typeof MessageBoard !== 'function') { dbug('subprogram','MessageBoard class missing after load'); return; }
+		if(!this.msgBoardSub) this.msgBoardSub = new MessageBoard({ parentFrame: this.subFrame, shell: this });
+		else { this.msgBoardSub.parentFrame = this.subFrame; this.msgBoardSub.shell = this; }
+		this.queueSubprogramLaunch('message-boards', this.msgBoardSub);
+	},
 	privatemsg: function(){
 		try { if(typeof PrivateMsg !== 'function') load('iconshell/lib/subfunctions/private_msg.js'); } catch(e) { dbug('subprogram', 'Failed loading private_msg.js '+e); return; }
 		if(typeof PrivateMsg !== 'function') { dbug('subprogram','PrivateMsg class missing after load'); return; }

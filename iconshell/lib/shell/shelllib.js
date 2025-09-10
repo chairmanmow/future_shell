@@ -174,6 +174,9 @@ IconShell.prototype.main = function() {
                     // Foreground redraw overwrites rain cells.
                         if(typeof this._matrixRain.requestInterrupt === 'function') this._matrixRain.requestInterrupt();
                     this._matrixRain.stop();
+                    if(this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function'){
+                        this.activeSubprogram.resumeForReason('screensaver_off');
+                    }
                     if(this.activeSubprogram && typeof this.activeSubprogram.draw==='function') this.activeSubprogram.draw();
                     else this.drawFolder();
                 }
@@ -182,6 +185,9 @@ IconShell.prototype.main = function() {
             // Inactivity trigger (disabled if inactivityThresholdMs === -1)
             if(this._matrixRain && !this._matrixRain.running && this.inactivityThresholdMs !== -1){
                 if(Date.now() - this._lastActivityTs > this.inactivityThresholdMs){
+                    if(this.activeSubprogram && typeof this.activeSubprogram.pauseForReason === 'function'){
+                        this.activeSubprogram.pauseForReason('screensaver_on');
+                    }
                     this._matrixRain.start();
                 }
             }

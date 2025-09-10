@@ -3,6 +3,8 @@
 "use strict";
 load("sbbsdefs.js");
 load("iconshell/lib/util/draw_ansi_bin.js");
+// Attempt to load ansiterm for global ICE enable (harmless if unavailable)
+var Ansi=null; try { Ansi=load({}, 'ansiterm_lib.js'); } catch(e) {}
 
 var DEBUG=true;
 function l(msg){ if(DEBUG) try { log('[customlogon] '+msg);} catch(e){} }
@@ -49,12 +51,21 @@ if (!!testTarget && file_exists(testTarget)) {
 }
 
 console.clear();
+// Globally force iCE (bright background) mode and disable legacy blink if supported
+if(Ansi){
+	try { Ansi.send('ext_mode','set','bg_bright_intensity'); } catch(e) { l('ICE enable failed '+e); }
+}
+
+var commonOpts={speed:8, pausing:true, debug:DEBUG, finalPause:true, iceMode:'on', suppressBlink:true, hideSauce:true};
 if(target) {
-	if(!drawAnsiBin(target, {speed:8, pausing:true, debug:DEBUG, finalPause:true})) {
+	if(!drawAnsiBin(target, commonOpts)) {
 		l('Direct draw failed, fallback bases');
-		drawAnsiBin(null, {bases:['answer','logon','welcome'], debug:DEBUG, finalPause:true});
+		drawAnsiBin(null, commonOpts);
 	}
 } else {
 	l('No art files; using fallback bases');
-	drawAnsiBin(null, {bases:['answer','logon','welcome'], debug:DEBUG, finalPause:true});
+	drawAnsiBin(null, commonOpts);
 }
+
+// Optional cleanup: leave ICE mode on for subsequent menus; uncomment below to clear after art
+// if(Ansi){ try { Ansi.send('ext_mode','clear','bg_bright_intensity'); } catch(e){} }
