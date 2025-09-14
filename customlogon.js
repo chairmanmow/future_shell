@@ -6,7 +6,7 @@ load("iconshell/lib/util/draw_ansi_bin.js");
 // Attempt to load ansiterm for global ICE enable (harmless if unavailable)
 var Ansi=null; try { Ansi=load({}, 'ansiterm_lib.js'); } catch(e) {}
 
-var DEBUG=true;
+var DEBUG=false;
 function l(msg){ if(DEBUG) try { log('[customlogon] '+msg);} catch(e){} }
 
 // Primary art directory candidates (first with files wins)
@@ -67,5 +67,6 @@ if(target) {
 	drawAnsiBin(null, commonOpts);
 }
 
+// bbs.logon();
 // Optional cleanup: leave ICE mode on for subsequent menus; uncomment below to clear after art
 // if(Ansi){ try { Ansi.send('ext_mode','clear','bg_bright_intensity'); } catch(e){} }

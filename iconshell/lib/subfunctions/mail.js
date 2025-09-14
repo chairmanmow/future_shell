@@ -51,7 +51,7 @@ if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = 0x5100;
    NOTES / LOCAL USAGE:
    - We intentionally invoke all four with no parameters to leverage native interactive flows.
    - After each action we refresh unread count (updateUnreadCount) and redraw icons.
-   - Return values (true/false/count) are ignored; UX feedback is via scrollback pushMessage.
+	- Return values (true/false/count) are ignored; UX feedback previously used a scrollback helper (now removed).
    - If future automation needs scripted flows, supply params & remove interactive dependency.
    ------------------------------------------------------------------------- */
 function Mail(opts) {
@@ -72,12 +72,11 @@ function Mail(opts) {
 		opts = opts || {};
 		var animate = opts.animation !== 'none';
 		return function(){
-			try { if(msg) self.pushMessage(msg); } catch(e){}
 			var sh = self.shell;
 			if(animate && sh && typeof sh.runExternal === 'function') {
-				sh.runExternal(function(){ try { fn(); } catch(ex){ self.pushMessage('Error: '+ex); } });
+				sh.runExternal(function(){ try { fn(); } catch(ex){ /* suppressed error */ } });
 			} else {
-				try { fn(); } catch(ex){ self.pushMessage('Error: '+ex); }
+				try { fn(); } catch(ex){ /* suppressed error */ }
 			}
 			self.updateUnreadCount();
 			self.draw();
@@ -102,32 +101,24 @@ extend(Mail, Subprogram);
 Mail.prototype.composeInteractiveEmail = function(){
 	var self=this;
 	try {
-		// Set a neutral default attribute BEFORE clearing so the page background is not inherited from prior blue input frame
 		try { console.attr = BG_BLACK|LIGHTGRAY; } catch(ea) { try { console.attributes = BG_BLACK|LIGHTGRAY; } catch(ea2){} }
-		console.clear(); // focused compose pre-screen
-		// Prefer overlay frame prompt (falls back to styled console prompt if something fails)
+		console.clear();
 		var dest = self._promptRecipientOverlay();
 		if(dest === undefined) dest = self._promptRecipientStyled();
 		if(!dest){
-			// User aborted
 			console.crlf();
 			console.print('\x01rAborted.  [Hit a key]\x01n');
 			console.getkey(K_NOECHO|K_NOSPIN);
-			// Restore shell view
 			self.draw();
 			return;
 		}
-	// var subj = self._promptSubject();
-	// if(subj===null){ self.pushMessage('Email cancelled (no subject)'); self.draw(); return; }
 	var shell=self.shell;
-	// Omit body so stock editor opens for message text
 	var sent=false;
-	var act=function(){ try { bbs.email(dest, ''); sent=true; } catch(e){ self.pushMessage('Send failed: '+e); } };
+	var act=function(){ try { bbs.email(dest, ''); sent=true; } catch(e){ /* send failed suppressed */ } };
 		if(shell && typeof shell.runExternal==='function') shell.runExternal(act); else act();
 		self.updateUnreadCount();
-		// Defer toast until after frames restored & subprogram redraw so it layers on top
 		if(sent) self._toastSent && self._toastSent(dest);
-	} catch(e){ self.pushMessage('Compose error: '+e); }
+	} catch(e){ /* compose error suppressed */ }
 	self.draw();
 };
 
@@ -248,10 +239,8 @@ Mail.prototype._toastSent = function(dest){
 	} catch(e) {}
 };
 
-Mail.prototype.enter = function(done) {
-	Subprogram.prototype.enter.call(this, done);
-	this.draw();
-};
+// Mail inherits the standard enter(done) from Subprogram; no override needed.
+// (Subprogram.enter will set the callback, open a frame if needed, and call draw())
 
 Mail.prototype._ensureFrames = function() {
 	if (!this.parentFrame) return;
@@ -269,8 +258,8 @@ Mail.prototype._ensureFrames = function() {
 Mail.prototype.draw = function() {
 	this._ensureFrames();
 	if (!this.outputFrame || !this.inputFrame) return;
-	var o=this.outputFrame; o.clear(); o.gotoxy(1,1);
-	o.putmsg('\x01hMail\x01n  (ESC exit)\r\n');
+	var o=this.outputFrame; o.clear();
+	 o.gotoxy(1,1);
 	// Clear any prior hotspots (avoid shell leftovers triggering unexpected exits)
 	if (typeof console.clear_hotspots === 'function') try { console.clear_hotspots(); } catch(e){}
 	var gridInfo = this.drawIconGrid(o) || { heightUsed: 3 };
@@ -342,12 +331,12 @@ Mail.prototype.handleKey = function(k) {
 Mail.prototype.invokeSelected = function(){
 	var opt=this.menuOptions[this.selectedIndex]; if(!opt) return;
 	if(opt.confirm){ this.mode='confirm'; this.confirmFor=opt; this.draw(); return; }
-	try { opt.action && opt.action(); } catch(e){ this.pushMessage('Error running option: '+e); }
+	try { opt.action && opt.action(); } catch(e){ /* suppressed option error */ }
 };
 
 Mail.prototype.invokeConfirmed = function(){
 	var opt=this.confirmFor; this.mode='icon'; this.confirmFor=null; if(!opt){ this.draw(); return; }
-	try { opt.action && opt.action(); } catch(e){ this.pushMessage('Error running option: '+e); }
+	try { opt.action && opt.action(); } catch(e){ /* suppressed option error */ }
 };
 
 // Removed suspend/resume logic; using shell.runExternal wrapper
@@ -363,14 +352,13 @@ Mail.prototype.updateUnreadCount = function(){
 	catch(e){ this.unreadCount=0; }
 };
 
-Mail.prototype.pushMessage = function(msg){ if(!msg) return; this.scrollback.push(msg); if(this.scrollback.length>this.maxScrollLines) this.scrollback.splice(0,this.scrollback.length-this.maxScrollLines); };
 
 Mail.prototype.drawIconGrid = function(o){
 	var ICON_W = (typeof ICSH_CONSTANTS!=='undefined'?ICSH_CONSTANTS.ICON_W:12);
 	var ICON_H = (typeof ICSH_CONSTANTS!=='undefined'?ICSH_CONSTANTS.ICON_H:6);
 	var labelH = 1;
 	var cellW = ICON_W + 2; // padding similar to main shell
-	var cellH = ICON_H + labelH + 2; // top/bottom padding
+	var cellH = ICON_H + labelH + 1; // top/bottom padding
 	var cols = Math.max(1, Math.floor((o.width - 2) / cellW));
 	var maxIcons = cols * Math.max(1, Math.floor((o.height - 3) / cellH));
 	var needRebuild = false;
@@ -390,7 +378,7 @@ Mail.prototype.drawIconGrid = function(o){
 			var col = i % cols;
 			var row = Math.floor(i / cols);
 			var x = (col * cellW) + 2;
-			var y = (row * cellH) + 2; // leave header row
+			var y = (row * cellH) + 1; // leave header row
 			if(y + ICON_H + labelH > o.height) break;
 			var opt = this.menuOptions[i];
 			// Provide a label property for Icon class (doesn't mutate baseLabel permanently)
@@ -443,10 +431,21 @@ Mail.prototype.ensureIconVisible = function(){};
 function pad(str,len,ch){ if(ch===undefined) ch=' '; if(str.length>len) return str.substr(0,len); while(str.length<len) str+=ch; return str; }
 
 Mail.prototype.cleanup = function() {
-	try { if (typeof console.clear_hotspots === 'function') console.clear_hotspots(); } catch(e){}
-	try { if (this.outputFrame) this.outputFrame.close(); } catch(e) {}
-	try { if (this.inputFrame) this.inputFrame.close(); } catch(e) {}
 	this._resetState();
+	try { 
+		if (typeof console.clear_hotspots === 'function') console.clear_hotspots(); 
+	} catch(e){}
+	if(this.outputFrame) {
+		this.outputFrame.clear();
+		this.outputFrame.close(); 
+		this.outputFrame = null;
+	}
+	if(this.inputFrame) {
+		this.inputFrame.clear();
+		this.inputFrame.close(); 
+		this.inputFrame = null;
+	}
+	if(this.parentFrame) this.parentFrame.cycle();
 	Subprogram.prototype.cleanup.call(this);
 };
 
@@ -460,6 +459,15 @@ Mail.prototype._resetState = function() {
 	this.maxScrollLines = 1000;
 	this.outputFrame = null;
 	this.inputFrame = null;
+};
+
+Mail.prototype.exit = function(){
+	log('exiting mail');
+	// Clear hotspots registered by this subprogram before delegating
+	if (typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch(e){} }
+	this._resetState();
+	// Subprogram.exit() will invoke the done callback passed to enter()
+	Subprogram.prototype.exit.call(this);
 };
 
 // Export constructor globally

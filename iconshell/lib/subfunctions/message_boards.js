@@ -31,6 +31,8 @@ extend(MessageBoard, Subprogram);
 
 MessageBoard.prototype.enter = function(done) {
     var self = this;
+    this._done = (typeof done === 'function') ? done : function(){};
+
     Subprogram.prototype.enter.call(this, function(){ if(typeof done==='function') done(); });
     // Re-bootstrap state so a reused instance starts fresh
     this._init(true);
@@ -55,7 +57,6 @@ MessageBoard.prototype.cycle = function(){
         // Frame updates
         if (this.outputFrame) this.outputFrame.cycle();
         if (this.inputFrame) this.inputFrame.cycle();
-        mswait(10);
     }
 };
 
@@ -1001,7 +1002,10 @@ MessageBoard.prototype._handleThreadTreeKey = function(key){
         case KEY_END:
             this.threadTreeSelection = this.threadNodeIndex.length-1; this._paintThreadTree(); return true;
         case '\x08': // Backspace
-            this._renderSubView(this.curgrp); return false;
+        case 'Q':
+        case '\x1B':
+            this._renderSubView(this.curgrp); 
+            return false;
         case ' ': // Space toggles expand/collapse if tree node
             var node = this.threadNodeIndex[this.threadTreeSelection];
             if(node && node.__isTree){ if(node.status & node.__flags__.CLOSED) node.open(); else node.close(); this._paintThreadTree(); }

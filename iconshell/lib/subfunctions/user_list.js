@@ -22,6 +22,7 @@ function UserList(opts){
 extend(UserList, Subprogram);
 
 UserList.prototype.enter = function(done){
+	log("WTF DOES THIS GET CALLED???");
 	this.buildList();
 	Subprogram.prototype.enter.call(this, done);
 };
@@ -41,9 +42,11 @@ UserList.prototype.buildList = function(){
 			location:u.location,
 			note:u.note,
 			connection:u.connection,
-			laston:u.stats.laston_date
+			laston:u.stats.laston_date,
+			netmail:u.netmail
 		});
 	}
+	log('UserList: built list, count='+ JSON.stringify(this.users));
 	this.applySort();
 };
 
@@ -81,7 +84,7 @@ UserList.prototype.draw = function(){
 			,name
 			,system.settings & SYS_LISTLOC ? u.location : u.note
 			,system.datestr(u.laston)
-			,u.connection
+			,u.netmail
 		);
 		// trim trailing newline if present
 		line = line.replace(/\r?\n$/, '');
@@ -95,7 +98,8 @@ UserList.prototype.draw = function(){
 UserList.prototype.drawStatus = function(){
 	if(!this.statusFrame) return;
 	var s=this.statusFrame; s.clear(); s.gotoxy(1,1);
-	var info = 'Users: '+this.users.length+'  Sort: '+(this.sortMode||'-')+'  N=Name L=Last Q=Quit';
+	var viewerEmail = (user && user.netmail) ? user.netmail : '-';
+	var info = 'Users: '+this.users.length+'  Sort: '+(this.sortMode||'-')+'  N=Name L=Last Q=Quit  You: '+viewerEmail;
 	if(info.length > s.width) info = info.substr(0,s.width);
 	s.putmsg(info);
 	s.cycle();

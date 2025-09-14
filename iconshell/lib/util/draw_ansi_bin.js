@@ -4,9 +4,10 @@
 function dbg(msg){
     log(msg);
 }
-function drawAnsiBin(input, opts) {
+function drawAnsiBin(input, opts, cb) {
+	if(!!cb) log("DRAW ANSI BIN HAS CALLBACK");
 	opts = opts || {};
-	var debug = opts.debug === true;
+	var debug = false;
 	function dbg(msg) { if (debug) try { log('[drawAnsiBin] '+msg); } catch(e) {} }
 
 	var bases = opts.bases || [];
@@ -78,8 +79,15 @@ function drawAnsiBin(input, opts) {
 		if (!ok && !explicitPath) {
 			for (var r=0;r<bases.length && !ok;r++) { try { bbs.ansi(bases[r]); ok=true; dbg('bbs.ansi fallback '+bases[r]); } catch(e) { dbg('bbs.ansi fail '+bases[r]); } }
 		}
-	if (finalPause && ok) { dbg('Final pause'); console.pause(); }
-	} finally { console.attributes=saved_attr; bbs.sys_status=saved_status; }
+	if (finalPause && ok) { 
+		dbg('Final pause');
+		 if(cb) cb(true);
+		 }
+	} finally { 
+		console.attributes=saved_attr;
+		 bbs.sys_status=saved_status; 
+		 if(cb){cb(true)};
+		}
 	return ok;
 
 	function drawAnsiLike(path, sauce) {

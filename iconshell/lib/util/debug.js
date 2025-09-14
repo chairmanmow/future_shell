@@ -14,9 +14,9 @@ var ANSI_COLORS = {
 var DEBUG_CONFIG = {
     hotspots: {active: false, log_color: ANSI_COLORS.BLUE},
     paint: {active: false, log_color: ANSI_COLORS.CYAN},
-    chat: {active: false, log_color: ANSI_COLORS.MAGENTA},
+    chat: {active: true, log_color: ANSI_COLORS.MAGENTA},
     drawFolder: {active: false, log_color: ANSI_COLORS.GREEN},
-    nav: {active: true, log_color: ANSI_COLORS.YELLOW},
+    nav: {active: false, log_color: ANSI_COLORS.YELLOW},
     external: {active: false, log_color: ANSI_COLORS.RED},
     init: {active: false, log_color: ANSI_COLORS.RED},
     subprogram: {active: false, log_color: ANSI_COLORS.RED},

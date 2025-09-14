@@ -79,21 +79,7 @@ IconShell.prototype.init = function() {
     var origUpdate = this.jsonchat.update;
     var self = this;
     this.jsonchat.update = function(packet) {
-        if (packet && packet.oper && packet.oper.toUpperCase() === "WRITE") {
-            dbug(!!self.activeSubprogram + "Incoming chat messageABC: " + JSON.stringify(packet), "chat");
-            // If not in chat subprogram, show toast
-            if (!self.activeSubprogram || self.activeSubprogram !== self.chat) {
-                // Only show if message has text
-                if (packet.data && packet.data.str) {
-                     self.showToast({
-                        message: packet.data.nick.name + ': ' + packet.data.str
-                     });
-                }
-            }
-           if (self.activeSubprogram && typeof self.activeSubprogram.updateChat === 'function') {
-                self.activeSubprogram.updateChat(packet.data);
-            }
-        }
+        self._processChatUpdate(packet);
         return origUpdate.call(this, packet);
     }
 
@@ -153,7 +139,6 @@ IconShell.prototype.main = function() {
             var _pollMs = (this._matrixRain && this._matrixRain.running) ? 40 : 100;
             var key = console.inkey(K_NOECHO|K_NOSPIN, 100);
             // Normalize CRLF: if CR received, peek for immediate LF next loop; treat as single ENTER
-            if(key) log("main() KEY:", key);
             if (key === '\r') {
                 this._lastWasCR = true;
             } else if (this._lastWasCR && key === '\n') {
@@ -215,12 +200,8 @@ IconShell.prototype.processKeyboardInput = function(ch) {
     if (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined' && ch === ICSH_HOTSPOT_FILL_CMD) return true;
     // If any toasts are active, ESC dismisses the oldest
     if (this.toasts && this.toasts.length > 0) {
-        if (ch === '\x1B') { // ESC
-            var toast = this.toasts[0];
-            if (toast && typeof toast.dismiss === 'function') toast.dismiss();
-            return true;
-        }
-        // Block other input while toast(s) are present
+        var toast = this.toasts[0];
+        if (toast && typeof toast.dismiss === 'function') toast.dismiss();
         return true;
     }
     if (this.activeSubprogram) {
@@ -231,6 +212,42 @@ IconShell.prototype.processKeyboardInput = function(ch) {
     if (this._handleHotkeyAction(ch)) return true;
     if (this._handleHotkeyItemSelection(ch)) return true;
     return false;
+};
+
+IconShell.prototype._processChatUpdate = function(packet) {
+    dbug("_processChatUpdate(): " + JSON.stringify(packet), "chat");
+    // someone is sending a message
+    if (packet && packet.oper && packet.oper.toUpperCase() === "WRITE") {
+        dbug(!!this.activeSubprogram + "Incoming chat messageABC: " + JSON.stringify(packet), "chat");
+        // If not in chat subprogram, show toast
+        if (!this.activeSubprogram || this.activeSubprogram !== this.chat) {
+            // Only show if message has text
+            if (packet.data && packet.data.str) {
+                this.showToast({
+                    message: packet.data.nick.name + ': ' + packet.data.str,
+                    avatar:{username:packet.data.nick.name, netaddr:packet.data.nick.host}
+                });
+            }
+            }
+            // print the message to the chat subprogram if active
+           if (this.activeSubprogram && typeof this.activeSubprogram.updateChat === 'function') {
+                this.activeSubprogram.updateChat(packet.data);
+            }
+    }
+    // someone has joined
+    if (packet && packet.oper && packet.oper.toUpperCase() === "SUBSCRIBE") {
+        this.showToast({
+                message: packet.data.nick + ' from ' + packet.data.system + " is here.",
+                avatar:{username:packet.data.nick, netaddr:packet.data.system}
+        });
+    }
+        if (packet && packet.oper && packet.oper.toUpperCase() === "UNSUBSCRIBE") {
+        this.showToast({
+            message: packet.data.nick + ' from ' + packet.data.system + " has left.",
+            avatar:{username:packet.data.nick, netaddr:packet.data.system}
+        });
+    }
+
 };
 
 IconShell.prototype._handleSubprogramKey = function(ch) {
