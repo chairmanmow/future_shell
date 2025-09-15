@@ -62,7 +62,7 @@ function Mail(opts) {
 	this.inputFrame = null;
 	this.selectedIndex = 0;
 	this.lastMessage = '';
-	this.mode = 'icon'; // icon | confirm only
+	this.mode = 'icon'; // icon | confirm | promptRecipient
 	this.confirmFor = null;
 	this.scrollback = [];
 	this.scrollOffset = 0;
@@ -99,124 +99,72 @@ function Mail(opts) {
 extend(Mail, Subprogram);
 
 Mail.prototype.composeInteractiveEmail = function(){
-	var self=this;
-	try {
-		try { console.attr = BG_BLACK|LIGHTGRAY; } catch(ea) { try { console.attributes = BG_BLACK|LIGHTGRAY; } catch(ea2){} }
-		console.clear();
-		var dest = self._promptRecipientOverlay();
-		if(dest === undefined) dest = self._promptRecipientStyled();
-		if(!dest){
-			console.crlf();
-			console.print('\x01rAborted.  [Hit a key]\x01n');
-			console.getkey(K_NOECHO|K_NOSPIN);
-			self.draw();
-			return;
-		}
-	var shell=self.shell;
-	var sent=false;
-	var act=function(){ try { bbs.email(dest, ''); sent=true; } catch(e){ /* send failed suppressed */ } };
-		if(shell && typeof shell.runExternal==='function') shell.runExternal(act); else act();
-		self.updateUnreadCount();
-		if(sent) self._toastSent && self._toastSent(dest);
-	} catch(e){ /* compose error suppressed */ }
-	self.draw();
+	if(this.mode !== 'icon') return;
+	this._enterRecipientPrompt();
+	this.draw();
 };
 
-Mail.prototype._promptRecipient = function(){
-	try {
-		if(!console || !console.getstr) return null;
-		console.crlf(); console.putmsg('\x01hTo (user #/name/email): \x01n');
-		var s=console.getstr(80);
-		if(!s) return null;
-		return s.trim();
-	}catch(e){ return null; }
-};
+// Deprecated blocking APIs replaced by non-blocking promptRecipient mode
+Mail.prototype._promptRecipient = function(){ return null; };
 
 // Styled recipient prompt shown on a cleared screen prior to launching editor
-Mail.prototype._promptRecipientStyled = function(){
-	if(!console || !console.getstr) return null;
-	// Guidance (magenta) on first line
-    console.clear();
-	console.gotoxy(1,1);
-	// Ensure we explicitly reset attributes at end so later background stays black
-	console.putmsg('\x01mWho do you want to send this email to?\x01n');
-	// Blank spacer line 2
-	// console.gotoxy(1,2); console.putmsg('\x01n');
-	// Label (yellow) and input field on line 3
-	var label = 'to:';
-	console.gotoxy(1,3);
-	// Bright yellow label followed by single space, then reset to normal before field region
-	console.putmsg('\x01y'+label+'\x01n ');
-	// Field starts after label + space
-	var startX = label.length + 2; // column where blue field begins
-	var scrCols = console.screen_columns || 80;
-	var maxUsable = scrCols - startX - 1;
-	var fieldMax = Math.min(60, Math.max(10, maxUsable)); // cap at 60, min 10
-	// Draw blue background for field (just the field area, not whole line)
-	var ESC='\x1b[';
-	var blankField = Array(fieldMax+1).join(' ');
-	console.gotoxy(startX,3);
-	console.putmsg(ESC+'44;37m'+blankField+'\x1b[0m');
-	// Position at start of field for input and set blue/white again
-	console.gotoxy(startX,3);
-	console.putmsg(ESC+'44;37m');
-	var s = console.getstr(fieldMax, K_EDIT);
-	// Reset colors immediately after input (rest of line remains black)
-	console.putmsg('\x1b[0m');
-	// Optional: ensure cursor moves just after entered text (not strictly required)
-	if(!s) return null;
-	s = s.trim();
-	if(!s.length) return null;
-	return s;
-};
+Mail.prototype._promptRecipientStyled = function(){ return null; };
 
 // Overlay frame-based prompt to avoid global console attribute side-effects
-Mail.prototype._promptRecipientOverlay = function(){
-	try {
-		var cols = console.screen_columns || 80;
-		var rows = console.screen_rows || 24;
-		// Root overlay
-		var overlay = new Frame(1,1,cols,rows,BG_BLACK|LIGHTGRAY);
-		overlay.open();
-		// Guidance line (magenta)
-		var guide = new Frame(1,1,cols,1,BG_BLACK|MAGENTA,overlay);
-		guide.open();
-		guide.putmsg('Who do you want to send this email to?');
-		// Label line (row 3) with yellow label and blue field
-		var labelFrame = new Frame(1,3,4,1,BG_BLACK|YELLOW,overlay); // width 4 fits 'to:'
-		labelFrame.open();
-		labelFrame.putmsg('to:');
-		var startX = 6; // space after label
-		var fieldW = Math.min(60, Math.max(10, cols - startX - 1));
-		var fieldFrame = new Frame(startX,3,fieldW,1,BG_BLUE|WHITE,overlay);
-		fieldFrame.open();
-		// Simple input loop (no echo bleed)
-		var buf='';
-		function redrawField(){
-			fieldFrame.clear(BG_BLUE|WHITE);
-			var show = buf;
-			if(show.length > fieldW) show = show.substr(show.length-fieldW);
-			fieldFrame.gotoxy(1,1);
-			fieldFrame.putmsg(show);
-			fieldFrame.cycle();
+Mail.prototype._promptRecipientOverlay = function(){ return null; };
+
+// Enter non-blocking recipient prompt mode
+Mail.prototype._enterRecipientPrompt = function(){
+	this.mode = 'promptRecipient';
+	this._recipBuf = '';
+	// Create prompt frames within parentFrame
+	var host = this.parentFrame;
+	if(!host) return; // cannot prompt without a parent frame
+	var cols = host.width;
+	this._promptGuide = new Frame(1,1,cols,1,BG_BLACK|MAGENTA,host); this._promptGuide.open();
+	this._promptGuide.putmsg('Who do you want to send this email to?');
+	this._promptLabel = new Frame(1,3,4,1,BG_BLACK|YELLOW,host); this._promptLabel.open(); this._promptLabel.putmsg('to:');
+	var fieldW = Math.min(60, Math.max(10, cols - 6 - 1));
+	this._promptField = new Frame(6,3,fieldW,1,BG_BLUE|WHITE,host); this._promptField.open();
+	this._redrawRecipientField();
+};
+
+Mail.prototype._redrawRecipientField = function(){
+	if(!this._promptField) return;
+	var buf = this._recipBuf || '';
+	var show = buf;
+	if(show.length > this._promptField.width) show = show.substr(show.length - this._promptField.width);
+	this._promptField.clear(BG_BLUE|WHITE);
+	this._promptField.gotoxy(1,1);
+	this._promptField.putmsg(show);
+	this._promptField.cycle();
+};
+
+Mail.prototype._commitRecipientPrompt = function(accepted){
+	var dest = (accepted && this._recipBuf) ? this._recipBuf.trim() : null;
+	['_promptField','_promptLabel','_promptGuide'].forEach(function(k){ try { if(this[k]) this[k].close(); } catch(e){} this[k]=null; }.bind(this));
+	this.mode='icon';
+	var type = netaddr_type(dest)
+	if(type === 0) {
+		dest = system.matchuser(dest); // convert alias to user number if possible
+		if(!dest) {
+			this._toastSent && this._toastSent('Unknown user');
+			this.draw();
+			return; // invalid user
 		}
-		redrawField();
-		while(true){
-			var ch = console.getkey(K_NOECHO|K_NOSPIN);
-			if(!ch) continue;
-			if(ch==='\r' || ch==='\n') break;
-			if(ch==='\x1B'){ overlay.close(); return null; }
-			if((ch==='\b' || ch==='\x7f') && buf.length){ buf = buf.substr(0,buf.length-1); redrawField(); continue; }
-			if(ch.length===1 && ch>=' ' && ch<='~' && buf.length < 120){ buf += ch; redrawField(); }
-		}
-		var out = buf.trim();
-		overlay.close();
-		if(!out.length) return null;
-		return out;
-	} catch(e){
-		try { if(overlay) overlay.close(); } catch(_){}
-		return undefined; // signal fallback to styled version
 	}
+
+	log('GOT' + type +  'RECIEPIENT: ' + dest);
+	var act = ( type == 0 || type == 2) ? function(){ try { bbs.email(dest, ''); sent=true; } catch(e){ } } : 
+	function(){ try { bbs.netmail(dest, ''); sent=true; } catch(e){ } };;
+	if(dest){
+		var shell=this.shell; var sent=false; var self=this;
+		act();
+		this.updateUnreadCount();
+		if(sent) this._toastSent && this._toastSent(dest);
+	}
+	this._resetState();
+	this.draw();
 };
 
 Mail.prototype._promptSubject = function(){
@@ -258,6 +206,8 @@ Mail.prototype._ensureFrames = function() {
 Mail.prototype.draw = function() {
 	this._ensureFrames();
 	if (!this.outputFrame || !this.inputFrame) return;
+	// Ensure our parent frame (and thus subprogram visuals) stays above shell folder frames
+	try { if(this.parentFrame && typeof this.parentFrame.top === 'function') this.parentFrame.top(); } catch(e){}
 	var o=this.outputFrame; o.clear();
 	 o.gotoxy(1,1);
 	// Clear any prior hotspots (avoid shell leftovers triggering unexpected exits)
@@ -293,10 +243,17 @@ Mail.prototype._drawInput = function() {
 
 Mail.prototype.handleKey = function(k) {
 	if(!k) return;
-	if(k==='\x1B'){ // ESC
+	if(k==='\x1B'){
 		if(this.mode==='confirm'){ this.mode='icon'; this.confirmFor=null; this.draw(); return; }
+		if(this.mode==='promptRecipient'){ this._commitRecipientPrompt(false); return; }
 		this.exit(); return; }
 	if(k==='Q' || k==='q'){ this.exit(); return; }
+	if(this.mode==='promptRecipient'){
+		if(k==='\r' || k==='\n'){ this._commitRecipientPrompt(true); return; }
+		if((k==='\b' || k==='\x7f') && this._recipBuf && this._recipBuf.length){ this._recipBuf=this._recipBuf.substr(0,this._recipBuf.length-1); this._redrawRecipientField(); return; }
+		if(k.length===1 && k>=' ' && k<='~' && this._recipBuf.length < 120){ this._recipBuf+=k; this._redrawRecipientField(); return; }
+		return; // swallow other keys
+	}
 	if(this.mode==='confirm'){
 		if(k==='Y' || k==='y'){ this.invokeConfirmed(); return; }
 		if(k==='N' || k==='n'){ this.mode='icon'; this.confirmFor=null; this.draw(); return; }
@@ -457,16 +414,15 @@ Mail.prototype._resetState = function() {
 	this.scrollback = [];
 	this.scrollOffset = 0;
 	this.maxScrollLines = 1000;
-	this.outputFrame = null;
-	this.inputFrame = null;
+
 };
 
 Mail.prototype.exit = function(){
 	log('exiting mail');
 	// Clear hotspots registered by this subprogram before delegating
 	if (typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch(e){} }
-	this._resetState();
 	// Subprogram.exit() will invoke the done callback passed to enter()
+	this.cleanup();
 	Subprogram.prototype.exit.call(this);
 };
 

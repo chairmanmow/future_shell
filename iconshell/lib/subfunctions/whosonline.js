@@ -193,10 +193,12 @@ WhoOnline.prototype._ensureFrames = function(){
 	if(!this.listFrame){
 		var h = Math.max(1, this.parentFrame.height - 1);
 		this.listFrame = new Frame(1,1,this.parentFrame.width,h,BG_BLACK|LIGHTGRAY,this.parentFrame);
+		this.registerFrame(this.listFrame)
 		this.listFrame.open();
 	}
 	if(!this.statusFrame){
 		this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame);
+		this.registerFrame(this.statusFrame);
 		this.statusFrame.open();
 	}
 };

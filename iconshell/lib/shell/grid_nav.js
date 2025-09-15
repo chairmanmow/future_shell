@@ -154,6 +154,11 @@ IconShell.prototype.changeFolder = function(targetFolder, options) {
 };
 
 IconShell.prototype.drawFolder = function() {
+    // If a subprogram is active, skip drawing the folder grid to avoid overwriting its frames.
+    if (this.activeSubprogram && this.activeSubprogram.running) {
+        dbug('drawFolder() skipped due to active subprogram: ' + (this.activeSubprogram.name||'?'), 'drawFolder');
+        return;
+    }
     dbug('selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, "drawFolder");
     this._closePreviousFrames();
     this._clearHotspots();
@@ -237,6 +242,27 @@ IconShell.prototype._closePreviousFrames = function() {
             if (this.grid.cells[i].label && typeof this.grid.cells[i].label.close === 'function') this.grid.cells[i].label.close();
         }
     }
+};
+
+// Temporarily dispose of folder view frames while a subprogram is active to avoid visual residue.
+// They will be recreated automatically by recreateFramesIfNeeded/drawFolder when the subprogram exits.
+IconShell.prototype._shelveFolderFrames = function() {
+    if (this._folderShelved) return; // already done
+    try {
+        // Close icon cell frames
+        this._closePreviousFrames();
+        // Clear hotspots so clicks don't route to hidden icons
+        this._clearHotspots();
+        // Close crumb & mouse indicator
+        if (this.crumb && typeof this.crumb.close === 'function') this.crumb.close();
+        if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') this.mouseIndicator.close();
+        // Clear primary view surface (avoid leaving stale glyphs behind the subprogram)
+        if (this.view && typeof this.view.clear === 'function') this.view.clear();
+        // Null out grid so recreateFramesIfNeeded knows to rebuild later
+        this.grid = null;
+        this._folderShelved = true;
+        dbug('[shelve] folder frames shelved', 'subprogram');
+    } catch(e) { dbug('[shelve] error: ' + e, 'subprogram'); }
 };
 
 IconShell.prototype._clearHotspots = function() {

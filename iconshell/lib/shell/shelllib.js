@@ -53,6 +53,8 @@ IconShell.prototype.init = function() {
     this.viewHotkeys = {};
     // Subprogram state: null or { name, handlers }
     this.activeSubprogram = null;
+    // Track whether folder UI frames have been shelved (temporarily removed) for a subprogram
+    this._folderShelved = false;
     // Mouse support detection
     this.mouseActive = this.detectMouseSupport();
     // Toast tracking
@@ -102,7 +104,7 @@ IconShell.prototype.init = function() {
     // Set currentView explicitly to root's id before assigning hotkeys
     this.currentView = ICSH_CONFIG._viewId;
     this.assignViewHotkeys(ICSH_CONFIG.children);
-    this.drawFolder();
+    if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
     // Background matrix rain effect (behind content)
     // NOTE: Do NOT start immediately; main loop will start it after inactivity threshold.
     if (typeof MatrixRain === 'function') {
@@ -163,7 +165,7 @@ IconShell.prototype.main = function() {
                         this.activeSubprogram.resumeForReason('screensaver_off');
                     }
                     if(this.activeSubprogram && typeof this.activeSubprogram.draw==='function') this.activeSubprogram.draw();
-                    else this.drawFolder();
+                    else if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
                 }
                 this.processKeyboardInput(key);
             }
@@ -279,7 +281,7 @@ IconShell.prototype._handleNavigationKey = function(ch) {
                 this.changeFolder(null, { direction: 'up' });
                 if (this.folderChanged) {
                     this.folderChanged = false;
-                    this.drawFolder();
+                    if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
                 }
             }
             return true;
@@ -298,7 +300,7 @@ IconShell.prototype._handleHotkeyAction = function(ch) {
         action();
         if (this.folderChanged) {
             this.folderChanged = false;
-            this.drawFolder();
+            if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
         }
         return true;
     }
@@ -324,7 +326,7 @@ IconShell.prototype._handleHotkeyItemSelection = function(ch) {
             this.openSelection();
             if (this.folderChanged) {
                 this.folderChanged = false;
-                this.drawFolder();
+                if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
             }
             return true;
         }

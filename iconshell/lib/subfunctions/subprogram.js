@@ -7,6 +7,7 @@ function Subprogram(opts) {
     this._done = null;
     // Optional reference to the parent shell (IconShell) so subprograms can access shared services
     this.shell = opts.shell; 
+    this._myFrames = [];
 }
 
 Subprogram.prototype.enter = function(done) {
@@ -17,6 +18,8 @@ Subprogram.prototype.enter = function(done) {
         this.parentFrame.open();
     }
     this.draw();
+    if(this._myFrames.length === 0)
+        this.registerDefaultFrames();
 };
 
 Subprogram.prototype.exit = function() {
@@ -40,6 +43,40 @@ Subprogram.prototype.cleanup = function(){
         this._cleanup();
     }
 };
+
+Subprogram.prototype.registerFrame = function(frame){
+    this._myFrames.push(frame);
+};
+
+Subprogram.prototype.registerDefaultFrames = function(){
+    if(this.outputFrame) this.registerFrame(this.outputFrame);
+    if(this.inputFrame) this.registerFrame(this.inputFrame);
+}
+
+Subprogram.prototype.closeMyFrames = function(){
+    this._myFrames.forEach(function(frame){
+        frame.close();
+    });
+    this.parentFrame.cycle();
+};      
+
+Subprogram.prototype.bringFramesToTop = function(){
+    log("BRINGING SUBPROGRAM FRAMES TO TOP", this._myFrames.length);
+    if(this.refresh) this.refresh();
+    this.draw();
+    this._myFrames.forEach(function(frame){
+        frame.top();
+    });
+    // this.draw();
+    this.parentFrame.cycle();
+};   
+
+Subprogram.prototype.sendFramesToBottom = function(){
+    this._myFrames.forEach(function(frame){
+        frame.bottom();
+    });
+    this.parentFrame.cycle();
+}; 
 
 Subprogram.prototype.pauseForReason = function(reason){};
 

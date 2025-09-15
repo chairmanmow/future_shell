@@ -10,6 +10,7 @@ load("iconshell/lib/subfunctions/rawgate.js");
 load("iconshell/lib/subfunctions/mail.js");
 load("iconshell/lib/subfunctions/system_info.js");
 load("iconshell/lib/subfunctions/message_boards.js");
+load("iconshell/lib/subfunctions/users.js");
 
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
@@ -56,6 +57,13 @@ var BUILTIN_ACTIONS = {
 		// always reassign parentFrame in case shell recreated frames
 		this.privateMsg.setParentFrame(this.subFrame);
 		this.queueSubprogramLaunch('private-msg', this.privateMsg);
+	},
+	users: function(){
+		try { if(typeof Users !== 'function') load('iconshell/lib/subfunctions/users.js'); } catch(e) { dbug('subprogram','Failed loading user_list.js '+e); return; }
+		if(typeof Users !== 'function') { dbug('subprogram','Users class missing after load'); return; }
+		if(!this.Users) this.Users = new Users({ parentFrame: this.subFrame });
+		this.Users.setParentFrame(this.subFrame);
+		this.queueSubprogramLaunch('users', this.Users);
 	},
 	userlist: function(){
 		try { if(typeof UserList !== 'function') load('iconshell/lib/subfunctions/user_list.js'); } catch(e) { dbug('subprogram','Failed loading user_list.js '+e); return; }
@@ -378,7 +386,7 @@ var ICSH_SETTINGS = (function(){
 
 // Centralized color configuration for IconShell
 var ICSH_VALS = {
-	ROOT:   { BG: BG_BLACK,     FG: LIGHTGRAY },
+	ROOT:   { BG: BG_BLACK,     FG: WHITE },
 	VIEW:   { BG: BG_BLACK,     FG: LIGHTGRAY },
 	CRUMB:  { BG: BG_BLUE,      FG: WHITE     },
 	SELECTED: { BG: BG_BLUE,    FG: WHITE     },

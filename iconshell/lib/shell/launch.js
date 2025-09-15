@@ -12,13 +12,22 @@ IconShell.prototype.runExternal = function(fn) {
     } finally {
         console.clear();
         this.recreateFramesIfNeeded();
-        // Always refresh dynamic children and hotkeys for current folder after external program
+        // Refresh dynamic children (games menu rebuilding) if we're returning to shell folder view.
         var node = this.stack && this.stack.length ? this.stack[this.stack.length-1] : null;
-        if (node && node.label && node.label.toLowerCase().indexOf("game") !== -1 && typeof getGamesMenuItems === 'function') {
-            node.children = getGamesMenuItems();
-            this.assignViewHotkeys(node.children);
+        if (!this.activeSubprogram) {
+            if (node && node.label && node.label.toLowerCase().indexOf("game") !== -1 && typeof getGamesMenuItems === 'function') {
+                node.children = getGamesMenuItems();
+                this.assignViewHotkeys(node.children);
+            }
+            if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+        } else {
+            // If a subprogram is active, allow it to repaint its own frames instead of drawing folder over them.
+            if (typeof this.activeSubprogram.refresh === 'function') {
+                try { this.activeSubprogram.refresh(); } catch(e) {}
+            } else if (typeof this.activeSubprogram.draw === 'function') {
+                try { this.activeSubprogram.draw(); } catch(e) {}
+            }
         }
-        this.drawFolder();
         // Reset inactivity so rain won't instantly start; also ensure rain stopped.
         this._lastActivityTs = Date.now();
         if(this._matrixRain && this._matrixRain.running){
@@ -46,6 +55,8 @@ IconShell.prototype.launchSubprogram = function(name, handlers) {
     } else {
         this.activeSubprogram = handlers;
     }
+    // Proactively shelve (dispose) folder frames to prevent residual redraw artifacts.
+    if (typeof this._shelveFolderFrames === 'function') this._shelveFolderFrames();
     this.activeSubprogram.enter(this.exitSubprogram.bind(this));
 };
 
@@ -53,6 +64,8 @@ IconShell.prototype.launchSubprogram = function(name, handlers) {
 IconShell.prototype.exitSubprogram = function() {
     dbug("Exit subprogram", "subprogram");
     this.activeSubprogram = null;
+    // Mark shelved state false so folder will rebuild cleanly
+    this._folderShelved = false;
     this.recreateFramesIfNeeded();
-    this.drawFolder();
+    if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
 };
