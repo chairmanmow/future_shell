@@ -46,8 +46,12 @@ var BUILTIN_ACTIONS = {
 	msg_boards: function(){
 		try { if(typeof MessageBoard !== 'function') load('iconshell/lib/subfunctions/message_boards.js'); } catch(e) { dbug('subprogram','Failed loading message_boards.js '+e); return; }
 		if(typeof MessageBoard !== 'function') { dbug('subprogram','MessageBoard class missing after load'); return; }
-		if(!this.msgBoardSub) this.msgBoardSub = new MessageBoard({ parentFrame: this.subFrame, shell: this });
-		else { this.msgBoardSub.parentFrame = this.subFrame; this.msgBoardSub.shell = this; }
+		if(!this.msgBoardSub) this.msgBoardSub = new MessageBoard({ parentFrame: this.subFrame, shell: this, timer: this.timer });
+		else {
+			this.msgBoardSub.parentFrame = this.subFrame;
+			this.msgBoardSub.shell = this;
+			if(typeof this.msgBoardSub.attachShellTimer === 'function') this.msgBoardSub.attachShellTimer(this.timer);
+		}
 		this.queueSubprogramLaunch('message-boards', this.msgBoardSub);
 	},
 	privatemsg: function(){
@@ -676,5 +680,4 @@ var ICSH_CONSTANTS = {
     "ICON_W":12,
     "ICON_H":6
 }
-
 

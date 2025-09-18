@@ -55,6 +55,9 @@ IconShell.prototype.launchSubprogram = function(name, handlers) {
     } else {
         this.activeSubprogram = handlers;
     }
+    if (this.activeSubprogram && typeof this.activeSubprogram.attachShellTimer === 'function') {
+        this.activeSubprogram.attachShellTimer(this.timer);
+    }
     // Proactively shelve (dispose) folder frames to prevent residual redraw artifacts.
     if (typeof this._shelveFolderFrames === 'function') this._shelveFolderFrames();
     this.activeSubprogram.enter(this.exitSubprogram.bind(this));
@@ -63,6 +66,9 @@ IconShell.prototype.launchSubprogram = function(name, handlers) {
 // Exit subprogram and return to shell
 IconShell.prototype.exitSubprogram = function() {
     dbug("Exit subprogram", "subprogram");
+    if (this.activeSubprogram && typeof this.activeSubprogram.detachShellTimer === 'function') {
+        this.activeSubprogram.detachShellTimer();
+    }
     this.activeSubprogram = null;
     // Mark shelved state false so folder will rebuild cleanly
     this._folderShelved = false;

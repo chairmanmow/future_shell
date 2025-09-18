@@ -8,6 +8,7 @@ function Subprogram(opts) {
     // Optional reference to the parent shell (IconShell) so subprograms can access shared services
     this.shell = opts.shell; 
     this._myFrames = [];
+    this.timer = opts.timer || (this.shell && this.shell.timer) || null;
 }
 
 Subprogram.prototype.enter = function(done) {
@@ -42,6 +43,7 @@ Subprogram.prototype.cleanup = function(){
     if(this._cleanup && typeof this._cleanup === 'function') {
         this._cleanup();
     }
+    this.detachShellTimer();
 };
 
 Subprogram.prototype.registerFrame = function(frame){
@@ -83,6 +85,14 @@ Subprogram.prototype.pauseForReason = function(reason){};
 Subprogram.prototype.resumeForReason = function(){};
 
 Subprogram.prototype.setParentFrame = function(f){ this.parentFrame = f; return this; };
+
+Subprogram.prototype.attachShellTimer = function(timer){
+    this.timer = timer || null;
+};
+
+Subprogram.prototype.detachShellTimer = function(){
+    this.timer = null;
+};
 
 // Unified toast helper available to every subprogram.
 // Usage: this._showToast({ message:'Hello', timeout:5000, position:'bottom-right' })
