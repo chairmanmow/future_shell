@@ -14,7 +14,7 @@ Subprogram.prototype.enter = function(done) {
     this._done = (typeof done === 'function') ? done : function(){};
     this.running = true;
     if(!this.parentFrame) {
-        this.parentFrame = new Frame(1,1,console.screen_columns,console.screen_rows, BG_BLACK|LIGHTGRAY);
+        this.parentFrame = new Frame(1,1,console.screen_columns,console.screen_rows, ICSH_ATTR('FRAME_STANDARD'));
         this.parentFrame.open();
     }
     this.draw();

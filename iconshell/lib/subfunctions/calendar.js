@@ -24,14 +24,14 @@ CalendarSub.prototype.enter = function(done){
 CalendarSub.prototype.ensureFrames = function(){
     if(!this.parentFrame) return;
     if(!this.header){
-        this.header = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame); this.header.open();
+        this.header = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width,1,ICSH_ATTR('CAL_HEADER'),this.parentFrame); this.header.open();
     }
     if(!this.footer){
-        this.footer = new Frame(this.parentFrame.x, this.parentFrame.y+this.parentFrame.height-1,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame); this.footer.open();
+        this.footer = new Frame(this.parentFrame.x, this.parentFrame.y+this.parentFrame.height-1,this.parentFrame.width,1,ICSH_ATTR('CAL_FOOTER'),this.parentFrame); this.footer.open();
     }
     if(!this.gridFrame){
         var h=this.parentFrame.height-2; if(h<6) h=6;
-        this.gridFrame = new Frame(this.parentFrame.x, this.parentFrame.y+1,this.parentFrame.width,h,BG_BLACK|LIGHTGRAY,this.parentFrame); this.gridFrame.open();
+        this.gridFrame = new Frame(this.parentFrame.x, this.parentFrame.y+1,this.parentFrame.width,h,ICSH_ATTR('CAL_GRID'),this.parentFrame); this.gridFrame.open();
     }
 };
 
@@ -67,11 +67,11 @@ CalendarSub.prototype.draw = function(){
         var isToday = (this.year===this.todayY && this.month===this.todayM && day===this.todayD);
         var hl = this.highlights[day];
         var attr;
-        if(isSel) attr = BG_CYAN|WHITE; else if(isToday) attr = BG_BLUE|WHITE; else if(hl) attr = BG_GREEN|WHITE; else attr = BG_BLACK|LIGHTGRAY;
+        if(isSel) attr = ICSH_ATTR('CAL_DAY_SELECTED'); else if(isToday) attr = ICSH_ATTR('CAL_DAY_TODAY'); else if(hl) attr = ICSH_ATTR('CAL_DAY_HOLIDAY'); else attr = ICSH_ATTR('CAL_DAY_NORMAL');
         g.attr = attr;
         var ds = (day<10?'0'+day:day.toString());
         g.gotoxy(gx,gy); g.putmsg(ds);
-        g.attr = BG_BLACK|LIGHTGRAY;
+        g.attr = ICSH_ATTR('CAL_GRID');
         col++; if(col>6){ col=0; row++; }
     }
     this.parentFrame.cycle();

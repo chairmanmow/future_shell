@@ -60,12 +60,12 @@ function Toast(options) {
     log('Toast position '+pos+' => '+x+','+y+' in '+scrW+'x'+scrH);
     this.avatarFrame = null;
     this.parentFrame = options.parentFrame || undefined;
-    this.toastFrame = new Frame(x, y, width, height, BG_BLACK, this.parentFrame);
+    this.toastFrame = new Frame(x, y, width, height, ICSH_VALS.TOAST_FRAME.BG | ICSH_VALS.TOAST_FRAME.FG, this.parentFrame);
     var msgX = this.avatarData ? 6 : 0;
-    this.msgFrame = new Frame((2* msgX) + this.toastFrame.x, this.toastFrame.y, this.toastFrame.width - msgX , this.toastFrame.height, BG_MAGENTA|WHITE, this.toastFrame);
+    this.msgFrame = new Frame((2* msgX) + this.toastFrame.x, this.toastFrame.y, this.toastFrame.width - msgX , this.toastFrame.height, ICSH_ATTR('TOAST_MSG'), this.toastFrame);
     this.toastFrame.transparent = true;
     if(this.avatarData){
-        this.avatarFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 10, Math.min(6, this.toastFrame.height), BG_BLACK|WHITE, this.toastFrame);
+        this.avatarFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 10, Math.min(6, this.toastFrame.height), ICSH_ATTR('TOAST_AVATAR'), this.toastFrame);
         this.insertAvatarData();
     }
     this.msgFrame.putmsg(message);

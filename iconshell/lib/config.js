@@ -385,20 +385,262 @@ var ICSH_SETTINGS = (function(){
 
 
 // Centralized color configuration for IconShell
+// ====================================================================
+// Central color registry (semantic keys) – every UI surface gets a
+// distinct key even if its colors match another, so they can diverge
+// later without touching code. All are overrideable via [Colors].
+// ====================================================================
 var ICSH_VALS = {
-	ROOT:   { BG: BG_BLACK,     FG: WHITE },
-	VIEW:   { BG: BG_BLACK,     FG: LIGHTGRAY },
-	CRUMB:  { BG: BG_BLUE,      FG: WHITE     },
-	SELECTED: { BG: BG_BLUE,    FG: WHITE     },
-	LABEL:  { BG: BG_BLACK,     FG: LIGHTGRAY },
-	UPITEM: { BG: BG_LIGHTGRAY, FG: BLACK     },
-	ANIMATION: { COLOR: GREEN },
-	EXTERNAL_BG: BG_BLACK,
-	EXTERNAL_FG: LIGHTGRAY,
-	MOUSE_ON:  { BG: BG_BLUE, FG: WHITE },
-	MOUSE_OFF: { BG: BG_RED,  FG: WHITE }
-	// Add more as needed for other UI elements
+	// Shell core (legacy names kept for backwards compatibility)
+	ROOT:                 { BG: BG_BLACK,     FG: WHITE },
+	VIEW:                 { BG: BG_BLACK,     FG: LIGHTGRAY },
+	CRUMB:                { BG: BG_BLUE,      FG: WHITE },
+	SELECTED:             { BG: BG_BLUE,      FG: WHITE },
+	LABEL:                { BG: BG_BLACK,     FG: LIGHTGRAY },
+	UPITEM:               { BG: BG_LIGHTGRAY, FG: BLACK },
+	MOUSE_ON:             { BG: BG_BLUE,      FG: WHITE },
+	MOUSE_OFF:            { BG: BG_RED,       FG: WHITE },
+	ANIMATION:            { COLOR: GREEN },
+	EXTERNAL_BG:          BG_BLACK,         // primitive numeric allowed
+	EXTERNAL_FG:          LIGHTGRAY,
+
+	// Generic / shared surfaces
+	FRAME_STANDARD:       { BG: BG_BLACK,     FG: LIGHTGRAY },
+	STATUS_BAR:           { BG: BG_BLUE,      FG: WHITE },
+	INPUT_BAR:            { BG: BG_BLUE,      FG: WHITE },
+	HEADER_BAR:           { BG: BG_BLUE,      FG: WHITE },
+	FOOTER_BAR:           { BG: BG_BLUE,      FG: WHITE },
+	SELECTION_INVERT:     { BG: BG_LIGHTGRAY, FG: BLACK },
+	HILITE_CYAN:          { BG: BG_CYAN,      FG: WHITE },
+	POPUP_FRAME:          { BG: BG_BLACK,     FG: WHITE },
+	POPUP_CONTENT:        { BG: BG_BLACK,     FG: LIGHTGRAY },
+	MODAL_FRAME:          { BG: BG_BLUE,      FG: WHITE },
+	MODAL_LEFT_PANEL:     { BG: BG_CYAN,      FG: LIGHTGRAY },
+	MODAL_RIGHT_PANEL:    { BG: BG_BLUE,      FG: LIGHTGRAY },
+
+	// Users / Who listings
+	USERS_LIST:           { BG: BG_BLACK,     FG: LIGHTGRAY },
+	USERS_STATUS:         { BG: BG_BLUE,      FG: WHITE },
+	USERS_MODAL:          { BG: BG_BLUE,      FG: WHITE },
+	USERS_MODAL_AVATAR:   { BG: BG_BLUE,      FG: WHITE },
+	WHOS_LIST:            { BG: BG_BLACK,     FG: LIGHTGRAY },
+	WHOS_STATUS:          { BG: BG_BLUE,      FG: WHITE },
+	WHOS_TILE_BG:         { BG: BG_BLACK,     FG: LIGHTGRAY },
+	WHOS_TILE_BG_SELECTED:{ BG: BG_LIGHTGRAY, FG: BLACK },
+	WHOS_TILE_HEADER:     { BG: BG_BLUE,      FG: WHITE },
+	WHOS_TILE_HEADER_SELECTED:{ BG: BG_LIGHTGRAY, FG: BLACK },
+	WHOS_TILE_NAME:       { BG: BG_BLUE,      FG: WHITE },
+	WHOS_TILE_NAME_SELECTED:{ BG: BG_LIGHTGRAY, FG: BLACK },
+	WHOS_TILE_FOOTER:     { BG: BG_BLUE,      FG: WHITE },
+	WHOS_MODAL:           { BG: BG_BLUE,      FG: WHITE },
+	WHOS_MODAL_LEFT:      { BG: BG_CYAN,      FG: LIGHTGRAY },
+	WHOS_MODAL_RIGHT:     { BG: BG_BLUE,      FG: LIGHTGRAY },
+
+	// Message Boards
+	MB_OUTPUT:            { BG: BG_BLACK,     FG: LIGHTGRAY },
+	MB_INPUT:             { BG: BG_BLUE,      FG: WHITE },
+	MB_READ_HEADER:       { BG: BG_BLUE,      FG: WHITE },
+	MB_READ_BODY:         { BG: BG_BLACK,     FG: LIGHTGRAY },
+	MB_LABEL:             { BG: BG_BLACK,     FG: LIGHTGRAY },
+	MB_LABEL_SELECTED:    { BG: BG_LIGHTGRAY, FG: BLACK },
+	MB_ICON_MOD:          { BG: BG_RED,       FG: WHITE },
+	MB_ICON_SECTION:      { BG: BG_BLUE,      FG: WHITE },
+	MB_ICON_SYS:          { BG: BG_GREEN,     FG: WHITE },
+	MB_ICON_MISC:         { BG: BG_CYAN,      FG: WHITE },
+
+	// Mail
+	MAIL_OUTPUT:          { BG: BG_BLACK,     FG: LIGHTGRAY },
+	MAIL_INPUT:           { BG: BG_BLUE,      FG: WHITE },
+	MAIL_PROMPT_GUIDE:    { BG: BG_BLACK,     FG: MAGENTA },
+	MAIL_PROMPT_LABEL:    { BG: BG_BLACK,     FG: YELLOW },
+	MAIL_PROMPT_FIELD:    { BG: BG_BLUE,      FG: WHITE },
+	MAIL_ICON:            { BG: BG_BLACK,     FG: LIGHTGRAY },
+	MAIL_ICON_SELECTED:   { BG: BG_BLUE,      FG: WHITE },
+
+	// File Area
+	FILE_HEADER:          { BG: BG_BLUE,      FG: WHITE },
+	FILE_FOOTER:          { BG: BG_BLUE,      FG: WHITE },
+	FILE_LIST:            { BG: BG_BLACK,     FG: LIGHTGRAY },
+	FILE_LIST_ACTIVE:     { BG: BG_CYAN,      FG: WHITE },
+	FILE_LIST_INACTIVE:   { BG: BG_BLACK,     FG: LIGHTGRAY },
+	FILE_POPUP:           { BG: BG_BLACK,     FG: WHITE },
+	FILE_POPUP_CONTENT:   { BG: BG_BLACK,     FG: LIGHTGRAY },
+
+	// Calendar
+	CAL_HEADER:           { BG: BG_BLUE,      FG: WHITE },
+	CAL_FOOTER:           { BG: BG_BLUE,      FG: WHITE },
+	CAL_GRID:             { BG: BG_BLACK,     FG: LIGHTGRAY },
+	CAL_DAY_SELECTED:     { BG: BG_CYAN,      FG: WHITE },
+	CAL_DAY_TODAY:        { BG: BG_BLUE,      FG: WHITE },
+	CAL_DAY_HOLIDAY:      { BG: BG_GREEN,     FG: WHITE },
+	CAL_DAY_NORMAL:       { BG: BG_BLACK,     FG: LIGHTGRAY },
+
+	// Chat / IRC / Private / Generic text subs
+	CHAT_OUTPUT:          { BG: BG_BLACK,     FG: LIGHTGRAY },
+	CHAT_INPUT:           { BG: BG_BLUE,      FG: WHITE },
+	PRIVMSG_OUTPUT:       { BG: BG_BLACK,     FG: LIGHTGRAY },
+	PRIVMSG_INPUT:        { BG: BG_BLUE,      FG: WHITE },
+	IRC_LIST:             { BG: BG_BLACK,     FG: LIGHTGRAY },
+	IRC_STATUS:           { BG: BG_BLUE,      FG: WHITE },
+	RAW_OUTPUT:           { BG: BG_BLACK,     FG: LIGHTGRAY },
+	RAW_INPUT:            { BG: BG_BLUE,      FG: WHITE },
+	SYSINFO_OUTPUT:       { BG: BG_BLACK,     FG: LIGHTGRAY },
+	SYSINFO_INPUT:        { BG: BG_BLUE,      FG: WHITE },
+	HELLO_OUTPUT:         { BG: BG_BLACK,     FG: LIGHTGRAY },
+	HELLO_INPUT:          { BG: BG_BLUE,      FG: WHITE },
+
+	// Toast / notifications
+	TOAST_FRAME:          { BG: BG_BLACK,     FG: LIGHTGRAY },
+	TOAST_MSG:            { BG: BG_MAGENTA,   FG: WHITE },
+	TOAST_AVATAR:         { BG: BG_BLACK,     FG: WHITE },
+
+	// Clock
+	CLOCK_BG:             { BG: BG_BLACK,     FG: LIGHTGRAY },
+
+	// Matrix rain effect (head & fading segments)
+	RAIN_HEAD:            { BG: BG_BLACK,     FG: LIGHTGREEN },
+	RAIN_FADE_HIGH:       { BG: BG_BLACK,     FG: GREEN },
+	RAIN_SPARK:           { BG: BG_BLACK,     FG: WHITE },
+	RAIN_DIM1:            { BG: BG_BLACK,     FG: LIGHTGRAY },
+	RAIN_DIM2:            { BG: BG_BLACK,     FG: DARKGRAY }
 };
+
+// Helper: resolve full attribute (BG|FG) from semantic key
+function ICSH_ATTR(key){
+	var g = ICSH_VALS[key];
+	if(g === undefined) return WHITE; // fallback
+	if(typeof g === 'number') return g; // primitive
+	var bg = g.BG || 0; var fg = g.FG || 0; return bg | fg;
+}
+
+// Color override loader: allows redefining colors via [Colors] section in guishell.ini
+// Supported syntaxes (case-insensitive keys):
+//   [Colors]
+//   ROOT = BLUE,WHITE              ; sets BG,FG (BG token can optionally have BG_ prefix)
+//   VIEW.BG = BLACK                ; sets only background
+//   VIEW.FG = LIGHTGRAY            ; sets only foreground
+//   SELECTED_BG = BLUE             ; underscore form
+//   LABEL_FG = YELLOW              ; underscore form for FG
+//   ANIMATION.COLOR = GREEN        ; single COLOR-style entry objects (e.g. ANIMATION)
+//   ANIMATION = CYAN               ; shorthand for ANIMATION.COLOR
+// Notes:
+//   - Tokens map to Synchronet color constants; BG_ prefix optional for backgrounds.
+//   - If a single token is supplied for an entry having BG/FG and no attribute specified, it's treated as FG.
+//   - Invalid tokens are logged and ignored.
+function applyColorOverrides(vals){
+	try {
+		var iniRaw = readIniFile(system.mods_dir + 'guishell.ini');
+		if(!iniRaw) return; // no file
+		var ini = parseIni(iniRaw);
+		if(!ini || (!ini.Colors && !ini.colors)) return; // no section
+		var sect = ini.Colors || ini.colors;
+
+		function lookupColor(token, isBg){
+			if(token===undefined||token===null) return null;
+			token = (''+token).trim();
+			if(token==='') return null;
+			// Allow numeric values directly
+			if(/^[0-9]+$/.test(token)) return parseInt(token,10);
+			var up = token.toUpperCase();
+			// If already has BG_ prefix and we're resolving BG, try directly first
+			var candidates = [];
+			if(isBg){
+				if(up.indexOf('BG_')===0) candidates.push(up); else candidates.push('BG_'+up);
+				// fallback to raw (maybe user specified actual BG_* constant name incorrectly flagged as FG)
+				if(up.indexOf('BG_')!==0) candidates.push(up);
+			} else {
+				// Foreground: prefer raw name first
+				candidates.push(up);
+				// If they specified a BG_ token for FG by mistake, skip adding BG_ variant
+			}
+			for(var i=0;i<candidates.length;i++){
+				var name = candidates[i];
+				try { if(eval('typeof '+name+' !== "undefined"')) { var v = eval(name); if(typeof v==='number') return v; } } catch(e){}
+			}
+			return null;
+		}
+
+		function setPair(baseKey, bgVal, fgVal){
+			if(!vals[baseKey] || typeof vals[baseKey] !== 'object') return;
+			if(bgVal!==null){ vals[baseKey].BG = bgVal; _icsh_log('Color override '+baseKey+'.BG applied'); }
+			if(fgVal!==null){ vals[baseKey].FG = fgVal; _icsh_log('Color override '+baseKey+'.FG applied'); }
+		}
+
+		for(var rawKey in sect){
+			if(!sect.hasOwnProperty(rawKey)) continue;
+			var value = sect[rawKey];
+			if(value===undefined||value===null) continue;
+			var key = rawKey.trim();
+			if(key==='') continue;
+			var upKey = key.toUpperCase();
+			var base = null, target = null; // target: BG|FG|COLOR|null
+			if(upKey.indexOf('.')!==-1){
+				var parts = upKey.split('.');
+				base = parts[0]; target = parts[1];
+			} else if(/_(BG|FG|COLOR)$/.test(upKey)){
+				if(upKey.endsWith('_BG')) { base = upKey.slice(0,-3); target='BG'; }
+				else if(upKey.endsWith('_FG')) { base = upKey.slice(0,-3); target='FG'; }
+				else if(upKey.endsWith('_COLOR')) { base = upKey.slice(0,-6); target='COLOR'; }
+			} else {
+				base = upKey;
+			}
+			if(!vals.hasOwnProperty(base)) { _icsh_warn('Color override references unknown group '+base); continue; }
+			// If group is a primitive numeric (EXTERNAL_BG/EXTERNAL_FG), allow direct numeric/constant replacement
+			if(typeof vals[base] === 'number'){
+				var prim = lookupColor(value, /_BG$|\.BG$/.test(upKey));
+				if(prim!==null){ vals[base] = prim; _icsh_log('Color override '+base+'='+value); }
+				else _icsh_warn('Invalid color token '+value+' for '+base);
+				continue;
+			}
+			if(target){
+				var isBg = (target==='BG');
+				if(target==='COLOR'){
+					var col = lookupColor(value,false);
+					if(col!==null){ vals[base].COLOR = col; _icsh_log('Color override '+base+'.COLOR='+value); }
+					else _icsh_warn('Invalid COLOR token '+value+' for '+base);
+				} else { // BG or FG
+					var col2 = lookupColor(value,isBg);
+					if(col2!==null){ vals[base][target] = col2; _icsh_log('Color override '+base+'.'+target+'='+value); }
+					else _icsh_warn('Invalid '+target+' token '+value+' for '+base);
+				}
+				continue;
+			}
+			// No explicit target: either BG,FG pair or single token.
+			if(base==='ANIMATION'){
+				// Shorthand for ANIMATION.COLOR
+				var c = lookupColor(value,false);
+				if(c!==null){ vals.ANIMATION.COLOR = c; _icsh_log('Color override ANIMATION.COLOR='+value); }
+				else _icsh_warn('Invalid ANIMATION color '+value);
+				continue;
+			}
+			// BG,FG pair separated by comma
+			if(value.indexOf(',')!==-1){
+				var pair = value.split(',');
+				var bg = lookupColor(pair[0], true);
+				var fg = lookupColor(pair[1], false);
+				if(bg===null) _icsh_warn('Invalid BG token "'+pair[0]+'" for '+base);
+				if(fg===null) _icsh_warn('Invalid FG token "'+pair[1]+'" for '+base);
+				setPair(base, bg, fg);
+			} else {
+				// Single token -> FG preference, unless group only has COLOR
+				if(vals[base] && typeof vals[base]==='object'){
+					if('FG' in vals[base]){
+						var fgOnly = lookupColor(value,false);
+						if(fgOnly!==null){ vals[base].FG = fgOnly; _icsh_log('Color override '+base+'.FG='+value); }
+						else _icsh_warn('Invalid FG token '+value+' for '+base);
+					} else if('COLOR' in vals[base]) {
+						var conly = lookupColor(value,false);
+						if(conly!==null){ vals[base].COLOR = conly; _icsh_log('Color override '+base+'.COLOR='+value); }
+						else _icsh_warn('Invalid COLOR token '+value+' for '+base);
+					}
+				}
+			}
+		}
+	} catch(e){ _icsh_warn('applyColorOverrides error: '+e); }
+}
+
+// Apply overrides at load time (silent if no [Colors] section present)
+applyColorOverrides(ICSH_VALS);
 
 // IconShell configuration: menu structure, labels, icons, and actions
 var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {

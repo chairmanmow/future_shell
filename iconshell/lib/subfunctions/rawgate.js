@@ -49,10 +49,10 @@ RawGateSub.prototype.ensureFrames = function(){
     if(!this.parentFrame) return;
     if(!this.frameOutput){
         var h = Math.max(1,this.parentFrame.height-1);
-        this.frameOutput = new Frame(1,1,this.parentFrame.width,h,BG_BLACK|LIGHTGRAY,this.parentFrame); this.frameOutput.open();
+        this.frameOutput = new Frame(1,1,this.parentFrame.width,h,ICSH_ATTR('RAW_OUTPUT'),this.parentFrame); this.frameOutput.open();
     }
     if(!this.frameInput){
-        this.frameInput = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame); this.frameInput.open();
+        this.frameInput = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,ICSH_ATTR('RAW_INPUT'),this.parentFrame); this.frameInput.open();
     }
 };
 

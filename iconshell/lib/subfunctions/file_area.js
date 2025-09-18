@@ -71,15 +71,15 @@ FileArea.prototype.loadFiles = function(dirCode){
 FileArea.prototype.ensureFrames = function(){
     if(!this.parentFrame) return;
     if(!this.header){
-        this.header = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame); this.header.open();
+        this.header = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width,1,ICSH_ATTR('FILE_HEADER'),this.parentFrame); this.header.open();
     }
     if(!this.footer){
-        this.footer = new Frame(this.parentFrame.x, this.parentFrame.y+this.parentFrame.height-1,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame); this.footer.open();
+        this.footer = new Frame(this.parentFrame.x, this.parentFrame.y+this.parentFrame.height-1,this.parentFrame.width,1,ICSH_ATTR('FILE_FOOTER'),this.parentFrame); this.footer.open();
     }
     if(!this.list){
         var h = this.parentFrame.height-2;
         if(h<1) h=1;
-        this.list = new Frame(this.parentFrame.x, this.parentFrame.y+1,this.parentFrame.width,h,BG_BLACK|LIGHTGRAY,this.parentFrame); this.list.open();
+        this.list = new Frame(this.parentFrame.x, this.parentFrame.y+1,this.parentFrame.width,h,ICSH_ATTR('FILE_LIST'),this.parentFrame); this.list.open();
     }
 };
 
@@ -114,9 +114,9 @@ FileArea.prototype.draw = function(){
         else line = format('%c %-25s %8s %s', this.tagged[it.name]?'*':' ', it.name, it.sizeStr, (it.desc||'').substr(0, this.list.width-40));
         if(line.length>this.list.width) line=line.substr(0,this.list.width);
         if(idx === this.sel){
-            this.list.attr = BG_CYAN|WHITE;
+            this.list.attr = ICSH_ATTR('FILE_LIST_ACTIVE');
             this.list.gotoxy(1,row+1); this.list.putmsg(line);
-            this.list.attr = BG_BLACK|LIGHTGRAY;
+            this.list.attr = ICSH_ATTR('FILE_LIST_INACTIVE');
         } else {
             this.list.gotoxy(1,row+1); this.list.putmsg(line);
         }
@@ -177,9 +177,9 @@ FileArea.prototype.showInfo = function(){
     var w=Math.min(this.parentFrame.width-6, 60), h=8;
     var x=this.parentFrame.x+Math.floor((this.parentFrame.width-w)/2);
     var y=this.parentFrame.y+Math.floor((this.parentFrame.height-h)/2);
-    this.popup = new Frame(x,y,w,h,BG_BLACK|WHITE,this.parentFrame); this.popup.open();
+    this.popup = new Frame(x,y,w,h,ICSH_ATTR('FILE_POPUP'),this.parentFrame); this.popup.open();
     this.popup.drawBorder = Frame.prototype.drawBorder; // if available
-    this.popupContent = new Frame(x+1,y+1,w-2,h-2,BG_BLACK|LIGHTGRAY,this.parentFrame); this.popupContent.open();
+    this.popupContent = new Frame(x+1,y+1,w-2,h-2,ICSH_ATTR('FILE_POPUP_CONTENT'),this.parentFrame); this.popupContent.open();
     var lines = [
         'Name: '+f.name,
         'Size: '+f.sizeStr,
@@ -206,8 +206,8 @@ FileArea.prototype.downloadTagged = function(){
     var w=Math.min(this.parentFrame.width-6, 50), h=5;
     var x=this.parentFrame.x+Math.floor((this.parentFrame.width-w)/2);
     var y=this.parentFrame.y+Math.floor((this.parentFrame.height-h)/2);
-    this.popup = new Frame(x,y,w,h,BG_BLACK|WHITE,this.parentFrame); this.popup.open();
-    this.popupContent = new Frame(x+1,y+1,w-2,h-2,BG_BLACK|LIGHTGRAY,this.parentFrame); this.popupContent.open();
+    this.popup = new Frame(x,y,w,h,ICSH_ATTR('FILE_POPUP'),this.parentFrame); this.popup.open();
+    this.popupContent = new Frame(x+1,y+1,w-2,h-2,ICSH_ATTR('FILE_POPUP_CONTENT'),this.parentFrame); this.popupContent.open();
     this.popupContent.putmsg('Tagged for download ('+names.length+'):');
     this.popupContent.gotoxy(1,2); this.popupContent.putmsg(names.slice(0,2).join(', '));
     this.popupContent.gotoxy(1,h-2); this.popupContent.putmsg('[Any key]');

@@ -9,8 +9,8 @@
         this.rows = this.parent ? this.parent.height : 0;
         this.drops = [];
         this.chars = opts.chars || '01';
-        this.color = opts.color || (LIGHTGREEN|BG_BLACK);
-        this.fadeColor = opts.fadeColor || (GREEN|BG_BLACK);
+        this.color = opts.color || (ICSH_VALS.RAIN_HEAD.FG | ICSH_VALS.RAIN_HEAD.BG);
+        this.fadeColor = opts.fadeColor || (ICSH_VALS.RAIN_FADE_HIGH.FG | ICSH_VALS.RAIN_FADE_HIGH.BG);
     this.intervalMs = opts.intervalMs || 120;
     // Previous impl iterated every column each tick. Replace with capped random spawns.
     this.spawnChance = opts.spawnChance || 0.12; // retained for probability basis
@@ -105,9 +105,9 @@
             var headAttr;
             if(this.deterministic){
                 // Every 10th drop head white (if available)
-                headAttr = (typeof WHITE!=='undefined' && (d.seq % 10 === 0)) ? (WHITE|BG_BLACK) : (d.pair.high|BG_BLACK);
+                headAttr = (typeof WHITE!=='undefined' && (d.seq % 10 === 0)) ? (ICSH_VALS.RAIN_SPARK.FG | ICSH_VALS.RAIN_SPARK.BG) : (d.pair.high|BG_BLACK);
             } else {
-                headAttr = (Math.random() < 0.10 && typeof WHITE !== 'undefined') ? (WHITE|BG_BLACK) : (d.pair.high|BG_BLACK);
+                headAttr = (Math.random() < 0.10 && typeof WHITE !== 'undefined') ? (ICSH_VALS.RAIN_SPARK.FG | ICSH_VALS.RAIN_SPARK.BG) : (d.pair.high|BG_BLACK);
             }
             try { f.setData(d.c-1, d.y-1, headChar, headAttr, false); } catch(e){ this._interrupt = true; break; }
             if((i & 1) === 0 && (Date.now() - startTime) >= this.timeBudgetMs){
@@ -122,18 +122,18 @@
                         if(this.deterministic){
                             var sel = pool[this._trailIdx % pool.length];
                             this._trailIdx++;
-                            attr = sel|BG_BLACK;
+                            attr = sel|ICSH_VALS.RAIN_DIM1.BG; // same BG
                         } else {
                             var selR = pool[Math.floor(Math.random()*pool.length)];
-                            attr = selR|BG_BLACK;
+                            attr = selR|ICSH_VALS.RAIN_DIM1.BG;
                         }
                     } else {
                         // Intensity-based gradient: high -> low -> light gray -> dark gray
                         var intensity = (d.trail - t)/d.trail;
-                        if(intensity > 0.75) attr = (d.pair.high|BG_BLACK);
-                        else if(intensity > 0.5) attr = (d.pair.low|BG_BLACK);
-                        else if(intensity > 0.25) attr = (LIGHTGRAY|BG_BLACK);
-                        else attr = (DARKGRAY|BG_BLACK);
+                        if(intensity > 0.75) attr = (d.pair.high|ICSH_VALS.RAIN_HEAD.BG);
+                        else if(intensity > 0.5) attr = (d.pair.low|ICSH_VALS.RAIN_FADE_HIGH.BG);
+                        else if(intensity > 0.25) attr = (ICSH_VALS.RAIN_DIM1.FG|ICSH_VALS.RAIN_DIM1.BG);
+                        else attr = (ICSH_VALS.RAIN_DIM2.FG|ICSH_VALS.RAIN_DIM2.BG);
                     }
                     if((t & 1) || !this.safeMode){
                         var fadeChar = this.chars.charAt(Math.floor(Math.random()*this.chars.length));

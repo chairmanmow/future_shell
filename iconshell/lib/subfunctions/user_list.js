@@ -65,10 +65,10 @@ UserList.prototype.ensureFrames = function(){
 	if(!this.parentFrame) return;
 	if(!this.listFrame){
 		var h = Math.max(1,this.parentFrame.height-1);
-		this.listFrame = new Frame(1,1,this.parentFrame.width,h,BG_BLACK|LIGHTGRAY,this.parentFrame); this.listFrame.open();
+		this.listFrame = new Frame(1,1,this.parentFrame.width,h,ICSH_ATTR('USERS_LIST'),this.parentFrame); this.listFrame.open();
 	}
 	if(!this.statusFrame){
-		this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame); this.statusFrame.open();
+		this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,ICSH_ATTR('USERS_STATUS'),this.parentFrame); this.statusFrame.open();
 	}
 };
 

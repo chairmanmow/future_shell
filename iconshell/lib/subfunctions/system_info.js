@@ -79,11 +79,11 @@ SystemInfo.prototype._ensureFrames = function(){
 	if (!this.parentFrame) return;
 	if (!this.outputFrame) {
 		var h = Math.max(1, this.parentFrame.height - 1);
-		this.outputFrame = new Frame(1,1,this.parentFrame.width,h, BG_BLACK|LIGHTGRAY, this.parentFrame);
+		this.outputFrame = new Frame(1,1,this.parentFrame.width,h, ICSH_ATTR('SYSINFO_OUTPUT'), this.parentFrame);
 		this.outputFrame.open();
 	}
 	if (!this.inputFrame) {
-		this.inputFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame);
+		this.inputFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,ICSH_ATTR('SYSINFO_INPUT'),this.parentFrame);
 		this.inputFrame.open();
 	}
 };

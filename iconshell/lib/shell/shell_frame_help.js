@@ -22,11 +22,11 @@ IconShell.prototype.recreateFramesIfNeeded = function() {
 		this.lastRows = console.screen_rows;
 		this.disposeAllFrames();
 		// recreate root/view/crumb
-		this.root = new Frame(1, 1, console.screen_columns, console.screen_rows, BG_BLACK|LIGHTGRAY);
+        this.root = new Frame(1, 1, console.screen_columns, console.screen_rows, ICSH_ATTR('FRAME_STANDARD'));
 		this.root.open();
-		this.view = new Frame(1, 1, this.root.width, this.root.height - 1, BG_BLACK|LIGHTGRAY, this.root);
+        this.view = new Frame(1, 1, this.root.width, this.root.height - 1, ICSH_ATTR('FRAME_STANDARD'), this.root);
 		this.view.open();
-		this.crumb = new Frame(1, this.root.height, this.root.width, 1, BG_BLUE|WHITE, this.root);
+        this.crumb = new Frame(1, this.root.height, this.root.width, 1, ICSH_ATTR('STATUS_BAR'), this.root);
 		this.crumb.open();
 		this.drawFolder();
 	}
@@ -127,7 +127,7 @@ IconShell.prototype.moveSelection = function(dx, dy) {
             var total = (this.stack[this.stack.length-1].children || []).length;
             var selectedNum = this.selection + 1;
             if (typeof this._drawBreadcrumb === 'function') {
-                this.crumb.clear(BG_BLUE|WHITE);
+                this.crumb.clear(ICSH_ATTR('STATUS_BAR'));
                 this.crumb.home();
                 this._drawBreadcrumb(names, selectedNum, total);
             }

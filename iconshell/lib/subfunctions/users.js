@@ -103,11 +103,11 @@ Users.prototype._ensureFrames = function(){
     if(!this.parentFrame) return;
     if(!this.listFrame){
         var h = Math.max(1, this.parentFrame.height - 1);
-        this.listFrame = new Frame(1,1,this.parentFrame.width,h,BG_BLACK|LIGHTGRAY,this.parentFrame); this.listFrame.open();
+        this.listFrame = new Frame(1,1,this.parentFrame.width,h,ICSH_ATTR('USERS_LIST'),this.parentFrame); this.listFrame.open();
         this.registerFrame(this.listFrame);
     }
     if(!this.statusFrame){
-        this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame); this.statusFrame.open();
+        this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,ICSH_ATTR('USERS_STATUS'),this.parentFrame); this.statusFrame.open();
         this.registerFrame(this.statusFrame);
     }
 };
@@ -244,7 +244,7 @@ Users.prototype._openModal = function(user){
     var H = 16; // give a little more room for segmentation
     var mx = Math.max(1, Math.floor((this.parentFrame.width - W)/2)+1);
     var my = Math.max(1, Math.floor((this.parentFrame.height - H)/2)+1);
-    var frame = new Frame(mx, my, W, H, BG_BLUE|WHITE, this.parentFrame); frame.open();
+    var frame = new Frame(mx, my, W, H, ICSH_ATTR('USERS_MODAL'), this.parentFrame); frame.open();
 
     // Layout: keep overall width W. Reserve right column: 8 avatar cols + 1 padding left + 1 padding right = 10 cols.
     // So left content width = W - 10 (ensure >= 10)
@@ -275,18 +275,18 @@ Users.prototype._openModal = function(user){
     // Create subframes
     var parts = {};
     // Left frames
-    parts.leftTop = new Frame(frame.x, frame.y, leftW, leftTopH, BG_BLUE|WHITE, this.parentFrame); parts.leftTop.open();
-    parts.leftMid = new Frame(frame.x, frame.y + leftTopH, leftW, leftMidH, BG_BLUE|WHITE, this.parentFrame); parts.leftMid.open();
-    parts.leftBot = new Frame(frame.x, frame.y + leftTopH + leftMidH, leftW, leftBotH, BG_BLUE|WHITE, this.parentFrame); parts.leftBot.open();
+    parts.leftTop = new Frame(frame.x, frame.y, leftW, leftTopH, ICSH_ATTR('USERS_MODAL'), this.parentFrame); parts.leftTop.open();
+    parts.leftMid = new Frame(frame.x, frame.y + leftTopH, leftW, leftMidH, ICSH_ATTR('USERS_MODAL'), this.parentFrame); parts.leftMid.open();
+    parts.leftBot = new Frame(frame.x, frame.y + leftTopH + leftMidH, leftW, leftBotH, ICSH_ATTR('USERS_MODAL'), this.parentFrame); parts.leftBot.open();
     // Right frames
-    parts.rightTop = new Frame(frame.x + rightX -1, frame.y, rightTotal, rightTopH, BG_BLUE|WHITE, this.parentFrame); parts.rightTop.open();
-    parts.rightMid = new Frame(frame.x + rightX -1, frame.y + rightTopH, rightTotal, rightMidH, BG_BLUE|WHITE, this.parentFrame); parts.rightMid.open();
-    parts.rightBot = new Frame(frame.x + rightX -1, frame.y + rightTopH + rightMidH, rightTotal, rightBotH, BG_BLUE|WHITE, this.parentFrame); parts.rightBot.open();
+    parts.rightTop = new Frame(frame.x + rightX -1, frame.y, rightTotal, rightTopH, ICSH_ATTR('USERS_MODAL'), this.parentFrame); parts.rightTop.open();
+    parts.rightMid = new Frame(frame.x + rightX -1, frame.y + rightTopH, rightTotal, rightMidH, ICSH_ATTR('USERS_MODAL'), this.parentFrame); parts.rightMid.open();
+    parts.rightBot = new Frame(frame.x + rightX -1, frame.y + rightTopH + rightMidH, rightTotal, rightBotH, ICSH_ATTR('USERS_MODAL'), this.parentFrame); parts.rightBot.open();
     // Avatar inner frame (for precise centering) inside rightMid
     var avatarInnerW = this.avatarWidth; var avatarInnerH = this.avatarHeight;
     var avatarInnerX = parts.rightMid.x + Math.max(0, Math.floor((rightTotal - avatarInnerW)/2));
     var avatarInnerY = parts.rightMid.y + Math.max(0, Math.floor((rightMidH - avatarInnerH)/2));
-    parts.avatar = new Frame(avatarInnerX, avatarInnerY, avatarInnerW, avatarInnerH, BG_BLUE|WHITE, this.parentFrame); parts.avatar.open();
+    parts.avatar = new Frame(avatarInnerX, avatarInnerY, avatarInnerW, avatarInnerH, ICSH_ATTR('USERS_MODAL_AVATAR'), this.parentFrame); parts.avatar.open();
 
     this.modal = { frame:frame, user:user, parts:parts };
     this._drawModal();
@@ -319,7 +319,6 @@ Users.prototype._drawModal = function(){
 
     var midLines = [];
     midLines.push('Location: '+(u.location||''));
-    midLines.push('Email: '+(u.netmail||''));
     midLines.push('Last On: '+system.datestr(u.laston));
     midLines.push('Conn: '+(u.connection||''));
     midLines.push('Online: '+(u.online!==-1?'Yes':'No'));

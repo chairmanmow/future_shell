@@ -23,8 +23,8 @@ function Toast(options) {
 
     this.parentFrame = options.parentFrame || undefined;
     log("Parent frame exists", !!this.parentFrame);
-    this.frame = new Frame(x, y, width, height, BG_GREEN|LIGHTGRAY, this.parentFrame);
-    this.frame.attr = BG_GREEN|LIGHTGRAY;
+    this.frame = new Frame(x, y, width, height, ICSH_ATTR('TOAST_FRAME'), this.parentFrame);
+    this.frame.attr = ICSH_ATTR('TOAST_FRAME');
     this.frame.transparent = false;
     this.frame.putmsg(" "+message+" ", 2, 1);
     this.frame.draw();

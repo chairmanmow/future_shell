@@ -32,7 +32,7 @@ Chat.prototype._initFrames = function() {
 	// If not, fallback to creating a new Frame
 	if (!this.parentFrame) {
 		// Fallback: create a full-screen frame
-		this.parentFrame = new Frame(1, 1, console.screen_columns, console.screen_rows, BG_BLACK|LIGHTGRAY);
+        this.parentFrame = new Frame(1, 1, console.screen_columns, console.screen_rows, ICSH_ATTR('CHAT_OUTPUT'));
 		this.parentFrame.open();
 	}
 	var w = this.parentFrame.width;

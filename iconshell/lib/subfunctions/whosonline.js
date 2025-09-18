@@ -192,12 +192,12 @@ WhoOnline.prototype._ensureFrames = function(){
 	if(!this.parentFrame) return;
 	if(!this.listFrame){
 		var h = Math.max(1, this.parentFrame.height - 1);
-		this.listFrame = new Frame(1,1,this.parentFrame.width,h,BG_BLACK|LIGHTGRAY,this.parentFrame);
+		this.listFrame = new Frame(1,1,this.parentFrame.width,h,ICSH_ATTR('WHOS_LIST'),this.parentFrame);
 		this.registerFrame(this.listFrame)
 		this.listFrame.open();
 	}
 	if(!this.statusFrame){
-		this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame);
+		this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,ICSH_ATTR('WHOS_STATUS'),this.parentFrame);
 		this.registerFrame(this.statusFrame);
 		this.statusFrame.open();
 	}
@@ -233,11 +233,11 @@ WhoOnline.prototype._buildTiles = function(){
 		// In flat mode we store only metadata coordinates; otherwise create frames
 		var tileObj = { index:i, user:{ node:user.node, alias:user.alias, usernum:user.usernum, avatar:user.avatar }, x:x, y:y, w:this.tileWidth, h:tileH };
 		if(!this.flatTiles){
-			var base = new Frame(x, y, this.tileWidth, tileH, BG_BLACK|LIGHTGRAY, this.listFrame); base.open();
+			var base = new Frame(x, y, this.tileWidth, tileH, ICSH_ATTR('WHOS_TILE_BG'), this.listFrame); base.open();
 			var header, avatar, footer;
-			try { header = new Frame(1,1,this.tileWidth,1,BG_BLUE|WHITE,base); header.open(); } catch(e){}
-			if(this.showAvatars){ try { avatar = new Frame(1,2,this.tileWidth,this.avatarHeight,BG_BLACK|LIGHTGRAY,base); avatar.open(); } catch(e){} }
-			try { footer = new Frame(1,2+this.avatarHeight,this.tileWidth,1,BG_BLUE|WHITE,base); footer.open(); } catch(e){}
+			try { header = new Frame(1,1,this.tileWidth,1,ICSH_ATTR('WHOS_TILE_HEADER'),base); header.open(); } catch(e){}
+			if(this.showAvatars){ try { avatar = new Frame(1,2,this.tileWidth,this.avatarHeight,ICSH_ATTR('WHOS_TILE_BG'),base); avatar.open(); } catch(e){} }
+			try { footer = new Frame(1,2+this.avatarHeight,this.tileWidth,1,ICSH_ATTR('WHOS_TILE_FOOTER'),base); footer.open(); } catch(e){}
 			tileObj.frame = base; tileObj.nodeFrame = header; tileObj.avatarFrame = avatar; tileObj.nameFrame = footer;
 		}
 		this._tiles.push(tileObj);
@@ -281,14 +281,14 @@ WhoOnline.prototype._drawTile = function(tile){
 		var absBaseX = (this.listFrame ? this.listFrame.x - 1 : 0) + tile.frame.x;
 		var absBaseY = (this.listFrame ? this.listFrame.y - 1 : 0) + tile.frame.y;
 		whoLog('draw tile#'+tile.index+' node='+tile.user.node+' framePos='+tile.frame.x+','+tile.frame.y+' abs='+absBaseX+','+absBaseY+' sel='+selected);
-		if(tile.nodeFrame){ try { tile.nodeFrame.clear(selected?(BG_LIGHTGRAY|BLACK):(BG_BLUE|WHITE)); }catch(e){} tile.nodeFrame.gotoxy(1,1); tile.nodeFrame.putmsg((selected?'\x01h':'')+'Node '+tile.user.node+'\x01n'); }
+		if(tile.nodeFrame){ try { tile.nodeFrame.clear(selected?ICSH_ATTR('WHOS_TILE_HEADER_SELECTED'):ICSH_ATTR('WHOS_TILE_HEADER')); }catch(e){} tile.nodeFrame.gotoxy(1,1); tile.nodeFrame.putmsg((selected?'\x01h':'')+'Node '+tile.user.node+'\x01n'); }
 		if(tile.avatarFrame){
-			try { tile.avatarFrame.clear(BG_BLACK|LIGHTGRAY); }catch(e){}
+			try { tile.avatarFrame.clear(ICSH_ATTR('WHOS_TILE_BG')); }catch(e){}
 			var av = tile.user.avatar;
 			if(av && av.data){ try { var bin=(typeof base64_decode==='function')?base64_decode(av.data):null; if(bin && this.blitAvatarToFrame){ var sx=1; if(this.avatarWidth<tile.avatarFrame.width) sx=1+Math.floor((tile.avatarFrame.width-this.avatarWidth)/2); this.blitAvatarToFrame(tile.avatarFrame,bin,this.avatarWidth,this.avatarHeight,sx,1);} }catch(e){} }
 		}
-		if(tile.nameFrame){ var name=tile.user.alias; if(name.length>tile.nameFrame.width) name=name.substr(0,tile.nameFrame.width); try { tile.nameFrame.clear(selected?(BG_LIGHTGRAY|BLACK):(BG_BLUE|WHITE)); }catch(e){} tile.nameFrame.gotoxy(1,1); tile.nameFrame.putmsg((selected?'\x01h':'')+name+'\x01n'); }
-		try { tile.frame.attr = selected?(BG_LIGHTGRAY|BLACK):(BG_BLACK|LIGHTGRAY); }catch(e){}
+		if(tile.nameFrame){ var name=tile.user.alias; if(name.length>tile.nameFrame.width) name=name.substr(0,tile.nameFrame.width); try { tile.nameFrame.clear(selected?ICSH_ATTR('WHOS_TILE_NAME_SELECTED'):ICSH_ATTR('WHOS_TILE_NAME')); }catch(e){} tile.nameFrame.gotoxy(1,1); tile.nameFrame.putmsg((selected?'\x01h':'')+name+'\x01n'); }
+		try { tile.frame.attr = selected?ICSH_ATTR('WHOS_TILE_BG_SELECTED'):ICSH_ATTR('WHOS_TILE_BG'); }catch(e){}
 		try { tile.nodeFrame && tile.nodeFrame.cycle(); }catch(e){}
 		try { tile.avatarFrame && tile.avatarFrame.cycle(); }catch(e){}
 		try { tile.nameFrame && tile.nameFrame.cycle(); }catch(e){}
@@ -418,7 +418,7 @@ WhoOnline.prototype._openModal = function(user){
 	// Coordinates must be RELATIVE to parentFrame, not absolute screen coordinates
 	var mx = Math.max(1, Math.floor((pw - W)/2) + 1);
 	var my = Math.max(1, Math.floor((ph - H)/2) + 1);
-	var modalFrame = new Frame(mx, my, W, H, BG_BLUE|WHITE, this.parentFrame);
+	var modalFrame = new Frame(mx, my, W, H, ICSH_ATTR('WHOS_MODAL'), this.parentFrame);
 	modalFrame.open();
 	// Column layout: right avatar column fixed avatarWidth, left remainder -1 for spacer
 	var rightW = this.avatarWidth;
@@ -430,8 +430,8 @@ WhoOnline.prototype._openModal = function(user){
 		this.modal = { frame: modalFrame, avatarColWidth: rightW, user: fullUser, rawUser: user };
 	}else{
 		// Child frame coordinates are relative to modal (1,1), not absolute screen coords
-		var leftFrame = new Frame(modalFrame.x,modalFrame.y,leftW,H,BG_CYAN|LIGHTGRAY, modalFrame); leftFrame.open();
-		var rightFrame = new Frame(modalFrame.x + leftW,modalFrame.y,rightW,H,BG_BLUE|LIGHTGRAY, modalFrame); rightFrame.open();
+		var leftFrame = new Frame(modalFrame.x,modalFrame.y,leftW,H,ICSH_ATTR('WHOS_MODAL_LEFT'), modalFrame); leftFrame.open();
+		var rightFrame = new Frame(modalFrame.x + leftW,modalFrame.y,rightW,H,ICSH_ATTR('WHOS_MODAL_RIGHT'), modalFrame); rightFrame.open();
 		this.modal = { frame: modalFrame, leftFrame:leftFrame, rightFrame:rightFrame, user: fullUser, rawUser: user };
 	}
 	log("CREATED MODAL DRAWING CONTENTS")

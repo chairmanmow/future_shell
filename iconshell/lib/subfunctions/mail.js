@@ -4,6 +4,9 @@ load('iconshell/lib/shell/icon.js');
 // Fallback key codes if not defined globally (Synchronet usually defines in sbbsdefs.js)
 if (typeof KEY_PGUP === 'undefined') var KEY_PGUP = 0x4900;
 if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = 0x5100;
+if (typeof SCAN_TOYOU === 'undefined') var SCAN_TOYOU = (1<<3);
+if (typeof SCAN_UNREAD === 'undefined') var SCAN_UNREAD = (1<<5);
+if (typeof SCAN_NEW === 'undefined') var SCAN_NEW = (1<<1);
 /* -------------------------------------------------------------------------
    Synchronet bbs.* Mail API quick reference (kept here for fast lookup)
 
@@ -48,6 +51,12 @@ if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = 0x5100;
    @returns {Boolean|void}
    Side-effects: Opens stock file selection/transfer UI when path omitted.
 
+   -------------------------------------------------------------------------
+   bbs.scan_subs(mode?, all?) -> void
+   @param {Number} [mode] Bitfield flags. Use SCAN_TOYOU/SCAN_UNREAD to focus on messages addressed to the current user.
+   @param {Boolean} [all] If true, includes every accessible sub instead of configured scan list.
+   Side-effects: Launches stock message scan UI using the specified filters.
+
    NOTES / LOCAL USAGE:
    - We intentionally invoke all four with no parameters to leverage native interactive flows.
    - After each action we refresh unread count (updateUnreadCount) and redraw icons.
@@ -87,8 +96,7 @@ function Mail(opts) {
 		{ baseLabel: 'Read Mail', iconFile:'messages', dynamic:true,  action: makeAction(function(){ bbs.read_mail(); }, 'Reading mail...') },
 		// Native interactive compose (custom pre-screen, no confirmation desired)
 		{ baseLabel: 'Compose Email', iconFile:'messages', confirm:false, action: function(){ self.composeInteractiveEmail(); } },
-		// Netmail (potentially irreversible route) keep confirmation
-		{ baseLabel: 'Send Netmail', iconFile:'messages', confirm:true, action: makeAction(function(){ bbs.netmail(); }, 'Launching netmail composer...') },
+		{ baseLabel: 'Scan For You', iconFile:'mailbox', action: makeAction(function(){ self._scanMessagesAddressedToUser(); }, 'Scanning for messages to you...') },
 		{ baseLabel: 'Send File', iconFile:'folder', action: makeAction(function(){ bbs.send_file(); }, 'Send file dialog...') }
 	];
 	this.updateUnreadCount();
@@ -102,6 +110,20 @@ Mail.prototype.composeInteractiveEmail = function(){
 	if(this.mode !== 'icon') return;
 	this._enterRecipientPrompt();
 	this.draw();
+};
+
+Mail.prototype._scanMessagesAddressedToUser = function(){
+	if(typeof bbs === 'undefined' || typeof bbs.scan_subs !== 'function') return;
+	var mode = 0;
+	if (typeof SCAN_TOYOU !== 'undefined') mode |= SCAN_TOYOU;
+	if (typeof SCAN_UNREAD !== 'undefined') mode |= SCAN_UNREAD;
+	if (!mode && typeof SCAN_NEW !== 'undefined') mode |= SCAN_NEW;
+	try {
+		if (mode) bbs.scan_subs(mode, true);
+		else bbs.scan_subs(undefined, true);
+	} catch(e) {
+		/* swallow scan errors */
+	}
 };
 
 // Deprecated blocking APIs replaced by non-blocking promptRecipient mode
@@ -428,4 +450,3 @@ Mail.prototype.exit = function(){
 
 // Export constructor globally
 this.Mail = Mail;
-

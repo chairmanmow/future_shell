@@ -413,7 +413,7 @@ IconShell.prototype._createIconCell = function(i, dims, items, parentFrame, Icon
         iconAttr = (hasBg ? items[i].iconBg : 0) | (hasFg ? items[i].iconFg : 0);
     }
     var iconFrame = new Frame(x, y, dims.iconW, dims.iconH, iconAttr, parentFrame);
-    var labelFrame = new Frame(x, y + dims.iconH, dims.iconW, dims.labelH, BG_BLACK|LIGHTGRAY, parentFrame);
+    var labelFrame = new Frame(x, y + dims.iconH, dims.iconW, dims.labelH, ICSH_ATTR('FRAME_STANDARD'), parentFrame);
     var iconObj = new Icon(iconFrame, labelFrame, items[i], i == 0);
     iconObj.render();
     return { icon: iconFrame, label: labelFrame, item: items[i], iconObj: iconObj };

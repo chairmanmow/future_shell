@@ -67,6 +67,11 @@ function getItemsForXtrnSection(index) {
 		if (!prog.can_access) continue;
 		// Deterministic color from label/code
 		var colorSeed = prog.name + prog.code;
+		// NOTE: Dynamic rotating background colors. Could be externalized later via
+		// a GAMESMENU_BG_x list in [Colors] or a dedicated [GamesMenu] section.
+		// Leaving hard-coded by design for now (distinct behavioral palette rather
+		// than a static semantic surface). If customization desired, convert to
+		// keys like GAMESMENU_BG1..N and resolve with ICSH_VALS.
 		var bgColors = [BG_BLUE, BG_CYAN, BG_GREEN, BG_BROWN, BG_MAGENTA, BG_LIGHTGRAY, BG_RED];
 		var fgColors = [WHITE, BLACK, LIGHTGRAY, YELLOW, CYAN, GREEN, MAGENTA];
 		var hash = 0;

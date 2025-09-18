@@ -5,7 +5,20 @@
 // 3. Greets user by name and prompts to press any key to exit.
 // 4. ESC at any time aborts immediately.
 
+load('sbbsdefs.js');
 load("iconshell/lib/subfunctions/subprogram.js");
+if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
+if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';
+if (typeof KEY_BACKSPACE === 'undefined') var KEY_BACKSPACE = '\b';
+if (typeof KEY_DEL === 'undefined') var KEY_DEL = '\x7f';
+if (typeof WHITE === 'undefined') var WHITE = 7;
+if (typeof BG_WHITE === 'undefined') var BG_WHITE = WHITE << 4;
+if (typeof BG_BLUE === 'undefined') var BG_BLUE = 1 << 4;
+if (typeof BG_BLACK === 'undefined') var BG_BLACK = 0;
+if (typeof BG_RED === 'undefined') var BG_RED = 4 << 4;
+if (typeof BG_GREEN === 'undefined') var BG_GREEN = 2 << 4;
+if (typeof BG_CYAN === 'undefined') var BG_CYAN = 3 << 4;
+
 // Thread tree dependency (for + / - expansion UI similar to ecReader)
 // We lazily load tree.js only when entering the threads view to avoid cost if user never opens threads.
 // But ensure symbol available for early reference if previously loaded elsewhere.
@@ -17,7 +30,75 @@ var BOARD_ICONS = {
     'group': 'folder',
     'sub': 'bulletin_board',
     'groups':'mario',
-    'quit': 'logoff'
+    'quit': 'logoff',
+    'search': 'search'
+}
+
+var _MB_ICON_ALIAS_CACHE = null;
+
+function _mbBuildNameVariants(name) {
+    var variants = [];
+    if (typeof name === 'undefined' || name === null) return variants;
+    var base = ('' + name).trim();
+    if (!base.length) return variants;
+    variants.push(base);
+    var lower = base.toLowerCase();
+    if (variants.indexOf(lower) === -1) variants.push(lower);
+    var spaceHyphen = lower.replace(/\s+/g, '-');
+    if (spaceHyphen.length && variants.indexOf(spaceHyphen) === -1) variants.push(spaceHyphen);
+    var spaceUnderscore = lower.replace(/\s+/g, '_');
+    if (spaceUnderscore.length && variants.indexOf(spaceUnderscore) === -1) variants.push(spaceUnderscore);
+    var asciiHyphen = lower.replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    if (asciiHyphen.length && variants.indexOf(asciiHyphen) === -1) variants.push(asciiHyphen);
+    var asciiUnderscore = lower.replace(/[^a-z0-9]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (asciiUnderscore.length && variants.indexOf(asciiUnderscore) === -1) variants.push(asciiUnderscore);
+    var alnum = lower.replace(/[^a-z0-9]+/g, '');
+    if (alnum.length && variants.indexOf(alnum) === -1) variants.push(alnum);
+    return variants;
+}
+
+function _mbAddIconAlias(map, key, base) {
+    if (!key) return;
+    var normalized = ('' + key).toLowerCase();
+    if (!normalized.length) return;
+    if (!map.hasOwnProperty(normalized)) map[normalized] = base;
+}
+
+function _mbLoadIconAliasMap() {
+    if (_MB_ICON_ALIAS_CACHE) return _MB_ICON_ALIAS_CACHE;
+    _MB_ICON_ALIAS_CACHE = {};
+    return _MB_ICON_ALIAS_CACHE;
+}
+
+function _mbFindIconBase(name) {
+    if (!name) return null;
+    var variants = _mbBuildNameVariants(name);
+    variants.push(name);
+    var aliases = _mbLoadIconAliasMap();
+    // Reuse previously memoized result first
+    for (var i = 0; i < variants.length; i++) {
+        var key = variants[i];
+        if (!key) continue;
+        key = key.toLowerCase();
+        if (aliases.hasOwnProperty(key)) return aliases[key];
+    }
+    var iconDir = system.mods_dir + "iconshell/lib/icons/";
+    var exts = ['.ans', '.bin'];
+    for (var v = 0; v < variants.length; v++) {
+        var variant = variants[v];
+        if (!variant) continue;
+        var baseCandidate = variant;
+        for (var e = 0; e < exts.length; e++) {
+            var path = iconDir + baseCandidate + exts[e];
+            try {
+                if (file_exists(path)) {
+                    for (var a = 0; a < variants.length; a++) _mbAddIconAlias(aliases, variants[a], baseCandidate);
+                    return baseCandidate;
+                }
+            } catch(_e){}
+        }
+    }
+    return null;
 }
 
 var GROUPING_PREFIXES = ['RE: ', 'Re: ', 'FW: ', 'FWD: '];
@@ -40,6 +121,113 @@ MessageBoard.prototype.enter = function(done) {
     if (this.autoCycle) {
         try { this.cycle(); } catch(e) {}
     }
+};
+
+MessageBoard.prototype._beginInlineSearchPrompt = function(code, returnView){
+    if(!this.inputFrame) return false;
+    this._navSearchActive = true;
+    this._navSearchBuffer = '';
+    this._navSearchCode = code;
+    this._navSearchReturnView = returnView || this.view;
+    this._searchReturnView = this._navSearchReturnView;
+    this._navSearchPlaceholder = '[type to search, ENTER=run, ESC=cancel]';
+    if(this.view === 'group' || this.view === 'sub'){
+        var searchIndex = this._findMenuIndexByType('search');
+        if(searchIndex !== -1){
+            this._navSearchPrevSelection = this.selection;
+            this.selection = searchIndex;
+            this._paintIconGrid();
+        }
+    }
+    this._paintInlineSearchPrompt();
+    return true;
+};
+
+MessageBoard.prototype._paintInlineSearchPrompt = function(message){
+    if(!this.inputFrame) return;
+    var code = this._navSearchCode;
+    var targetName = this._getSubNameByCode(code) || code || '';
+    var prompt = 'Search ' + (targetName ? targetName : '') + ': ';
+    var buffer = (typeof message === 'string') ? message : this._navSearchBuffer;
+    var isPlaceholder = false;
+    if(!buffer || !buffer.length){
+        buffer = this._navSearchPlaceholder || '';
+        isPlaceholder = true;
+    }
+    if(!isPlaceholder && this._navSearchActive) buffer = buffer + '_';
+    try {
+        this.inputFrame.clear(BG_BLUE|WHITE);
+        this.inputFrame.home();
+        var text = prompt + buffer;
+        if(text.length > this.inputFrame.width) text = text.substr(text.length - this.inputFrame.width);
+        this.inputFrame.putmsg(text);
+        this.inputFrame.cycle();
+    } catch(e){}
+};
+
+MessageBoard.prototype._endInlineSearchPrompt = function(statusMsg){
+    this._navSearchActive = false;
+    this._navSearchBuffer = '';
+    this._navSearchCode = null;
+    this._navSearchReturnView = null;
+    this._navSearchPlaceholder = '';
+    this._navSearchPrevSelection = -1;
+    var hasStatus = (typeof statusMsg === 'string' && statusMsg.length);
+    if(this.view === 'group' || this.view === 'sub'){
+        var searchIndex = this._findMenuIndexByType('search');
+        if(searchIndex !== -1){
+            this.selection = searchIndex;
+            this._paintIconGrid();
+        }
+    }
+    if(hasStatus) this._writeStatus(statusMsg);
+};
+
+MessageBoard.prototype._handleInlineSearchKey = function(key){
+    if(!this._navSearchActive) return true;
+    if(key === null || typeof key === 'undefined') return false;
+    if(key === KEY_ESC || key === '\x1b'){
+        this._endInlineSearchPrompt('SEARCH cancelled');
+        return false;
+    }
+    if(key === '\r' || key === '\n' || key === KEY_ENTER){
+        var term = (this._navSearchBuffer || '').trim();
+        if(!term.length){
+            this._navSearchPlaceholder = '[enter search term]';
+            this._paintInlineSearchPrompt();
+            return false;
+        }
+        var code = this._navSearchCode;
+        var retView = this._navSearchReturnView || this.view;
+        this._endInlineSearchPrompt();
+        this._searchReturnView = retView;
+        this._writeStatus('SEARCH: searching...');
+        this._executeSearch(code, term);
+        return false;
+    }
+    if(key === KEY_BACKSPACE || key === KEY_DEL || key === '\b' || key === '\x7f'){
+        if(this._navSearchBuffer && this._navSearchBuffer.length){
+            this._navSearchBuffer = this._navSearchBuffer.substr(0, this._navSearchBuffer.length-1);
+        } else {
+            this._navSearchBuffer = '';
+        }
+        this._paintInlineSearchPrompt();
+        return false;
+    }
+    if(typeof key === 'number'){
+        if(key >= 32 && key <= 126){
+            this._navSearchBuffer += String.fromCharCode(key);
+            this._paintInlineSearchPrompt();
+        }
+        return false;
+    }
+    if(typeof key === 'string' && key.length === 1 && key >= ' '){
+        this._navSearchBuffer += key;
+        this._paintInlineSearchPrompt();
+        return false;
+    }
+    // Swallow all other keys while search prompt active
+    return false;
 };
 
 // Main loop (called externally by shell or could be invoked after enter)
@@ -92,6 +280,9 @@ MessageBoard.prototype.exit = function(){
 
 MessageBoard.prototype._handleKey = function(key) {
     if (!key) return true;
+    if(this._navSearchActive){
+        return this._handleInlineSearchKey(key);
+    }
     // ESC now routes to first special cell (Quit or Groups) instead of unconditional exit
     if (key === '\x1b') {
         if (this.view === 'group') {
@@ -120,22 +311,54 @@ MessageBoard.prototype._handleKey = function(key) {
             // Ensure read-specific frames are removed so thread view can redraw cleanly
             if(this._destroyReadFrames) { try { this._destroyReadFrames(); } catch(e){} }
             this._renderThreadsView(this.cursub); return false;
+        } else if (this.view === 'search') {
+            this._exitSearchResults();
+            return false;
         } else if (this.view === 'post') {
             this._renderThreadsView(this.cursub); return false;
         } else {
             this.exit(); return false;
         }
     }
+    if(this.view === 'threads'){
+        if(this._threadSearchFocus){
+            var handled = this._threadSearchHandleKey(key);
+            if(handled !== 'pass') return handled;
+        } else if(key === '/' || key === 's' || key === 'S') {
+            this._focusThreadSearch('');
+            return true;
+        }
+    }
     // Hotspot key interception (0-9 then A-Z)
     if (this._hotspotMap && this._hotspotMap.hasOwnProperty(key)) {
         var idx = this._hotspotMap[key];
+        if(idx === 'thread-search'){
+            this._focusThreadSearch('');
+            return true;
+        }
+        if(typeof idx === 'string' && idx.indexOf('search-result:') === 0){
+            var rowIndex = parseInt(idx.substr('search-result:'.length), 10);
+            if(!isNaN(rowIndex)){
+                this._searchSelection = Math.max(0, Math.min(rowIndex, (this._searchResults||[]).length-1));
+                this._handleSearchKey('\r');
+            }
+            return false;
+        }
         if (typeof idx === 'number') {
             if(this.view === 'group' || this.view === 'sub') {
                 this.selection = idx;
                 if (this.view === 'group') {
-                    var it = this.items[this.selection]; if(it && typeof it.groupIndex !== 'undefined') { this._renderSubView(it.groupIndex); return false; }
+                    var it = this.items[this.selection];
+                    if(it){
+                        if(it.type === 'search'){ this._promptSearch(this._lastActiveSubCode || this.cursub || null, 'group'); return false; }
+                        if(typeof it.groupIndex !== 'undefined') { this._renderSubView(it.groupIndex); return false; }
+                    }
                 } else if (this.view === 'sub') {
-                    var it2 = this.items[this.selection]; if(it2 && it2.subCode) { this._renderThreadsView(it2.subCode); return false; }
+                    var it2 = this.items[this.selection];
+                    if(it2){
+                        if(it2.type === 'search'){ this._searchReturnView = 'sub'; this._promptSearch(this._lastActiveSubCode || null, 'sub'); return false; }
+                        if(it2.subCode) { this._renderThreadsView(it2.subCode); return false; }
+                    }
                 }
             } else if(this.view === 'threads' && this.threadTree && this.threadNodeIndex && this.threadNodeIndex.length) {
                 // Map hotspot selection to thread tree selection
@@ -167,12 +390,14 @@ MessageBoard.prototype._handleKey = function(key) {
         // Use tree view if built; fallback to legacy flat list
         if(this.threadTree) return this._handleThreadTreeKey(key);
         return this._handleThreadsKey(key);
+    case 'search': return this._handleSearchKey(key);
     case 'read': return this._handleReadKey(key);
         default: return true;
     }
 };
 
 MessageBoard.prototype._cleanup = function() {
+	this._destroyThreadUI();
 	try { if (this.outputFrame) this.outputFrame.close(); } catch(e) {}
 	try { if (this.inputFrame) this.inputFrame.close(); } catch(e) {}
     this._resetState();
@@ -188,6 +413,29 @@ MessageBoard.prototype._resetState = function() {
     this.threadHeaders = [];
     this.threadSelection = 0; this.threadScrollOffset = 0;
     this.threadTree = null; this.threadNodeIndex = []; this.threadTreeSelection = 0;
+    this._subIndex = null;
+    this._threadSearchFrame = null;
+    this._threadContentFrame = null;
+    this._threadSearchBuffer = '';
+    this._threadSearchFocus = false;
+    this._threadSearchPlaceholder = '';
+    this._lastActiveSubCode = null;
+    this._searchResults = [];
+    this._searchSelection = 0;
+    this._searchScrollOffset = 0;
+    this._searchQuery = '';
+    this._searchReturnView = null;
+    this._navSearchActive = false;
+    this._navSearchBuffer = '';
+    this._navSearchCode = null;
+    this._navSearchReturnView = null;
+    this._navSearchPlaceholder = '';
+    this._navSearchPrevSelection = -1;
+    this._readReturnView = null;
+    this._fullHeaders = {};
+    this._threadSequenceCache = {};
+    this._cachedSubCode = null;
+    this._threadHeadersCache = {};
 }
 
 MessageBoard.prototype._releaseHotspots = function(){
@@ -211,6 +459,28 @@ MessageBoard.prototype._init = function(reentry){
     this.threadHeaders = []; this.threadSelection = 0; this.threadScrollOffset = 0;
     this.threadTree = null; this.threadNodeIndex = []; this.threadTreeSelection = 0; this._threadFrame = null;
     this._iconCells = [];
+    this._subIndex = null;
+    this._threadSearchFrame = null;
+    this._threadContentFrame = null;
+    this._threadSearchBuffer = '';
+    this._threadSearchFocus = false;
+    this._threadSearchPlaceholder = '';
+    this._lastActiveSubCode = null;
+    this._searchResults = [];
+    this._searchSelection = 0;
+    this._searchScrollOffset = 0;
+    this._searchQuery = '';
+    this._searchReturnView = null;
+    this._navSearchActive = false;
+    this._navSearchBuffer = '';
+    this._navSearchCode = null;
+    this._navSearchReturnView = null;
+    this._navSearchPlaceholder = '';
+    this._readReturnView = null;
+    this._fullHeaders = {};
+    this._threadSequenceCache = {};
+    this._cachedSubCode = null;
+    this._threadHeadersCache = {};
     this.debug = this.debug || false; // toggle via external set
     this._dbg = function(){ if(!this.debug) return; var args = Array.prototype.slice.call(arguments); try { log('[MB] '+args.join(' ')); } catch(e){} };
     // Build comprehensive hotspot character set (single-key tokens only)
@@ -254,6 +524,9 @@ MessageBoard.prototype._renderCurrentView = function(view) {
         case 'threads':
             this._renderThreadsView();
             break;
+        case 'search':
+            this._renderSearchResults(true);
+            break;
         case 'read':
             this._renderReadView();
             break;
@@ -271,6 +544,7 @@ MessageBoard.prototype._renderGroupView = function(groups) {
     // Use our icon paradigm to display as clickable items in a grid.
     // Selecting an item calls _renderSubView with that group.
     this._ensureFrames();
+    this._destroyThreadUI();
     this._clearIconGrid();
     this.view = 'group';
     // Build items from msg_area.grp_list (prepend Quit special cell)
@@ -279,8 +553,16 @@ MessageBoard.prototype._renderGroupView = function(groups) {
         type: 'quit',
         label: 'Quit',
         hotkey: '\x1b',
-        iconFile: BOARD_ICONS['quit'] || 'logoff',
+        iconFile: this._resolveBoardIcon('quit', 'quit'),
         iconBg: BG_RED,
+        iconFg: WHITE
+    });
+    list.push({
+        type: 'search',
+        label: 'Search',
+        hotkey: 'S',
+        iconFile: this._resolveBoardIcon('search', 'search'),
+        iconBg: BG_BLUE,
         iconFg: WHITE
     });
     for (var gi = 0; gi < msg_area.grp_list.length; gi++) {
@@ -290,7 +572,7 @@ MessageBoard.prototype._renderGroupView = function(groups) {
             type: 'group',
             label: grp.name.substr(0, 12),
             hotkey: (grp.name && grp.name.length? grp.name[0].toUpperCase(): null),
-            iconFile: 'folder',
+            iconFile: this._resolveBoardIcon(grp.name, 'group'),
             iconBg: BG_BLUE,
             iconFg: WHITE,
             groupIndex: gi
@@ -300,6 +582,7 @@ MessageBoard.prototype._renderGroupView = function(groups) {
     this._computeNonSpecialOrdinals();
     this.selection = Math.min(this.selection, this.items.length-1);
     this._paintIconGrid();
+    this._writeStatus('GROUPS: Enter opens subs | S=Search | ESC=Quit');
 }
 
 MessageBoard.prototype._renderSubView = function(group) {
@@ -309,6 +592,7 @@ MessageBoard.prototype._renderSubView = function(group) {
     // Use our icon paradigm to display as clickable items in a grid.
     // Selecting an item (sub) calls _renderThreadsView with that group.
     this._ensureFrames();
+    this._destroyThreadUI();
     this._clearIconGrid();
     var grp = msg_area.grp_list[this.curgrp];
     var list = [];
@@ -317,32 +601,43 @@ MessageBoard.prototype._renderSubView = function(group) {
         type: 'groups',
         label: 'Groups',
         hotkey: '\x1b',
-        iconFile: BOARD_ICONS['groups'] || 'folder',
+        iconFile: this._resolveBoardIcon('groups', 'groups'),
         iconBg: BG_GREEN,
         iconFg: BLACK
     });
+    list.push({
+        type: 'search',
+        label: 'Search',
+        hotkey: 'S',
+        iconFile: this._resolveBoardIcon('search', 'search'),
+        iconBg: BG_BLUE,
+        iconFg: WHITE
+    });
+    if(!grp) grp = { sub_list: [] };
     for (var si = 0; si < grp.sub_list.length; si++) {
         var sub = grp.sub_list[si];
         list.push({
             type: 'sub',
             label: sub.name.substr(0,12),
             hotkey: (sub.name && sub.name.length? sub.name[0].toUpperCase(): null),
-            iconFile: 'bulletin_board',
+            iconFile: this._resolveBoardIcon(sub.code || sub.name, 'sub'),
             iconBg: BG_CYAN,
             iconFg: BLACK,
             subCode: sub.code
         });
     }
+    if(grp.sub_list && grp.sub_list.length && !this._lastActiveSubCode) this._lastActiveSubCode = grp.sub_list[0].code;
     this.items = list;
     this._computeNonSpecialOrdinals();
     this.selection = 0; this.scrollOffset = 0;
     this._paintIconGrid();
-    this._writeStatus('SUBS: Enter opens threads | Backspace=Groups | '+(this.selection+1)+'/'+this.items.length);
+    this._writeStatus('SUBS: Enter opens threads | S=Search | Backspace=Groups | '+(this.selection+1)+'/'+this.items.length);
 
 }
 
 MessageBoard.prototype._renderThreadsView = function(sub) {
     this.cursub = sub;
+    if(this.cursub) this._lastActiveSubCode = this.cursub;
     this.view = 'threads';
     this._releaseHotspots();
     this._dbg('enter threads view sub='+sub);
@@ -355,16 +650,24 @@ MessageBoard.prototype._renderThreadsView = function(sub) {
     this._ensureFrames();
     // Remove any leftover icon frames so list draws cleanly
     this._clearIconGrid();
+    this._destroyThreadUI();
+    if(!this._fullHeaders) this._fullHeaders = {};
+    if(!this._threadSequenceCache) this._threadSequenceCache = {};
+    this._ensureThreadSearchUI();
+    this._threadSearchFocus = false;
+    this._threadSearchBuffer = this._threadSearchBuffer || '';
+    this._renderThreadSearchBar();
+    var contentFrame = this._threadContentFrame || this.outputFrame;
     // Immediate visual feedback before heavy work
-    try { this.outputFrame.clear(); this.outputFrame.gotoxy(1,1); this.outputFrame.putmsg('Building thread list...'); this.outputFrame.cycle(); } catch(e){}
+    try { contentFrame.clear(); contentFrame.gotoxy(1,1); contentFrame.putmsg('Building thread list...'); contentFrame.cycle(); } catch(e){}
     this._loadThreadHeaders();
     // Build thread tree (single branch per thread)
     this._ensureTreeLib();
     this._buildThreadTree();
     if(!this.threadHeaders.length){
-        this.outputFrame.clear();
-        this.outputFrame.gotoxy(2,2); this.outputFrame.putmsg('No messages. Press P to post the first message.');
-        this._writeStatus('THREADS: P=Post  Backspace=Subs  0/0');
+        contentFrame.clear();
+        contentFrame.gotoxy(2,2); contentFrame.putmsg('No messages. Press P to post the first message.');
+        this._writeStatus('THREADS: P=Post  S=Search  Backspace=Subs  0/0');
         return;
     }
     this.threadTreeSelection = Math.min(this.threadTreeSelection, Math.max(0,this.threadNodeIndex.length-1));
@@ -381,6 +684,7 @@ MessageBoard.prototype._renderReadView = function(msg) {
     if(!msg) return;
     this.view = 'read';
     this.lastReadMsg = msg;
+    this._storeFullHeader(msg);
     if(!this.outputFrame) this._ensureFrames();
     // Destroy prior read frames if any
     if(this._destroyReadFrames) this._destroyReadFrames();
@@ -464,6 +768,9 @@ MessageBoard.prototype._handleReadKey = function(key){
             this._renderPostView(); return false;
         case '\x12': // Ctrl-R refresh body
             this._renderReadView(this.lastReadMsg); return true;
+        case 'S': case 's': case '/':
+            this._promptSearch(this.cursub || this._lastActiveSubCode || null, 'threads');
+            return false;
         default: return true;
     }
 };
@@ -514,11 +821,25 @@ MessageBoard.prototype._openRelativeInThread = function(dir){
             if(idx!==-1) break;
         }
     }
-    if(!container || idx===-1) return false;
-    var nidx = idx + dir;
-    if(nidx < 0 || nidx >= msgs.length) return false; // out of bounds -> caller decides
-    var target = msgs[nidx];
-    if(target && target.__msgHeader){ this._renderReadView(target.__msgHeader); return true; }
+    if(container && idx!==-1){
+        var nidx = idx + dir;
+        if(nidx >=0 && nidx < msgs.length){
+            var target = msgs[nidx];
+            if(target && target.__msgHeader){ this._renderReadView(target.__msgHeader); return true; }
+        }
+    }
+
+    var seq = this._buildThreadSequence(this.lastReadMsg.thread_id || this.lastReadMsg.number);
+    if(!seq || !seq.length) return false;
+    for(var i=0;i<seq.length;i++){
+        if(seq[i].number === currentMsgNum){
+            var targetIndex = i + dir;
+            if(targetIndex < 0 || targetIndex >= seq.length) return false;
+            var next = seq[targetIndex];
+            if(next){ this._renderReadView(next); return true; }
+            return false;
+        }
+    }
     return false;
 };
 
@@ -541,11 +862,14 @@ MessageBoard.prototype._renderPostView = function(postOptions) {
 }
 
 MessageBoard.prototype._paintReadHeader = function(msg){
-    log('PAINT READ HEADER.. msg:'+ JSON.stringify(msg));
-    if(!this._readHeaderFrame) return;
+    if(!this._readHeaderFrame || !msg) return;
     var hf=this._readHeaderFrame; hf.clear(BG_BLUE|WHITE);
     var from = (msg.from || msg.from_net || 'unknown');
     var subj = (msg.subject || '(no subject)');
+    var replyTo = msg.replyto || msg.reply_to || msg.replyto_net_addr || '';
+    var when = msg.when_written_time || msg.when_written || msg.when_imported_time || 0;
+    var dateStr = 'Unknown';
+    try { if(when) dateStr = strftime('%Y-%m-%d %H:%M', when); } catch(e){}
     var avatarWidth = (this._avatarLib && this._avatarLib.defs && this._avatarLib.defs.width) || 10;
     var avatarHeight = (this._avatarLib && this._avatarLib.defs && this._avatarLib.defs.height) || 6;
     var leftPad = 1; // where avatar starts
@@ -559,14 +883,18 @@ MessageBoard.prototype._paintReadHeader = function(msg){
     if(haveAvatar && hf.width > avatarWidth + 3){
         textStartX = avatarWidth + 3; // leave a gap after avatar
     }
-    // Render text (wrap/truncate within frame)
-    try {
-        hf.gotoxy(textStartX,1); hf.putmsg(('From: '+from).substr(0,Math.max(1,hf.width - textStartX + 1)));
-        if(hf.height>1){
-            hf.gotoxy(textStartX, Math.min(2,hf.height));
-            hf.putmsg(('Subj: '+subj).substr(0,Math.max(1,hf.width - textStartX + 1)));
-        }
-    } catch(e){}
+    var lines = [];
+    lines.push({ label: 'Date', value: dateStr });
+    lines.push({ label: 'From', value: from });
+    if(replyTo && replyTo.length) lines.push({ label: 'Reply-To', value: replyTo });
+    lines.push({ label: 'Subj', value: subj });
+    for(var i=0;i<lines.length && i<hf.height;i++){
+        var info = lines[i];
+        var label = '\x01h\x01y'+info.label+':\x01n ';
+        var text = label + info.value;
+        if(text.length > hf.width - textStartX + 1) text = text.substr(0, hf.width - textStartX + 1);
+        try { hf.gotoxy(textStartX, i+1); hf.putmsg(text); } catch(e){}
+    }
     // Blit avatar into header frame (no direct console cursor side-effects)
     if(haveAvatar){
         try {
@@ -621,6 +949,138 @@ MessageBoard.prototype._destroyReadFrames = function(){
     if(this._readBodyFrame){ try { this._readBodyFrame.close(); } catch(e){} this._readBodyFrame=null; }
 };
 
+MessageBoard.prototype._destroyThreadUI = function(){
+    try { if(this._threadSearchFrame) this._threadSearchFrame.close(); } catch(e){}
+    try { if(this._threadContentFrame) this._threadContentFrame.close(); } catch(e){}
+    this._threadSearchFrame = null;
+    this._threadContentFrame = null;
+    this._threadSearchFocus = false;
+};
+
+MessageBoard.prototype._setThreadSearchPlaceholder = function(placeholder, suppress){
+    this._threadSearchPlaceholder = placeholder || '';
+    if(!suppress && !this._threadSearchFocus) this._renderThreadSearchBar();
+};
+
+MessageBoard.prototype._storeFullHeader = function(hdr){
+    if(!hdr || typeof hdr.number === 'undefined' || hdr.number === null) return;
+    if(!this._fullHeaders) this._fullHeaders = {};
+    this._fullHeaders[hdr.number] = hdr;
+    if(this._threadSequenceCache){
+        var rootId = hdr.thread_id || hdr.number;
+        if(rootId && this._threadSequenceCache[rootId]) delete this._threadSequenceCache[rootId];
+    }
+};
+
+MessageBoard.prototype._ensureThreadSearchUI = function(){
+    if(!this.outputFrame) return;
+    if(this._threadSearchFrame && this._threadContentFrame) return;
+    var of = this.outputFrame;
+    if(of.height <= 1){
+        this._threadContentFrame = of;
+        this._threadSearchFrame = null;
+        return;
+    }
+    var parent = of.parent || of;
+    var searchHeight = 1;
+    var contentHeight = Math.max(1, of.height - searchHeight);
+    this._threadSearchFrame = new Frame(of.x, of.y, of.width, searchHeight, BG_BLUE|WHITE, parent);
+    this._threadContentFrame = new Frame(of.x, of.y + searchHeight, of.width, contentHeight, BG_BLACK|LIGHTGRAY, parent);
+    try { this._threadSearchFrame.open(); } catch(e){}
+    try { this._threadContentFrame.open(); } catch(e){}
+    if(!this._threadSearchPlaceholder) this._setThreadSearchPlaceholder('[Enter search term]', true);
+    this._renderThreadSearchBar();
+};
+
+MessageBoard.prototype._renderThreadSearchBar = function(){
+    if(!this._threadSearchFrame) return;
+    var bar = this._threadSearchFrame;
+    var attr = this._threadSearchFocus ? (BG_WHITE|BLACK) : (BG_BLUE|WHITE);
+    try { bar.clear(attr); bar.home(); } catch(e){}
+    var prompt = 'Search: ';
+    var display = this._threadSearchBuffer || '';
+    if(!display.length && !this._threadSearchFocus){
+        display = this._threadSearchPlaceholder || '[Enter search term]';
+    }
+    var text = prompt + display;
+    if(text.length > bar.width) text = text.substr(text.length - bar.width);
+    try { bar.putmsg(text); bar.cycle(); } catch(e){}
+    this._registerThreadSearchHotspot();
+};
+
+MessageBoard.prototype._registerThreadSearchHotspot = function(){
+    if(!this._threadSearchFrame) return;
+    if(typeof console.add_hotspot !== 'function') return;
+    var bar = this._threadSearchFrame;
+    if(!this._hotspotMap) this._hotspotMap = {};
+    try { console.add_hotspot('/', false, bar.x, bar.x + bar.width - 1, bar.y); } catch(e){}
+    this._hotspotMap['/'] = 'thread-search';
+};
+
+MessageBoard.prototype._focusThreadSearch = function(initialChar){
+    if(!this._threadSearchFrame && this.outputFrame && this.outputFrame.height <= 1){
+        this._promptSearch(this.cursub || this._lastActiveSubCode || null, 'threads');
+        return;
+    }
+    this._threadSearchFocus = true;
+    if(typeof initialChar === 'string' && initialChar.length === 1 && initialChar >= ' '){
+        this._threadSearchBuffer = initialChar;
+    } else if(!this._threadSearchBuffer) {
+        this._threadSearchBuffer = '';
+    }
+    this._renderThreadSearchBar();
+};
+
+MessageBoard.prototype._threadSearchHandleKey = function(key){
+    if(!this._threadSearchFocus) return 'pass';
+    var handled = true;
+    if(typeof key === 'number'){
+        if(key === KEY_ENTER || key === 13) key = '\n';
+        else if(key === KEY_ESC || key === 27) key = '\x1b';
+        else if(key === KEY_BACKSPACE || key === 8 || key === KEY_DEL || key === 127) key = '\b';
+        else if(key >= 32 && key <= 126) key = String.fromCharCode(key);
+        else handled = false;
+    }
+    if(key === '\x1b'){
+        this._threadSearchFocus = false;
+        if(!this._threadSearchBuffer) this._setThreadSearchPlaceholder('[Enter search term]');
+        else this._renderThreadSearchBar();
+        return true;
+    }
+    var nav = [KEY_UP, KEY_DOWN, KEY_PAGEUP, KEY_PAGEDN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END];
+    if(typeof key === 'number' && nav.indexOf(key) !== -1){
+        this._threadSearchFocus = false;
+        if(!this._threadSearchBuffer) this._setThreadSearchPlaceholder('[Enter search term]');
+        else this._renderThreadSearchBar();
+        return 'pass';
+    }
+    if(key === '\n' || key === '\r'){
+        var term = (this._threadSearchBuffer || '').trim();
+        this._threadSearchFocus = false;
+        if(!term.length) this._setThreadSearchPlaceholder('[Enter search term]', false);
+        this._renderThreadSearchBar();
+        if(term.length){
+            this._searchReturnView = 'threads';
+            this._executeSearch(this.cursub || this._lastActiveSubCode || null, term);
+        }
+        return true;
+    }
+    if(key === '\b'){
+        if(this._threadSearchBuffer && this._threadSearchBuffer.length)
+            this._threadSearchBuffer = this._threadSearchBuffer.substr(0, this._threadSearchBuffer.length-1);
+        else this._threadSearchBuffer = '';
+        this._renderThreadSearchBar();
+        return true;
+    }
+    if(typeof key === 'string' && key.length === 1 && key >= ' '){
+        this._threadSearchBuffer = (this._threadSearchBuffer || '') + key;
+        this._renderThreadSearchBar();
+        return true;
+    }
+    if(!handled) return 'pass';
+    return true;
+};
+
 // Export constructor globally
 this.MessageBoard = MessageBoard;
 
@@ -638,7 +1098,16 @@ MessageBoard.launch = function(shell, cb, opts){
 
 // ---- Internal helpers (private-ish) ----
 MessageBoard.prototype._writeStatus = function(msg){
-    if(!this.inputFrame) return; this.inputFrame.clear(BG_BLUE|WHITE); this.inputFrame.home(); this.inputFrame.putmsg(truncsp(msg).substr(0,this.inputFrame.width));
+    if(!this.inputFrame) return;
+    if(this._navSearchActive){
+        this._paintInlineSearchPrompt();
+        return;
+    }
+    var prefix = this._getCurrentSubName();
+    var text = msg || '';
+    if(prefix && prefix.length) text = prefix + ' | ' + text;
+    this.inputFrame.clear(BG_BLUE|WHITE); this.inputFrame.home();
+    this.inputFrame.putmsg(truncsp(text).substr(0,this.inputFrame.width));
 };
 
 MessageBoard.prototype._calcGridMetrics = function(){
@@ -649,6 +1118,321 @@ MessageBoard.prototype._calcGridMetrics = function(){
     var cols=Math.max(1, Math.floor(w / cellW));
     var rows=Math.max(1, Math.floor(h / cellH));
     return {iconW:iconW, iconH:iconH, cols:cols, rows:rows, cellW:cellW, cellH:cellH};
+};
+
+MessageBoard.prototype._ensureSubIndex = function(){
+    if(this._subIndex) return this._subIndex;
+    var map = {};
+    if(msg_area && msg_area.grp_list){
+        for(var gi=0; gi<msg_area.grp_list.length; gi++){
+            var grp = msg_area.grp_list[gi];
+            if(!grp || !grp.sub_list) continue;
+            for(var si=0; si<grp.sub_list.length; si++){
+                var sub = grp.sub_list[si];
+                if(!sub || !sub.code) continue;
+                map[sub.code] = { name: sub.name || sub.code, groupIndex: gi, subIndex: si };
+            }
+        }
+    }
+    this._subIndex = map;
+    return map;
+};
+
+MessageBoard.prototype._getSubNameByCode = function(code){
+    if(!code) return '';
+    var idx = this._ensureSubIndex();
+    if(idx && idx.hasOwnProperty(code)) return idx[code].name || code;
+    return '';
+};
+
+MessageBoard.prototype._getCurrentSubName = function(){
+    var code = this.cursub || bbs.cursub_code || this._lastActiveSubCode || null;
+    if(!code) return '';
+    return this._getSubNameByCode(code);
+};
+
+MessageBoard.prototype._highlightQuery = function(text, query, resume){
+    if(!text || !query) return text || '';
+    resume = resume || ''; // already handles reset codes outside
+    var pattern;
+    try {
+        var esc = query.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        pattern = new RegExp(esc, 'ig');
+    } catch(e){ return text; }
+    return (''+text).replace(pattern, function(match){ return '\x01h\x01y'+match+resume; });
+};
+
+MessageBoard.prototype._syncSubState = function(code){
+    if(!code) return null;
+    var changed = (this._cachedSubCode && this._cachedSubCode !== code);
+    this.cursub = code;
+    try { if(bbs && typeof bbs.cursub_code !== 'undefined') bbs.cursub_code = code; } catch(e){}
+    try { if(user && typeof user.cursub !== 'undefined') user.cursub = code; } catch(e){}
+    var subIndex = null;
+    var groupIndex = this.curgrp;
+    var map = this._ensureSubIndex();
+    if(map && map.hasOwnProperty(code)){
+        var entry = map[code];
+        if(entry){
+            if(typeof entry.subIndex === 'number') subIndex = entry.subIndex;
+            if(typeof entry.groupIndex === 'number') groupIndex = entry.groupIndex;
+        }
+    }
+    if(typeof groupIndex === 'number' && groupIndex >= 0){
+        this.curgrp = groupIndex;
+        try { if(bbs && typeof bbs.curgrp !== 'undefined') bbs.curgrp = groupIndex; } catch(e){}
+    }
+    if(typeof subIndex === 'number' && subIndex >= 0){
+        try { if(bbs && typeof bbs.cursub !== 'undefined') bbs.cursub = subIndex; } catch(e){}
+    }
+    if(changed){
+        this._fullHeaders = {};
+        this._threadSequenceCache = {};
+    }
+    this._cachedSubCode = code;
+    return { code: code, groupIndex: groupIndex, subIndex: subIndex };
+};
+
+MessageBoard.prototype._getIconAliasMap = function(){
+    if(!this._iconAliasMap) this._iconAliasMap = _mbLoadIconAliasMap();
+    return this._iconAliasMap;
+};
+
+MessageBoard.prototype._resolveBoardIcon = function(name, type){
+    var fallback = BOARD_ICONS[type];
+    if(!fallback) fallback = (type === 'group') ? 'folder' : 'bulletin_board';
+    var resolved = _mbFindIconBase(name);
+    if(resolved) return resolved;
+    // Try resolving on type as secondary hint before falling back
+    if(type && type !== name){
+        resolved = _mbFindIconBase(type);
+        if(resolved) return resolved;
+    }
+    return fallback;
+};
+
+MessageBoard.prototype._promptInputLine = function(prompt, initial){
+    if(!console || typeof console.getkey !== 'function') return null;
+    var buffer = initial || '';
+    for(;;){
+        this._writeStatus(prompt + buffer);
+        var key = console.getkey(K_NOECHO|K_NOSPIN);
+        if(key === null || typeof key === 'undefined') continue;
+        if(key === '\r' || key === '\n' || key === KEY_ENTER) return buffer;
+        if(key === '\x1b' || key === KEY_ESC) return null;
+        if(key === KEY_BACKSPACE || key === '\b' || key === '' || key === KEY_DEL){
+            if(buffer.length) buffer = buffer.substr(0, buffer.length-1);
+            continue;
+        }
+        if(typeof key === 'number'){
+            if(key >= 32 && key <= 126){ buffer += String.fromCharCode(key); }
+            continue;
+        }
+        if(typeof key === 'string' && key.length === 1 && key >= ' '){
+            buffer += key;
+        }
+    }
+};
+
+MessageBoard.prototype._promptSearch = function(preferredCode, returnView){
+    var code = preferredCode || this.cursub || this._lastActiveSubCode || bbs.cursub_code || null;
+    if(!code){
+        this._writeStatus('SEARCH: Select a sub first');
+        return;
+    }
+    this._lastActiveSubCode = code;
+    if(this._beginInlineSearchPrompt(code, returnView)) return;
+    var subName = this._getSubNameByCode(code) || code;
+    var query = this._promptInputLine('Search '+subName+': ', '') || '';
+    query = query.trim();
+    if(!query.length){
+        this._writeStatus('SEARCH cancelled');
+        if(this.view === 'threads') this._renderThreadSearchBar();
+        return;
+    }
+    this._searchReturnView = returnView || this.view;
+    this._executeSearch(code, query);
+};
+
+MessageBoard.prototype._executeSearch = function(code, query){
+    var results = [];
+    if(code) this._lastActiveSubCode = code;
+    var mb = new MsgBase(code);
+    if(!mb.open()){
+        this._writeStatus('SEARCH: Unable to open '+code);
+        return;
+    }
+    try {
+        var total = mb.total_msgs || 0;
+        for(var n=1; n<=total; n++){
+            var hdr = mb.get_msg_header(false, n, false);
+            if(!hdr) continue;
+            var matched = false;
+            var fields = [hdr.subject, hdr.from, hdr.to, hdr.from_net, hdr.to_net, hdr.id, hdr.reply_id];
+            var lowered = query.toLowerCase();
+            for(var i=0;i<fields.length && !matched;i++){
+                var val = fields[i];
+                if(val && String(val).toLowerCase().indexOf(lowered) !== -1) matched = true;
+            }
+            var body = null;
+            if(!matched){
+                try { body = mb.get_msg_body(hdr.number, hdr, true); } catch(e){ body = null; }
+                if(body && body.toLowerCase().indexOf(lowered) !== -1) matched = true;
+            }
+            if(!matched) continue;
+            if(body === null){
+                try { body = mb.get_msg_body(hdr.number, hdr, true); } catch(e){ body = ''; }
+            }
+            var snippet = '';
+            if(body){
+                var clean = body.replace(/\r?\n/g,' ');
+                var idx = clean.toLowerCase().indexOf(lowered);
+                if(idx !== -1){
+                    var start = Math.max(0, idx - 30);
+                    var end = Math.min(clean.length, idx + query.length + 30);
+                    snippet = clean.substring(start, end).replace(/\s+/g,' ');
+                    if(start>0) snippet = '...'+snippet;
+                    if(end<clean.length) snippet += '...';
+                }
+            }
+            if(!snippet && hdr.subject) snippet = hdr.subject;
+            results.push({
+                code: code,
+                header: hdr,
+                number: hdr.number,
+                subject: hdr.subject || '(no subject)',
+                from: hdr.from || hdr.from_net || 'unknown',
+                snippet: snippet
+            });
+        }
+    } finally {
+        try { mb.close(); } catch(e){}
+    }
+    if(!results.length){
+        this._writeStatus('SEARCH: No matches for "'+query+'"');
+        if(this.view === 'threads'){
+            this._threadSearchBuffer = '';
+            this._setThreadSearchPlaceholder('[no results for "'+query+'"]');
+        }
+        var ret = this._searchReturnView || 'group';
+        this._searchReturnView = null;
+        if(ret === 'sub') this._renderSubView(this.curgrp);
+        else if(ret === 'threads') this._renderThreadsView(this.cursub);
+        else this._renderGroupView();
+        return;
+    }
+    this._searchResults = results;
+    this._searchSelection = 0;
+    this._searchScrollOffset = 0;
+    this._searchQuery = query;
+    this.view = 'search';
+    this._renderSearchResults();
+};
+
+MessageBoard.prototype._renderSearchResults = function(preserveState){
+    if(this._destroyReadFrames) {
+        try { this._destroyReadFrames(); } catch(e){}
+    }
+    this._destroyThreadUI();
+    this._ensureFrames();
+    this._releaseHotspots();
+    this._clearIconGrid();
+    this.view = 'search';
+    if(!this.outputFrame) return;
+    if(!this._searchResults || !this._searchResults.length){
+        try { this.outputFrame.clear(); this.outputFrame.putmsg('No matches found.'); } catch(e){}
+        this._writeStatus('SEARCH: No matches');
+        return;
+    }
+    if(!preserveState){
+        this._searchSelection = Math.max(0, Math.min(this._searchSelection, this._searchResults.length-1));
+        this._searchScrollOffset = Math.min(this._searchScrollOffset, this._searchSelection);
+    }
+    this._paintSearchResults();
+};
+
+MessageBoard.prototype._paintSearchResults = function(){
+    var f = this.outputFrame; if(!f) return;
+    try { f.clear(); } catch(e){}
+    var header = '\x01h\x01cSearch \x01h\x01y"'+this._searchQuery+'"\x01h\x01c in \x01h\x01y'+(this._getCurrentSubName()||'')+'\x01h\x01c ('+this._searchResults.length+' results)\x01n';
+    if(header.length > f.width) header = header.substr(0, f.width);
+    try { f.gotoxy(1,1); f.putmsg(header); } catch(e){}
+    var usable = Math.max(1, f.height - 2);
+    if(this._searchSelection < this._searchScrollOffset) this._searchScrollOffset = this._searchSelection;
+    if(this._searchSelection >= this._searchScrollOffset + usable) this._searchScrollOffset = Math.max(0, this._searchSelection - usable + 1);
+    var end = Math.min(this._searchResults.length, this._searchScrollOffset + usable);
+    this._releaseHotspots();
+    if(!this._hotspotMap) this._hotspotMap = {};
+    var hotspotChars = this._hotspotChars || [];
+    var usedHotspots = 0;
+    for(var i=this._searchScrollOffset; i<end; i++){
+        var res = this._searchResults[i];
+        var lineY = 2 + (i - this._searchScrollOffset);
+        if(lineY > f.height) break;
+        var line = this._padLeft(''+res.number,5,' ') + ' ' + this._padRight((res.from||'').substr(0,12),12,' ') + ' ' + (res.subject||'');
+        if(res.snippet) line += ' - ' + res.snippet.replace(/\s+/g,' ');
+        if(line.length > f.width) line = line.substr(0, f.width-3)+'...';
+        var selected = (i === this._searchSelection);
+        var resume = selected ? '\x01n\x01h' : '\x01n';
+        line = this._highlightQuery(line, this._searchQuery, resume);
+        if(selected) line = '\x01n\x01h'+line; else line='\x01n'+line;
+        try { f.gotoxy(1,lineY); f.putmsg(line); } catch(e){}
+        var cmd = null;
+        if(usedHotspots < hotspotChars.length) {
+            cmd = hotspotChars[usedHotspots++];
+        }
+        if(cmd){
+            this._hotspotMap[cmd] = 'search-result:'+i;
+            if(typeof console.add_hotspot === 'function'){
+                try { console.add_hotspot(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1); } catch(e){}
+            }
+        }
+    }
+    try { f.cycle(); } catch(e){}
+    this._writeStatus('SEARCH: Enter=Read  ESC/Bksp=Back  '+(this._searchSelection+1)+'/'+this._searchResults.length);
+};
+
+MessageBoard.prototype._handleSearchKey = function(key){
+    if(this.view !== 'search') return true;
+    if(key === '\x1b' || key === '\x08'){
+        this._exitSearchResults();
+        return false;
+    }
+    if(!this._searchResults || !this._searchResults.length) return true;
+    var usable = this.outputFrame ? Math.max(1, this.outputFrame.height - 2) : this._searchResults.length;
+    var oldSel = this._searchSelection;
+    if(key === KEY_UP) this._searchSelection = Math.max(0, this._searchSelection-1);
+    else if(key === KEY_DOWN) this._searchSelection = Math.min(this._searchResults.length-1, this._searchSelection+1);
+    else if(key === KEY_PAGEUP) this._searchSelection = Math.max(0, this._searchSelection-usable);
+    else if(key === KEY_PAGEDN) this._searchSelection = Math.min(this._searchResults.length-1, this._searchSelection+usable);
+    else if(key === KEY_HOME) this._searchSelection = 0;
+    else if(key === KEY_END) this._searchSelection = this._searchResults.length-1;
+    else if(key === '\r' || key === '\n' || key === KEY_ENTER){
+        var item = this._searchResults[this._searchSelection];
+        if(item && item.header){
+            this._readReturnView = 'search';
+            this._syncSubState(item.code || this.cursub);
+            this._renderReadView(item.header);
+        }
+        return false;
+    } else {
+        return true;
+    }
+    if(this._searchSelection !== oldSel) this._paintSearchResults();
+    return true;
+};
+
+MessageBoard.prototype._exitSearchResults = function(){
+    this._releaseHotspots();
+    var ret = this._searchReturnView || 'group';
+    this._searchReturnView = null;
+    if(ret === 'sub') this._renderSubView(this.curgrp);
+    else if(ret === 'threads'){
+        this._threadSearchBuffer = '';
+        this._setThreadSearchPlaceholder('[Enter search term]', false);
+        this._renderThreadsView(this.cursub);
+    }
+    else this._renderGroupView();
 };
 
 MessageBoard.prototype._paintIconGrid = function(){
@@ -676,38 +1460,49 @@ MessageBoard.prototype._paintIconGrid = function(){
         var labelFrame= new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, BG_BLACK|LIGHTGRAY, this.outputFrame);
         var iconObj = new this._Icon(iconFrame,labelFrame,visible[v]);
         iconObj.render();
-    this._iconCells.push({icon:iconFrame,label:labelFrame});
+        this._iconCells.push({ icon: iconFrame, label: labelFrame });
         // Selection highlight
         if (globalIndex === this.selection) {
             labelFrame.clear(BG_LIGHTGRAY|BLACK); labelFrame.home(); labelFrame.putmsg(this._center(visible[v].label.substr(0,metrics.iconW), metrics.iconW));
         }
         // Hotspot mapping: ESC for special first cell; numbering starts at 1 for others (1-9 then A-Z)
-        if (typeof console.add_hotspot === 'function') {
-            var item = visible[v];
-            var cmd = null;
-            if (item.type === 'quit' || item.type === 'groups') {
-                cmd = '\x1b'; // ESC
-            } else if (this._nonSpecialOrdinals && typeof this._nonSpecialOrdinals[globalIndex] === 'number') {
-                var ord = this._nonSpecialOrdinals[globalIndex]; // 1-based
-                if (ord <= 9) cmd = String(ord);
-                else {
-                    var alphaIndex = ord - 10; // 0-based for A
-                    if (alphaIndex < 26) cmd = String.fromCharCode('A'.charCodeAt(0)+alphaIndex);
-                }
+        var item = visible[v];
+        var cmd = null;
+        if (item.type === 'quit' || item.type === 'groups') {
+            cmd = '\x1b'; // ESC
+        } else if (item.type === 'search') {
+            cmd = (item.hotkey && item.hotkey.length) ? item.hotkey[0] : 'S';
+            cmd = cmd.toUpperCase();
+        } else if (this._nonSpecialOrdinals && typeof this._nonSpecialOrdinals[globalIndex] === 'number') {
+            var ord = this._nonSpecialOrdinals[globalIndex]; // 1-based
+            if (ord <= 9) cmd = String(ord);
+            else {
+                var alphaIndex = ord - 10; // 0-based for A
+                if (alphaIndex < 26) cmd = String.fromCharCode('A'.charCodeAt(0)+alphaIndex);
             }
-            if (cmd) {
-                this._hotspotMap[cmd] = globalIndex;
-                for (var hy=0; hy<metrics.iconH; hy++) {
-                    try { console.add_hotspot(cmd, false, iconFrame.x, iconFrame.x + iconFrame.width - 1, iconFrame.y + hy); } catch(e){}
+        }
+        if (cmd) {
+            var commands = [cmd];
+            if (cmd.length === 1) {
+                var lowerCmd = cmd.toLowerCase();
+                if (lowerCmd !== cmd) commands.push(lowerCmd);
+            }
+            for (var cIdx = 0; cIdx < commands.length; cIdx++) {
+                var mappedCmd = commands[cIdx];
+                this._hotspotMap[mappedCmd] = globalIndex;
+                if (typeof console.add_hotspot === 'function') {
+                    for (var hy=0; hy<metrics.iconH; hy++) {
+                        try { console.add_hotspot(mappedCmd, false, iconFrame.x, iconFrame.x + iconFrame.width - 1, iconFrame.y + hy); } catch(e){}
+                    }
+                    try { console.add_hotspot(mappedCmd, false, labelFrame.x, labelFrame.x + labelFrame.width - 1, labelFrame.y); } catch(e){}
                 }
-                try { console.add_hotspot(cmd, false, labelFrame.x, labelFrame.x + labelFrame.width - 1, labelFrame.y); } catch(e){}
             }
         }
         idx++;
     }
     var baseHelp;
-    if (this.view === 'group') baseHelp = 'Enter=Open  ESC=Quit ';
-    else if (this.view === 'sub') baseHelp = 'Enter=Open  ESC=Groups  Backspace=Groups ';
+    if (this.view === 'group') baseHelp = 'Enter=Open  S=Search  ESC=Quit ';
+    else if (this.view === 'sub') baseHelp = 'Enter=Open  S=Search  ESC=Groups  Backspace=Groups ';
     else baseHelp = '';
     this._writeStatus(this.view.toUpperCase()+': '+(this.selection+1)+'/'+this.items.length+' PgUp/PgDn Navigate '+baseHelp);
 };
@@ -730,15 +1525,29 @@ MessageBoard.prototype._loadThreadHeaders = function(limit){
     this.threadHeaders = [];
     var code = this.cursub || (this.items[this.selection] && this.items[this.selection].subCode) || bbs.cursub_code;
     if(!code) return;
+    if(!this._threadHeadersCache) this._threadHeadersCache = {};
+    var cacheKey = code + ':' + limit;
+    var cached = this._threadHeadersCache[cacheKey] || null;
     var mb = new MsgBase(code);
     if(!mb.open()) { return; }
     try {
         var total = mb.total_msgs;
         if(!total) return;
+        if(cached && cached.total === total && cached.headers){
+            this.threadHeaders = cached.headers.slice();
+            if(cached.fullHeaders){
+                if(!this._fullHeaders) this._fullHeaders = {};
+                for(var num in cached.fullHeaders){
+                    if(cached.fullHeaders.hasOwnProperty(num)) this._fullHeaders[num] = cached.fullHeaders[num];
+                }
+            }
+            return;
+        }
         var start = Math.max(1, total - limit + 1);
         for(var n=start; n<=total; n++) {
             var hdr = mb.get_msg_header(false, n, false);
             if(!hdr) continue;
+            this._storeFullHeader(hdr);
             this.threadHeaders.push({
                 number:n,
                 id: hdr.id,
@@ -752,10 +1561,20 @@ MessageBoard.prototype._loadThreadHeaders = function(limit){
     finally { try { mb.close(); } catch(e2) {} }
     // Basic chronological sort (oldest first). For threads we might group later.
     this.threadHeaders.sort(function(a,b){ return a.number - b.number; });
+    // Cache headers and associated full header details for reuse
+    var cacheHeaders = this.threadHeaders.slice();
+    var cacheFull = {};
+    if(this._fullHeaders){
+        for(var i=0;i<cacheHeaders.length;i++){
+            var num = cacheHeaders[i].number;
+            if(this._fullHeaders[num]) cacheFull[num] = this._fullHeaders[num];
+        }
+    }
+    this._threadHeadersCache[cacheKey] = { total: total, headers: cacheHeaders, fullHeaders: cacheFull };
 };
 
 MessageBoard.prototype._paintThreadList = function(){
-    var f = this.outputFrame; if(!f) return; f.clear();
+    var f = this._threadContentFrame || this.outputFrame; if(!f) return; f.clear();
     if(!this.threadHeaders.length){ f.putmsg('No messages'); return; }
     var h = f.height; var usable = h - 2; // leave top line for header maybe
     if(usable < 3) usable = h; // fallback
@@ -783,7 +1602,8 @@ MessageBoard.prototype._paintThreadList = function(){
         f.putmsg(text.substr(0,f.width));
         row++;
     }
-    this._writeStatus('THREADS: Enter=Read  P=Post  Backspace=Subs  '+(this.threadSelection+1)+'/'+this.threadHeaders.length);
+    this._writeStatus('THREADS: Enter=Read  P=Post  S=Search  Backspace=Subs  '+(this.threadSelection+1)+'/'+this.threadHeaders.length);
+    this._registerThreadSearchHotspot();
 };
 
 // ---- Thread Tree (using tree.js) ----
@@ -794,115 +1614,163 @@ MessageBoard.prototype._ensureTreeLib = function(){
 
 MessageBoard.prototype._buildThreadTree = function(){
     this.threadTree = null; this.threadNodeIndex = [];
-    if(!this.outputFrame) return;
-    this._dbg('buildThreadTree start headers='+this.threadHeaders.length);
-    // --- Subject-based fuzzy grouping ---
-    // We ignore reply_id chains and instead cluster messages whose normalized subjects
-    // are similar (after stripping GROUPING_PREFIXES like "Re: ").
-    // Simple fuzzy match: Levenshtein distance threshold relative to length plus prefix stripping.
-    // This keeps all messages for a logical topic under one expandable container node.
-
-    function normalizeSubject(raw){
-        if(!raw) return '(no subject)';
-        var s = ''+raw;
-        // Strip known prefixes repeatedly (case sensitive list provided by user)
-        var changed=true;
-        while(changed){
-            changed=false;
-            for(var p=0;p<GROUPING_PREFIXES.length;p++){
-                var pref=GROUPING_PREFIXES[p];
-                if(s.indexOf(pref)===0){ s = s.substr(pref.length); changed=true; break; }
-            }
-        }
-        s = s.replace(/^[\s\-_:]+/,'').replace(/[\s\-_:]+$/,'');
-        s = s.replace(/\s+/g,' ').toLowerCase();
-        return s || '(no subject)';
-    }
-    function levenshtein(a,b,max){
-        if(a===b) return 0; if(!a||!b) return (a||b).length; // crude
-        var al=a.length, bl=b.length;
-        if(Math.abs(al-bl) > max) return max+1; // early abort
-        var v0=new Array(bl+1), v1=new Array(bl+1);
-        for(var j=0;j<=bl;j++) v0[j]=j;
-        for(var i=0;i<al;i++){
-            v1[0]=i+1; var minRow=v1[0];
-            var ca=a.charCodeAt(i);
-            for(var j=0;j<bl;j++){
-                var cost = (ca===b.charCodeAt(j))?0:1;
-                var m = Math.min(
-                    v0[j+1] + 1, // deletion
-                    v1[j] + 1,   // insertion
-                    v0[j] + cost // substitution
-                );
-                v1[j+1]=m; if(m<minRow) minRow=m;
-            }
-            if(minRow>max) return max+1; // early abort
-            var tmp=v0; v0=v1; v1=tmp;
-        }
-        return v0[bl];
-    }
-    function threshold(len){ if(len<=8) return 1; if(len<=14) return 2; if(len<=25) return 3; return 4; }
-
-    var clusters=[]; // { canonical, display, msgs:[hdr], earliest:number }
-    for(var i=0;i<this.threadHeaders.length;i++){
-        var hdr=this.threadHeaders[i];
-        var canon = normalizeSubject(hdr.subject);
-        var placed=false; var bestMatch=null; var bestDist=9999;
-        for(var c=0;c<clusters.length;c++){
-            var cand=clusters[c];
-            var max=threshold(Math.max(cand.canonical.length, canon.length));
-            var dist=levenshtein(canon, cand.canonical, max);
-            if(dist<=max){
-                // choose closest cluster if multiple
-                if(dist<bestDist){ bestDist=dist; bestMatch=cand; }
-            }
-        }
-        if(bestMatch){
-            bestMatch.msgs.push(hdr);
-            if(hdr.number < bestMatch.earliest) bestMatch.earliest = hdr.number;
-            placed=true;
-        }
-        if(!placed){
-            clusters.push({ canonical: canon, display: canon, msgs:[hdr], earliest: hdr.number });
-        }
-    }
-    // Sort clusters by earliest message number (could choose last activity later)
-    clusters.sort(function(a,b){ return a.earliest - b.earliest; });
-    // Sort messages within each cluster chronologically
-    for(var cc=0; cc<clusters.length; cc++) clusters[cc].msgs.sort(function(a,b){ return a.number - b.number; });
-
-    var treeFrame = this.outputFrame; // reuse
+    var frame = this._threadContentFrame || this.outputFrame;
+    if(!frame) return;
     if (typeof Tree === 'undefined') { return; }
-    var root = new Tree(treeFrame, '');
-    // Inherit some colors to align with existing UI palette
-    root.colors.bg = BG_BLACK; root.colors.fg = LIGHTGRAY;
-    root.colors.lbg = BG_CYAN; root.colors.lfg = BLACK;
-    root.colors.xfg = YELLOW; root.colors.tfg = LIGHTCYAN;
-    for(var r=0; r<clusters.length; r++){
-        var cluster = clusters[r];
-        // Use the earliest message's subject for display (before normalization) if available
-        var firstMsg = cluster.msgs[0];
-        var displaySubj = firstMsg ? firstMsg.subject : cluster.canonical;
-        if(displaySubj) displaySubj = displaySubj.replace(/\s+/g,' ');
-        if(displaySubj.length > treeFrame.width - 25) displaySubj = displaySubj.substr(0, treeFrame.width - 28) + '...';
-        var containerLabel = '#'+cluster.earliest+' ('+cluster.msgs.length+') '+displaySubj;
-        var tnode = root.addTree(containerLabel); // container only
-        for(var m=0;m<cluster.msgs.length;m++){
-            var msg = cluster.msgs[m];
-            var msubj = msg.subject ? msg.subject.replace(/\s+/g,' ') : '(no subject)';
-            if(msubj.length > treeFrame.width - 25) msubj = msubj.substr(0, treeFrame.width - 28) + '...';
-            var itemLabel = msg.number+': '+msubj;
-            var item = tnode.addItem(itemLabel, (function(h){ return function(){ return h; };})(msg));
-            item.__msgHeader = msg;
-        }
-        // Leave closed by default
+
+    if(!this._fullHeaders) this._fullHeaders = {};
+    var rootMap = {};
+    var self = this;
+    function recordRoot(h){
+        if(!h) return;
+        var rid = h.thread_id || h.number;
+        if(rid) rootMap[rid] = true;
     }
-    root.open();
-    this.threadTree = root;
+    for(var num in self._fullHeaders){ if(self._fullHeaders.hasOwnProperty(num)) recordRoot(self._fullHeaders[num]); }
+    for(var i=0;i<self.threadHeaders.length;i++) recordRoot(self._fullHeaders[self.threadHeaders[i].number] || null);
+    var rootList = Object.keys(rootMap).map(function(v){ return parseInt(v,10); }).filter(function(n){ return n>0; });
+    if(!rootList.length) rootList = self.threadHeaders.map(function(h){ return h.number; });
+    rootList.sort(function(a,b){ return a-b; });
+
+    var treeRoot = new Tree(frame, '');
+    treeRoot.colors.bg = BG_BLACK; treeRoot.colors.fg = LIGHTGRAY;
+    treeRoot.colors.lbg = BG_BLUE; treeRoot.colors.lfg = WHITE;
+    treeRoot.colors.cbg = BG_BLUE; treeRoot.colors.cfg = WHITE;
+    treeRoot.colors.hfg = LIGHTCYAN; treeRoot.colors.tfg = LIGHTGRAY;
+    treeRoot.colors.xfg = CYAN;
+
+    var dateWidth = 12;
+    var fromWidth = 16;
+
+    function ensureHeader(num){
+        if(!num) return null;
+        if(self._fullHeaders && self._fullHeaders[num]) return self._fullHeaders[num];
+        var code = self.cursub || self._lastActiveSubCode || bbs.cursub_code;
+        if(!code) return null;
+        try {
+            var mb = new MsgBase(code);
+            if(!mb.open()) return null;
+            var hdr = mb.get_msg_header(false, num, false);
+            try { mb.close(); } catch(e){}
+            if(hdr){ self._storeFullHeader(hdr); return hdr; }
+        } catch(e){}
+        return self._fullHeaders[num] || null;
+    }
+
+    function fmtDate(msg){
+        var t = msg.when_written_time || msg.when_written || msg.when_imported_time || 0;
+        if(!t) return '--/-- --:--';
+        try { return strftime('%m-%d %H:%M', t); } catch(e) { return '--/-- --:--'; }
+    }
+
+    function fmtFrom(msg){ return (msg.from || msg.from_net || 'unknown'); }
+
+    function buildThreadLabel(rootHdr, count, width){
+        var subjectWidth = Math.max(12, width - (dateWidth + fromWidth + 12));
+        var label = '['+self._padLeft(''+(rootHdr.number||'?'),4,' ')+'] ';
+        label += self._padRight(fmtDate(rootHdr), dateWidth, ' ') + '  ';
+        label += self._padRight(fmtFrom(rootHdr).substr(0, fromWidth), fromWidth, ' ') + '  ';
+        var subj = rootHdr.subject || '(no subject)';
+        if(subj.length > subjectWidth) subj = subj.substr(0, subjectWidth-3)+'...';
+        label += subj + '  ('+count+' msg'+(count===1?'':'s')+')';
+        if(label.length > width) label = label.substr(0, width);
+        return label;
+    }
+
+    function buildItemLabel(msg, width){
+        var subjectWidth = Math.max(12, width - (dateWidth + fromWidth + 6));
+        var label = self._padRight(fmtDate(msg), dateWidth, ' ') + '  ';
+        label += self._padRight(fmtFrom(msg).substr(0, fromWidth), fromWidth, ' ') + '  ';
+        var subj = msg.subject || '(no subject)';
+        if(subj.length > subjectWidth) subj = subj.substr(0, subjectWidth-3)+'...';
+        label += subj;
+        if(label.length > width) label = label.substr(0, width);
+        return label;
+    }
+
+    for(var r=0; r<rootList.length; r++){
+        var rootId = rootList[r];
+        var seq = self._buildThreadSequence(rootId);
+        if(!seq || !seq.length){
+            var rootHdr = ensureHeader(rootId);
+            if(rootHdr) seq = [rootHdr]; else continue;
+        }
+        var rootHdr = seq[0];
+        if(seq.length === 1){
+            var solo = treeRoot.addItem(buildThreadLabel(rootHdr, 1, frame.width), (function(h){ return function(){ return h; };})(rootHdr));
+            solo.__msgHeader = rootHdr;
+            solo.__threadRootId = rootId;
+        } else {
+            var threadNode = treeRoot.addTree(buildThreadLabel(rootHdr, seq.length, frame.width));
+            threadNode.__msgHeader = rootHdr;
+            threadNode.__isTree = true;
+            threadNode.__threadRootId = rootId;
+            for(var i=0;i<seq.length;i++){
+                var msg = seq[i];
+                if(!msg) continue;
+                var item = threadNode.addItem(buildItemLabel(msg, frame.width), (function(h){ return function(){ return h; };})(msg));
+                item.__msgHeader = msg;
+            }
+        }
+    }
+
+    treeRoot.open();
+    this.threadTree = treeRoot;
     this._indexThreadTree();
-    root.refresh();
+    treeRoot.refresh();
     this._dbg('buildThreadTree done nodes='+this.threadNodeIndex.length);
 };
+MessageBoard.prototype._buildThreadSequence = function(rootId){
+    if(!rootId && this.lastReadMsg) rootId = this.lastReadMsg.thread_id || this.lastReadMsg.number;
+    var code = this.cursub || this._lastActiveSubCode || bbs.cursub_code;
+    if(!rootId || !code) return [];
+    if(!this._threadSequenceCache) this._threadSequenceCache = {};
+    if(this._threadSequenceCache[rootId]) return this._threadSequenceCache[rootId];
+
+    var self = this;
+    if(!this._fullHeaders) this._fullHeaders = {};
+    var mb = null;
+
+    function ensureHeader(num){
+        if(!num) return null;
+        if(self._fullHeaders && self._fullHeaders[num]) return self._fullHeaders[num];
+        try {
+            if(!mb){ mb = new MsgBase(code); if(!mb.open()){ mb = null; return null; } }
+            var hdr = mb.get_msg_header(false, num, false);
+            if(hdr){ self._storeFullHeader(hdr); return hdr; }
+        } catch(e){}
+        return self._fullHeaders[num] || null;
+    }
+
+    var root = ensureHeader(rootId);
+    if(!root){ if(mb){ try { mb.close(); } catch(e){} } return []; }
+
+    var sequence = [];
+    var visited = {};
+    function traverse(node){
+        if(!node || visited[node.number]) return;
+        visited[node.number] = true;
+        sequence.push(node);
+        var childNum = node.thread_first;
+        while(childNum){
+            if(visited[childNum]) break;
+            var child = ensureHeader(childNum);
+            if(!child) break;
+            traverse(child);
+            var nextNum = child.thread_next;
+            if(!nextNum || visited[nextNum]) break;
+            childNum = nextNum;
+        }
+    }
+
+    traverse(root);
+    if(mb){ try { mb.close(); } catch(e){} }
+    if(!sequence.length) return [];
+    this._threadSequenceCache[rootId] = sequence;
+    return sequence;
+};
+
+
 
 
 MessageBoard.prototype._indexThreadTree = function(){
@@ -935,7 +1803,7 @@ MessageBoard.prototype._indexThreadTree = function(){
 };
 
 MessageBoard.prototype._paintThreadTree = function(){
-    var f=this.outputFrame; if(!f) return; f.clear();
+    var f=this._threadContentFrame || this.outputFrame; if(!f) return; f.clear();
     if(!this.threadTree){ f.putmsg('Loading thread tree...'); return; }
     this._dbg('paintThreadTree selection='+this.threadTreeSelection);
     // Ensure tree frame matches output frame dims
@@ -958,7 +1826,7 @@ MessageBoard.prototype._paintThreadTree = function(){
     }
     setCurrent(targetNode);
     this.threadTree.refresh();
-    this._writeStatus('THREADS (tree): Enter=Expand/Read  Space=Expand/Collapse  Backspace=Subs  '+(this.threadTreeSelection+1)+'/'+this.threadNodeIndex.length);
+    this._writeStatus('THREADS (tree): Enter=Expand/Read  Space=Expand/Collapse  S=Search  Backspace=Subs  '+(this.threadTreeSelection+1)+'/'+this.threadNodeIndex.length);
     try { f.cycle(); } catch(e){}
     // Add hotspots for visible nodes (excluding beyond 36)
     if(typeof console.clear_hotspots === 'function'){ try { console.clear_hotspots(); } catch(e){} }
@@ -987,7 +1855,8 @@ MessageBoard.prototype._paintThreadTree = function(){
         if(this.threadNodeIndex.length && (this.threadNodeIndex[this.threadNodeIndex.length-1].__row > lastVisibleAbs)) overflow = true;
         if(mappedCount >= chars.length && this.threadNodeIndex.length > mappedCount) overflow = true;
     }
-    if(overflow) this._writeStatus('THREADS (tree): Enter=Expand/Read  Space=Expand/Collapse  Backspace=Subs  '+(this.threadTreeSelection+1)+'/'+this.threadNodeIndex.length+' (Scroll / hotspots '+mappedCount+'/'+chars.length+')');
+    if(overflow) this._writeStatus('THREADS (tree): Enter=Expand/Read  Space=Expand/Collapse  S=Search  Backspace=Subs  '+(this.threadTreeSelection+1)+'/'+this.threadNodeIndex.length+' (Scroll / hotspots '+mappedCount+'/'+chars.length+')');
+    this._registerThreadSearchHotspot();
 };
 
 MessageBoard.prototype._handleThreadTreeKey = function(key){
@@ -1006,6 +1875,11 @@ MessageBoard.prototype._handleThreadTreeKey = function(key){
         case '\x1B':
             this._renderSubView(this.curgrp); 
             return false;
+        case '/':
+        case 'S':
+        case 's':
+            this._focusThreadSearch('');
+            return true;
         case ' ': // Space toggles expand/collapse if tree node
             var node = this.threadNodeIndex[this.threadTreeSelection];
             if(node && node.__isTree){ if(node.status & node.__flags__.CLOSED) node.open(); else node.close(); this._paintThreadTree(); }
@@ -1041,7 +1915,11 @@ MessageBoard.prototype._handleThreadsKey = function(key){
         return true;
     }
     var oldSel = this.threadSelection;
-    var f = this.outputFrame; var usable = f ? f.height - 2 : 10; if(usable<3) usable = f?f.height:10;
+    var f = this._threadContentFrame || this.outputFrame; var usable = f ? f.height - 2 : 10; if(usable<3) usable = f?f.height:10;
+    if((key===KEY_UP || key===KEY_PAGEUP) && this.threadSelection===0){
+        this._focusThreadSearch('');
+        return true;
+    }
     switch(key){
         case KEY_UP: this.threadSelection=Math.max(0,this.threadSelection-1); break;
         case KEY_DOWN: this.threadSelection=Math.min(this.threadHeaders.length-1,this.threadSelection+1); break;
@@ -1077,13 +1955,19 @@ MessageBoard.prototype._handleGroupKey = function(key){
         var item=this.items[this.selection];
         if(item){
             if (item.type === 'quit') { this.exit(); return false; }
+            if (item.type === 'search') { this._promptSearch(this._lastActiveSubCode || this.cursub || null, 'group'); return false; }
             if (item.type === 'group') { this._renderSubView(item.groupIndex); return false; }
         }
         return false;
     }
+    else if (key==='S' || key==='s' || key==='/') { this._promptSearch(this._lastActiveSubCode || this.cursub || null, 'group'); return false; }
     else if (key===KEY_PAGEUP) { this.selection=Math.max(0,this.selection-maxVisible); }
     else if (key===KEY_PAGEDN) { this.selection=Math.min(this.items.length-1,this.selection+maxVisible); }
-    if (this.selection!==oldSel) { this._paintIconGrid(); }
+    if (this.selection!==oldSel) {
+        var current = this.items[this.selection];
+        if(current && current.subCode) this._lastActiveSubCode = current.subCode;
+        this._paintIconGrid();
+    }
     return true;
 };
 
@@ -1107,9 +1991,14 @@ MessageBoard.prototype._handleSubKey = function(key){
         }
         return false;
     }
+    else if (key==='S' || key==='s' || key==='/') { this._searchReturnView = 'sub'; this._promptSearch(this._lastActiveSubCode || null, 'sub'); return false; }
     else if (key===KEY_PAGEUP) { this.selection=Math.max(0,this.selection-maxVisible); }
     else if (key===KEY_PAGEDN) { this.selection=Math.min(this.items.length-1,this.selection+maxVisible); }
-    if (this.selection!==oldSel) { this._paintIconGrid(); }
+    if (this.selection!==oldSel) {
+        var current = this.items[this.selection];
+        if(current && current.subCode) this._lastActiveSubCode = current.subCode;
+        this._paintIconGrid();
+    }
     return true;
 };
 
@@ -1147,12 +2036,21 @@ MessageBoard.prototype._computeNonSpecialOrdinals = function(){
     for (var i=0;i<this.items.length;i++) {
         var it = this.items[i];
         if (!it) continue;
-        if (it.type === 'quit' || it.type === 'groups') {
+        if (it.type === 'quit' || it.type === 'groups' || it.type === 'search') {
             this._nonSpecialOrdinals[i] = 0; // special indicator
         } else {
             count++; this._nonSpecialOrdinals[i] = count;
         }
     }
+};
+
+MessageBoard.prototype._findMenuIndexByType = function(type){
+    if(!this.items || !this.items.length) return -1;
+    for(var i=0; i<this.items.length; i++){
+        var it = this.items[i];
+        if(it && it.type === type) return i;
+    }
+    return -1;
 };
 
 

@@ -36,7 +36,7 @@ Icon.prototype._renderAvatar = function(iconW, iconH) {
         this.iconFrame.blit(bin, 10, 6, 0, 0);
         return true;
     } else {
-        this.iconFrame.clear(BG_BLACK|LIGHTGRAY);
+        this.iconFrame.clear(ICSH_ATTR('FRAME_STANDARD'));
         return false;
     }
 };
@@ -72,7 +72,7 @@ Icon.prototype._renderFallbackBg = function(hasBg, hasFg) {
 };
 
 Icon.prototype._renderLabel = function(iconW) {
-    this.labelFrame.clear(BG_BLACK|LIGHTGRAY);
+    this.labelFrame.clear(ICSH_ATTR('FRAME_STANDARD'));
     this.labelFrame.home();
     var name = this.data.label || "";
     var hotkey = this.data.hotkey || null;

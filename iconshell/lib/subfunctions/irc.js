@@ -36,15 +36,15 @@ load('text.js');
 
 	IrcSection.prototype._ensureFrames = function(){
 		if(!this.parentFrame){
-			this.parentFrame = new Frame(1,1,console.screen_columns,console.screen_rows,BG_BLACK|LIGHTGRAY);
+			this.parentFrame = new Frame(1,1,console.screen_columns,console.screen_rows,ICSH_ATTR('IRC_LIST'));
 			this.parentFrame.open();
 		}
 		if(!this.listFrame){
 			var h = Math.max(1,this.parentFrame.height-1);
-			this.listFrame = new Frame(1,1,this.parentFrame.width,h,BG_BLACK|LIGHTGRAY,this.parentFrame); this.listFrame.open();
+			this.listFrame = new Frame(1,1,this.parentFrame.width,h,ICSH_ATTR('IRC_LIST'),this.parentFrame); this.listFrame.open();
 		}
 		if(!this.statusFrame){
-			this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,BG_BLUE|WHITE,this.parentFrame); this.statusFrame.open();
+			this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,ICSH_ATTR('IRC_STATUS'),this.parentFrame); this.statusFrame.open();
 		}
 	};
 
