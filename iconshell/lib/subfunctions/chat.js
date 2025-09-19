@@ -10,12 +10,33 @@ function Chat(jsonchat) {
     this.parentFrame = null;
     this.chatInputFrame = null;
     this.leftAvatarFrame = null;
-    this.centerMsgFrame = null;
+    this.leftMsgFrame = null;
+    this.rightMsgFrame = null;
     this.rightAvatarFrame = null;
     this.messageFrames = [];
     this.done = null;
     this.lastSender = null; // State tracking for last sender
     this.lastRow = 0; // State tracking for last rendered row
+    this.avatarWidth = 10;
+    this.avatarHeight = 6;
+    this._needsRedraw = false;
+    this._lastMessageSignature = null;
+    this._lastRenderedSide = 'right';
+    this.timer = null;
+    this._crumbMessages = [];
+    this._crumbIndex = 0;
+    this._crumbTimerEvent = null;
+    this._crumbCycleIntervalMs = 5000;
+    var indicatorColor = (typeof CYAN !== 'undefined') ? CYAN : undefined;
+    if (!indicatorColor && typeof LIGHTCYAN !== 'undefined') indicatorColor = LIGHTCYAN;
+    if (!indicatorColor && typeof WHITE !== 'undefined') indicatorColor = WHITE;
+    this._messageIndicatorColor = indicatorColor;
+    var wrapColor = (typeof BLUE !== 'undefined') ? BLUE : undefined;
+    if (!wrapColor && typeof LIGHTBLUE !== 'undefined') wrapColor = LIGHTBLUE;
+    this._wrapIndicatorColor = wrapColor || indicatorColor;
+    this._timestampColor = (typeof LIGHTBLUE !== 'undefined') ? LIGHTBLUE : ((typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : indicatorColor);
+    this._lastRenderTs = 0;
+    this._pendingMessage = null;
     // Configurable group line color and pad character
     this.groupLineColor = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_GROUP_LINE) ? ICSH_VALS.CHAT_GROUP_LINE : MAGENTA;
 }
@@ -29,10 +50,17 @@ function Chat(jsonchat) {
 //     Chat.prototype.constructor = Chat;
 // }
 
-    Chat.prototype.enter = function(done){
+Chat.prototype.enter = function(done){
     this.done = done;
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
     this.initFrames();
+    this.running = true;
+    this._needsRedraw = true;
+    this._lastMessageSignature = null;
+    this._lastRenderTs = 0;
+    this._stopCrumbCycle();
+    this._crumbMessages = [];
+    this._crumbIndex = 0;
     this.draw();
     // Start periodic redraw timer (every minute) using Synchronet Timer
 }
@@ -44,10 +72,24 @@ Chat.prototype.exit = function(){
             this._redrawEvent.abort = true;
             this._redrawEvent = null;
         }
+    this._stopCrumbCycle();
+    this.running = false;
     this.cleanup();
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
     this.done();
 }
+
+Chat.prototype.attachShellTimer = function(timer) {
+    this.timer = timer || null;
+    if (this.running && this._crumbMessages.length > 0) {
+        this._restartCrumbTimer();
+    }
+};
+
+Chat.prototype.detachShellTimer = function() {
+    this._stopCrumbCycle();
+    this.timer = null;
+};
 Chat.prototype.handleKey = function(key){
     // ESC key (string '\x1B')
     if (key === '\x1B') {
@@ -102,23 +144,16 @@ Chat.prototype.updateInputFrame = function() {
     this.chatInputFrame.clear();
     this.chatInputFrame.gotoxy(2, 1);
     this.chatInputFrame.putmsg('You: ' + this.input + '_');
-    this.chatInputFrame.gotoxy(2, 2);
-    this.chatInputFrame.putmsg('[ESC to exit chat]');
+    this._refreshCrumbMessages();
     this.chatInputFrame.cycle();
 };
 
 // Efficiently append new messages to the chat (call this from IconShell on new message event)
 Chat.prototype.updateChat = function(packet) {
-    // Efficiently append a new message using renderMessage, only redraw if needed
-    dbug("Called update chat", "chat");
-    // Clear frames before redraw
-    if (this.leftAvatarFrame) this.leftAvatarFrame.clear();
-    if (this.centerMsgFrame) this.centerMsgFrame.clear();
-    if (this.rightAvatarFrame) this.rightAvatarFrame.clear();
-    if (this.chatInputFrame) this.chatInputFrame.clear();
-    // Always refresh to ensure model is up-to-date before rendering
-    this.draw(packet);
-    this.refresh();
+    dbug('updateChat invoked', 'chat');
+    if (packet) this._pendingMessage = packet;
+    this._needsRedraw = true;
+    if (this.running) this.draw();
 };
 
 Chat.prototype.cleanup = function(){
@@ -127,9 +162,13 @@ Chat.prototype.cleanup = function(){
         this.leftAvatarFrame.close();
         this.leftAvatarFrame = null;
     }
-    if (this.centerMsgFrame) {
-        this.centerMsgFrame.close();
-        this.centerMsgFrame = null;
+    if (this.leftMsgFrame) {
+        this.leftMsgFrame.close();
+        this.leftMsgFrame = null;
+    }
+    if (this.rightMsgFrame) {
+        this.rightMsgFrame.close();
+        this.rightMsgFrame = null;
     }
     if (this.rightAvatarFrame) {
         this.rightAvatarFrame.close();
@@ -159,277 +198,778 @@ Chat.prototype.initFrames = function() {
 	var h = this.parentFrame.height;
 	// Chat output area (above input)
 	var outputH = h - 3;
-	// Three horizontal frames: left avatar, center message, right avatar
-	this.leftAvatarFrame = new Frame(1, 1, 10, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-	this.centerMsgFrame = new Frame(11, 1, w - 20, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-	this.rightAvatarFrame = new Frame(w - 9, 1, 10, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+	var avatarWidth = this.avatarWidth || 10;
+	if ((avatarWidth * 2) >= (w - 4)) avatarWidth = Math.max(2, Math.floor(w / 4));
+	if (avatarWidth < 2) avatarWidth = 2;
+	this.avatarWidth = avatarWidth;
+	var messageAreaWidth = Math.max(2, w - (avatarWidth * 2));
+	var leftMsgWidth = Math.max(2, Math.floor(messageAreaWidth / 2));
+	var rightMsgWidth = Math.max(2, messageAreaWidth - leftMsgWidth);
+	var leftAvatarX = 1;
+	var rightAvatarX = w - avatarWidth + 1;
+	var leftMsgX = leftAvatarX + avatarWidth;
+	var rightMsgX = rightAvatarX - rightMsgWidth;
+	// Column frames: avatar/message pairs on each side
+	this.leftAvatarFrame = new Frame(leftAvatarX, 1, avatarWidth, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+	this.leftMsgFrame = new Frame(leftMsgX, 1, leftMsgWidth, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+	this.rightMsgFrame = new Frame(rightMsgX, 1, rightMsgWidth, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+	this.rightAvatarFrame = new Frame(rightAvatarX, 1, avatarWidth, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
 	this.leftAvatarFrame.open();
-	this.centerMsgFrame.open();
+	this.leftMsgFrame.open();
+	this.rightMsgFrame.open();
 	this.rightAvatarFrame.open();
+	this.leftMsgFrame.word_wrap = true;
+	this.leftMsgFrame.h_scroll = false;
+	this.leftMsgFrame.v_scroll = false;
+	this.rightMsgFrame.word_wrap = true;
+	this.rightMsgFrame.h_scroll = false;
+	this.rightMsgFrame.v_scroll = false;
 	// Chat input frame (bottom)
 	this.chatInputFrame = new Frame(1, h - 2, w, 2, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.parentFrame);
 	this.chatInputFrame.open();
 };
 
 Chat.prototype.refresh = function(){
-	this.jsonchat.cycle();
-	this.draw();
+	this._needsRedraw = true;
+	this.cycle();
 }
 
-Chat.prototype.draw = function(newMsg) {
-    if (!this.leftAvatarFrame || !this.centerMsgFrame || !this.rightAvatarFrame || !this.chatInputFrame) this.initFrames();
-    var chan = this.jsonchat ? this.jsonchat.channels[this.channel.toUpperCase()] : null;
-    var messages = chan ? chan.messages : [];
-    if(newMsg) {
-        messages.push(newMsg);
+Chat.prototype.cycle = function(){
+    if (!this.running) return;
+    if (this.jsonchat && typeof this.jsonchat.cycle === 'function') {
+        this.jsonchat.cycle();
     }
-    // Filter out messages without a valid nick.name property
-    messages = messages.filter(function(msg) {
-        return msg && msg.nick && typeof msg.nick.name === 'string' && msg.nick.name.length > 0;
-    });
-    var maxRows = this.centerMsgFrame.height;
-    var centerWidth = this.centerMsgFrame.width;
-    var avatarHeight = 6;
-    var avatarWidth = 10;
-    var maxMsgWidth = Math.floor(centerWidth / 2);
+    var messages = this._getChannelMessages();
+    var signature = this._computeMessageSignature(messages);
+    if (this._needsRedraw || signature !== this._lastMessageSignature) {
+        this.draw();
+    }
+};
+
+Chat.prototype.draw = function() {
+    if (!this.leftAvatarFrame || !this.leftMsgFrame || !this.rightMsgFrame || !this.rightAvatarFrame || !this.chatInputFrame) {
+        this.initFrames();
+    }
+
+    var channelMessages = this._getChannelMessages();
+    var signature = this._computeMessageSignature(channelMessages);
+    var renderMessages = channelMessages.slice();
+    if (this._pendingMessage) {
+        renderMessages.push(this._pendingMessage);
+    }
+
+    var groups = this._groupMessages(renderMessages);
+    var visibleGroups = this._selectRenderableGroups(groups);
+
+    this._clearChatFrames();
     this.messageFrames = [];
-    var avatarLib = load({}, '../exec/load/avatar_lib.js');
 
-    // Refactored steps
-    var senderGroups = this._collectSenderGroups(messages, maxRows, maxMsgWidth, avatarHeight);
-    var avatarMap = this._collectAvatarMap(senderGroups, avatarLib, avatarWidth, avatarHeight);
-    this._drawAvatars(avatarMap, avatarLib, avatarWidth, avatarHeight);
-    var lastMsgInfo = this._renderMessages(messages, maxRows, maxMsgWidth, centerWidth, senderGroups);
-    this._drawLastDivider(messages, maxMsgWidth, centerWidth, lastMsgInfo.row, lastMsgInfo.side);
+    if (visibleGroups.length > 0) {
+        this._renderGroups(visibleGroups);
+        var tail = visibleGroups[visibleGroups.length - 1];
+        this.lastSender = tail.sender;
+        this.lastRow = tail.renderEnd || 0;
+        this._lastRenderedSide = tail.side;
+    } else {
+        this.lastSender = null;
+        this.lastRow = 0;
+    }
+
+    this._renderAvatars(visibleGroups);
     this._drawInputFrame();
-    this.parentFrame.cycle();
-}
+    if (this.parentFrame) this.parentFrame.cycle();
 
-// Helper: collect sender groups and avatar placements
-Chat.prototype._collectSenderGroups = function(messages, maxRows, maxMsgWidth, avatarHeight) {
-    var avatarPlacements = { left: [], right: [] };
-    var yCursor = 1;
+    this._lastMessageSignature = signature;
+    this._needsRedraw = false;
+    this._pendingMessage = null;
+    this._lastRenderTs = Date.now();
+};
+
+Chat.prototype._clearChatFrames = function() {
+    if (this.leftAvatarFrame) this.leftAvatarFrame.clear();
+    if (this.rightAvatarFrame) this.rightAvatarFrame.clear();
+    if (this.leftMsgFrame) this.leftMsgFrame.clear();
+    if (this.rightMsgFrame) this.rightMsgFrame.clear();
+};
+
+Chat.prototype._groupMessages = function(messages) {
+    var groups = [];
     var lastSender = null;
-    var side = 'left';
-    var senderGroups = [];
-    var currentGroup = null;
-    for (var i = Math.max(0, messages.length - maxRows); i < messages.length; i++) {
+    var currentSide = 'right';
+
+    for (var i = 0; i < messages.length; i++) {
         var msg = messages[i];
-        if (msg && msg.nick && msg.nick.name && (msg.str || msg.text)) {
-            var from = msg.nick.name;
-            var isFirstMessage = (lastSender === null);
-            var msgText = from + ': ' + (msg.str || msg.text || '');
-            var lines = wrapText(msgText, maxMsgWidth);
-            if (isFirstMessage || from !== lastSender) {
-                side = (side === 'left') ? 'right' : 'left';
-                var col = (side === 'left') ? 'left' : 'right';
-                avatarPlacements[col].push({ user: from, y: yCursor, height: avatarHeight });
-                if (currentGroup) senderGroups.push(currentGroup);
-                currentGroup = { sender: from, start: yCursor, end: yCursor + lines.length - 1 };
-            } else {
-                if (currentGroup) currentGroup.end = yCursor + lines.length - 1;
-            }
-            yCursor += lines.length;
-            lastSender = from;
+        if (!msg || !msg.nick || typeof msg.nick.name !== 'string') continue;
+        var sender = msg.nick.name;
+        var text = this._extractMessageText(msg);
+        if (!text || text.replace(/\s+/g, '') === '') continue;
+
+        if (sender !== lastSender) {
+            currentSide = (currentSide === 'left') ? 'right' : 'left';
+            groups.push({
+                sender: sender,
+                side: currentSide,
+                messages: [],
+                lastTime: msg.time || Date.now(),
+                messageLines: [],
+                lineCount: 0,
+                renderStart: 0,
+                renderEnd: 0
+            });
+        }
+
+        var group = groups[groups.length - 1];
+        group.messages.push(msg);
+        group.lastTime = msg.time || group.lastTime;
+        lastSender = sender;
+    }
+
+    return groups;
+};
+
+Chat.prototype._selectRenderableGroups = function(groups) {
+    if (!this.leftMsgFrame || !this.rightMsgFrame || groups.length === 0) return [];
+
+    var height = this.leftMsgFrame.height;
+    var selected = [];
+    var totalLines = 0;
+
+    for (var i = groups.length - 1; i >= 0; i--) {
+        var group = groups[i];
+        var width = group.side === 'left' ? this.leftMsgFrame.width : this.rightMsgFrame.width;
+        group.messageLines = this._wrapGroupMessages(group, width);
+        group.lineCount = group.messageLines.length + 1; // header line + content
+
+        if (group.lineCount === 0) continue;
+
+        if (selected.length === 0 && group.lineCount > height) {
+            var room = Math.max(1, height - 1);
+            group.messageLines = group.messageLines.slice(Math.max(0, group.messageLines.length - room));
+            group.lineCount = group.messageLines.length + 1;
+            selected.unshift(group);
+            totalLines = group.lineCount;
+            break;
+        }
+
+        if (totalLines + group.lineCount <= height || selected.length === 0) {
+            selected.unshift(group);
+            totalLines += group.lineCount;
+        } else {
+            break;
         }
     }
-    if (currentGroup) senderGroups.push(currentGroup);
-    senderGroups.avatarPlacements = avatarPlacements;
-    return senderGroups;
-}
 
-// Helper: collect avatar map
-Chat.prototype._collectAvatarMap = function(senderGroups, avatarLib, avatarWidth, avatarHeight) {
-    return {
-        left: packAvatars(senderGroups.avatarPlacements.left),
-        right: packAvatars(senderGroups.avatarPlacements.right)
-    };
-}
+    return selected;
+};
 
-// Helper: draw avatars
-Chat.prototype._drawAvatars = function(avatarMap, avatarLib, avatarWidth, avatarHeight) {
-    var avatarDrawn = { left: {}, right: {} };
-    var colnames = ['left', 'right'];
-    for (var c = 0; c < colnames.length; c++) {
-        var col = colnames[c];
-        var oppositeFrame = (col === 'left') ? this.rightAvatarFrame : this.leftAvatarFrame;
-        for (var i = 0; i < avatarMap[col].length; i++) {
-            var a = avatarMap[col][i];
-            if (avatarDrawn[col][a.user]) continue;
-            var usernum = system.matchuser(a.user);
-            var avatarArt = null;
-            if (usernum && typeof avatarLib.read === 'function') {
-                var avatarObj = avatarLib.read(usernum, a.user);
-                if (avatarObj && avatarObj.data) avatarArt = base64_decode(avatarObj.data);
-            }
-            if (avatarArt && avatarArt.length >= avatarWidth * avatarHeight * 2) {
-                blitAvatarToFrame(oppositeFrame, avatarArt, avatarWidth, Math.min(avatarHeight, a.height), 1, a.y);
-            } else {
-                oppositeFrame.gotoxy(1, a.y);
-                oppositeFrame.putmsg('[ ]');
-            }
-            avatarDrawn[col][a.user] = true;
+Chat.prototype._wrapGroupMessages = function(group, width) {
+    var lines = [];
+    var indicatorWidth = 2; // '> ' consumes two columns
+    var available = Math.max(1, width - indicatorWidth);
+
+    for (var m = 0; m < group.messages.length; m++) {
+        var text = this._extractMessageText(group.messages[m]);
+        if (!text) continue;
+        var wrapped = this._wrapPlainText(text, available);
+        for (var w = 0; w < wrapped.length; w++) {
+            var segment = wrapped[w];
+            if (segment === undefined || segment === null) continue;
+            var content = segment;
+            if (!content || !content.replace(/\s+/g, '').length) continue;
+            lines.push({ text: content, message: group.messages[m], isFirstLine: (w === 0) });
         }
     }
-}
 
-// Helper: render messages
-Chat.prototype._renderMessages = function(messages, maxRows, maxMsgWidth, centerWidth, senderGroups) {
-    var y = 1;
-    var lastSender = null;
-    var side = 'left';
-    var firstGroup = true;
-    var prevMsg = null;
-    var lastMsgSide = 'left';
-    for (var i = Math.max(0, messages.length - maxRows); i < messages.length; i++) {
-        var msg = messages[i];
-        var prevMsg = (i > Math.max(0, messages.length - maxRows)) ? messages[i - 1] : null;
-        if (prevMsg && msg.nick && prevMsg.nick && msg.nick.name === prevMsg.nick.name && msg.time === prevMsg.time) {
+    return lines;
+};
+
+Chat.prototype._wrapPlainText = function(text, width) {
+    var normalized = (text || '').toString().replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    var segments = normalized.split('\n');
+    var lines = [];
+
+    for (var i = 0; i < segments.length; i++) {
+        var segment = segments[i];
+        if (segment.length === 0) {
+            lines.push('');
             continue;
         }
-        if (msg && msg.nick && msg.nick.name && (msg.str || msg.text)) {
-            var from = msg.nick.name;
-            var isFirstMessage = (lastSender === null);
-            var msgText = from + ': ' + (msg.str || msg.text || '');
-            var lines = wrapText(msgText, maxMsgWidth);
-            var senderChanged = isFirstMessage || from !== lastSender;
-            if (senderChanged) {
-                if (!firstGroup && y > 1 && prevMsg) {
-                    var curTime = Date.now();
-                    var prevTime = (prevMsg && typeof prevMsg.time === 'number') ? prevMsg.time : undefined;
-                    var dividerStr = getDividerString(side, maxMsgWidth, prevTime, curTime);
-                    var drawY = y;
-                    this.centerMsgFrame.gotoxy(2, drawY);
-                    this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
-                    if (side === 'left') {
-                        this.centerMsgFrame.gotoxy(2, drawY);
-                        this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
-                        var rightHalf = (lines[0].length >= maxMsgWidth)
-                            ? lines[0].slice(-maxMsgWidth)
-                            : Array((maxMsgWidth - lines[0].length)).join(' ') + lines[0];
-                        this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
-                        this.centerMsgFrame.putmsg(rightHalf);
-                    } else {
-                        var msgPadLen = maxMsgWidth - lines[0].length;
-                        if (msgPadLen < 0) msgPadLen = 0;
-                        var leftHalf = lines[0] + Array(msgPadLen + 1).join(' ');
-                        this.centerMsgFrame.gotoxy(2, drawY);
-                        this.centerMsgFrame.putmsg(leftHalf);
-                        this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
-                        this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
-                    }
-                    this.messageFrames.push({msg: msg, y: drawY, side: (side === 'left') ? 'right' : 'left'});
-                    y += 1;
-                } else {
-                    var drawY = y;
-                    this.centerMsgFrame.gotoxy(2, drawY);
-                    this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
-                    if (side === 'left') {
-                        var msgPadLen = maxMsgWidth - lines[0].length;
-                        if (msgPadLen < 0) msgPadLen = 0;
-                        var leftHalf = lines[0] + Array(msgPadLen + 1).join(' ');
-                        this.centerMsgFrame.gotoxy(2, drawY);
-                        this.centerMsgFrame.putmsg(leftHalf);
-                    } else {
-                        var rightHalf = (lines[0].length >= maxMsgWidth)
-                            ? lines[0].slice(-maxMsgWidth)
-                            : Array((maxMsgWidth - lines[0].length)).join(' ') + lines[0];
-                        this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
-                        this.centerMsgFrame.putmsg(rightHalf);
-                    }
-                    this.messageFrames.push({msg: msg, y: drawY, side: (side === 'left') ? 'right' : 'left'});
-                    y += 1;
-                }
-                for (var l = 1; l < lines.length; l++) {
-                    var drawY = y;
-                    var msgStr = lines[l];
-                    this.centerMsgFrame.gotoxy(2, drawY);
-                    this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
-                    if (side === 'left') {
-                        var msgPadLen = maxMsgWidth - msgStr.length;
-                        if (msgPadLen < 0) msgPadLen = 0;
-                        var leftHalf = msgStr + Array(msgPadLen + 1).join(' ');
-                        this.centerMsgFrame.gotoxy(2, drawY);
-                        this.centerMsgFrame.putmsg(leftHalf);
-                    } else {
-                        var rightHalf = (msgStr.length >= maxMsgWidth)
-                            ? msgStr.slice(-maxMsgWidth)
-                            : Array((maxMsgWidth - msgStr.length)).join(' ') + msgStr;
-                        this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
-                        this.centerMsgFrame.putmsg(rightHalf);
-                    }
-                    this.messageFrames.push({msg: msg, y: drawY, side: side});
-                    y += 1;
-                }
-                if (!firstGroup) {
-                    side = (side === 'left') ? 'right' : 'left';
-                }
-                firstGroup = false;
+        if (typeof word_wrap === 'function') {
+            var wrapped = word_wrap(segment, width, segment.length, false).split(/\r?\n/);
+            for (var w = 0; w < wrapped.length; w++) {
+                if (wrapped[w] !== undefined) lines.push(wrapped[w]);
+            }
+        } else {
+            for (var pos = 0; pos < segment.length; pos += width) {
+                lines.push(segment.substr(pos, width));
+            }
+        }
+    }
+
+    return lines;
+};
+
+Chat.prototype._formatTimestamp = function(currentMs, previousMs) {
+    if (typeof createTimestamp === 'function') {
+        return createTimestamp(currentMs, previousMs);
+    }
+
+    if (typeof currentMs !== 'number' || isNaN(currentMs)) return '';
+    var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+    var dt = new Date(currentMs);
+    return pad(dt.getHours()) + ':' + pad(dt.getMinutes());
+};
+
+Chat.prototype._formatGroupHeader = function(sender, width) {
+    var safeSender = (sender || '').toString();
+    if (safeSender.length > width) {
+        safeSender = safeSender.substr(0, width);
+    }
+    return safeSender;
+};
+
+Chat.prototype._extractMessageText = function(msg) {
+    if (!msg) return '';
+    if (typeof msg.str === 'string' && msg.str.length > 0) return msg.str;
+    if (typeof msg.text === 'string' && msg.text.length > 0) return msg.text;
+    return '';
+};
+
+Chat.prototype._computeMessageSignature = function(messages) {
+    if (!messages || !messages.length) return '0';
+    var last = messages[messages.length - 1] || {};
+    return messages.length + ':' + (last.time || 0) + ':' + (last.nick && last.nick.name ? last.nick.name : '');
+};
+
+Chat.prototype._getChannelMessages = function() {
+    if (!this.jsonchat || !this.jsonchat.channels) return [];
+    var chan = this.jsonchat.channels[this.channel.toUpperCase()];
+    if (!chan || !Array.isArray(chan.messages)) return [];
+    return chan.messages;
+};
+
+Chat.prototype._renderGroups = function(groups) {
+    if (!this.leftMsgFrame || !this.rightMsgFrame) return;
+
+    var y = 1;
+
+    for (var g = 0; g < groups.length; g++) {
+        var group = groups[g];
+        var frame = group.side === 'left' ? this.leftMsgFrame : this.rightMsgFrame;
+        var otherFrame = group.side === 'left' ? this.rightMsgFrame : this.leftMsgFrame;
+        var width = frame.width;
+        var prevTime = (g > 0) ? groups[g - 1].lastTime : undefined;
+        var timestamp = this._formatTimestamp(group.lastTime, prevTime);
+        var headerParts = this._prepareHeaderParts(group.sender, timestamp, width);
+
+        var overlap = (g > 0 && groups[g - 1].side !== group.side);
+        if (overlap) {
+            var reuseRow = groups[g - 1].renderEnd || (y - 1);
+            if (reuseRow && reuseRow >= 1) y = reuseRow;
+        }
+        if (y < 1) y = 1;
+
+        if (y > frame.height) break;
+        group.renderStart = y;
+
+        this._renderGroupHeader(frame, otherFrame, y, headerParts, group.side, overlap);
+        this.messageFrames.push({ msg: group.messages[group.messages.length - 1], y: y, side: group.side, isHeader: true });
+        y += 1;
+
+        for (var l = 0; l < group.messageLines.length; l++) {
+            if (y > frame.height) break;
+        var contentEntry = group.messageLines[l];
+        if (!contentEntry || !contentEntry.text) continue;
+        var contentLine = contentEntry.text;
+        var isFirstLine = !!contentEntry.isFirstLine;
+        this._writeLineToFrames(frame, otherFrame, y, contentLine, false, group.side, isFirstLine);
+        this.messageFrames.push({ msg: contentEntry.message || group.messages[group.messages.length - 1], y: y, side: group.side });
+        y += 1;
+    }
+
+        group.renderEnd = y - 1;
+    }
+
+    this.lastRow = Math.max(0, y - 1);
+};
+
+Chat.prototype._prepareHeaderParts = function(sender, timestamp, width) {
+    var name = (sender || '').toString();
+    if (width <= 0) return { name: '', timestamp: '' };
+
+    if (name.length > width) {
+        name = name.substr(0, width);
+        return { name: name, timestamp: '' };
+    }
+
+    var ts = timestamp ? timestamp.toString() : '';
+    if (!ts.length) return { name: name, timestamp: '' };
+
+    var fits = name.length + 1 + ts.length <= width;
+    if (!fits) {
+        var compact = this._compactTimestamp(ts);
+        if (name.length + 1 + compact.length <= width) {
+            ts = compact;
+            fits = true;
+        } else {
+            var maxTs = Math.max(0, width - name.length - 1);
+            if (maxTs <= 0) {
+                ts = '';
             } else {
-                for (var l = 0; l < lines.length; l++) {
-                    var drawY = y;
-                    var msgStr = lines[l];
-                    this.centerMsgFrame.gotoxy(2, drawY);
-                    this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
-                    if (side === 'left') {
-                        var msgPadLen = maxMsgWidth - msgStr.length;
-                        if (msgPadLen < 0) msgPadLen = 0;
-                        var leftHalf = msgStr + Array(msgPadLen + 1).join(' ');
-                        this.centerMsgFrame.gotoxy(2, drawY);
-                        this.centerMsgFrame.putmsg(leftHalf);
-                    } else {
-                        var rightHalf = (msgStr.length >= maxMsgWidth)
-                            ? msgStr.slice(-maxMsgWidth)
-                            : Array((maxMsgWidth - msgStr.length)).join(' ') + msgStr;
-                        this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
-                        this.centerMsgFrame.putmsg(rightHalf);
-                    }
-                    this.messageFrames.push({msg: msg, y: drawY, side: side});
-                    y += 1;
+                if (compact.length > maxTs) compact = compact.substr(compact.length - maxTs);
+                ts = compact;
+            }
+        }
+    }
+
+    return { name: name, timestamp: ts };
+};
+
+Chat.prototype._compactTimestamp = function(text) {
+    if (!text) return '';
+    var compact = text.toString();
+    compact = compact.replace(/hours?/g, 'h');
+    compact = compact.replace(/minutes?/g, 'm');
+    compact = compact.replace(/seconds?/g, 's');
+    compact = compact.replace(/\bago\b/, 'ago');
+    compact = compact.replace(/\bToday\s*/i, '');
+    compact = compact.replace(/\bYesterday\s*/i, 'yday ');
+    compact = compact.replace(/\s+/g, ' ').trim();
+    if (compact === 'just now') compact = 'now';
+    return compact;
+};
+
+Chat.prototype._renderGroupHeader = function(primary, secondary, row, parts, side, preserveSecondary) {
+    if (!primary || !secondary || !parts) return;
+    var width = primary.width;
+    var name = parts.name || '';
+    var timestamp = parts.timestamp || '';
+    var tsColor = this._timestampColor || this.groupLineColor;
+
+    primary.gotoxy(1, row);
+    primary.clearline();
+    primary.gotoxy(1, row);
+
+    var segments = [];
+    if (side === 'left') {
+        if (name) segments.push({ text: name, attr: this.groupLineColor });
+        if (timestamp && name) segments.push({ text: ' ', attr: undefined });
+        if (timestamp) segments.push({ text: timestamp, attr: tsColor });
+    } else {
+        if (timestamp) segments.push({ text: timestamp, attr: tsColor });
+        if (timestamp && name) segments.push({ text: ' ', attr: undefined });
+        if (name) segments.push({ text: name, attr: this.groupLineColor });
+    }
+    if (segments.length === 0) return;
+
+    var totalLen = 0;
+    for (var i = 0; i < segments.length; i++) {
+        totalLen += segments[i].text.length;
+    }
+
+    var remaining = width;
+    if (side === 'right') {
+        var pad = Math.max(0, width - totalLen);
+        if (pad > 0) {
+            primary.putmsg(Array(pad + 1).join(' '));
+            remaining -= pad;
+        }
+    }
+
+    for (var s = 0; s < segments.length && remaining > 0; s++) {
+        var segText = segments[s].text;
+        if (segText.length > remaining) {
+            if (side === 'right') {
+                segText = segText.substr(segText.length - remaining);
+            } else {
+                segText = segText.substr(0, remaining);
+            }
+        }
+        if (segText.length > 0) {
+            primary.putmsg(segText, segments[s].attr);
+            remaining -= segText.length;
+        }
+    }
+
+    if (!preserveSecondary && secondary) {
+        secondary.gotoxy(1, row);
+        secondary.clearline();
+    }
+};
+
+Chat.prototype._writeLineToFrames = function(primary, secondary, row, text, isHeader, side, isFirstLine) {
+    if (!primary || !secondary || row < 1) return;
+
+    if (isHeader) {
+        this._renderGroupHeader(primary, secondary, row, { name: text || '', timestamp: '' }, side, false);
+        return;
+    }
+
+    var displayText = text || '';
+    var width = primary.width;
+    if (typeof isFirstLine === 'undefined') isFirstLine = true;
+
+    primary.gotoxy(1, row);
+    primary.clearline();
+    primary.gotoxy(1, row);
+
+    var indicatorAttr = this._messageIndicatorColor;
+    var wrapAttr = this._wrapIndicatorColor || indicatorAttr;
+    if (side === 'right') {
+        var trimmed = displayText;
+        var maxContent = Math.max(0, width - 2);
+        if (trimmed.length > maxContent) trimmed = trimmed.substr(trimmed.length - maxContent);
+        var totalLen = trimmed.length + 2;
+        var pad = Math.max(0, width - totalLen);
+        if (pad > 0) primary.putmsg(Array(pad + 1).join(' '));
+        if (trimmed.length > 0) primary.putmsg(trimmed);
+        primary.putmsg(' ');
+        var attr = isFirstLine ? indicatorAttr : wrapAttr;
+        if (attr !== undefined && attr !== null) {
+            primary.putmsg('<', attr);
+        } else {
+            primary.putmsg('<');
+        }
+    } else {
+        var available = Math.max(1, width - 2);
+        if (displayText.length > available) displayText = displayText.substr(0, available);
+        var attr = isFirstLine ? indicatorAttr : wrapAttr;
+        if (attr !== undefined && attr !== null) {
+            primary.putmsg('>', attr);
+        } else {
+            primary.putmsg('>');
+        }
+        primary.putmsg(' ' + displayText);
+    }
+
+    secondary.gotoxy(1, row);
+    secondary.clearline();
+};
+
+Chat.prototype._refreshCrumbMessages = function() {
+    if (!this.chatInputFrame) return;
+    var width = this._getCrumbContentWidth();
+    var messages = [];
+    if (width > 0) {
+        var context = this._buildCrumbContext();
+        var primary = this._fitCrumbText(this._formatPrimaryCrumb(context), width);
+        var listSegments = this._buildUserListSegments(context.userNames, width);
+        messages.push(primary);
+        for (var i = 0; i < listSegments.length; i++) {
+            messages.push(listSegments[i]);
+        }
+    }
+    if (messages.length === 0) messages = [''];
+    this._updateCrumbMessageSet(messages);
+};
+
+Chat.prototype._getCrumbContentWidth = function() {
+    if (!this.chatInputFrame) return 0;
+    return Math.max(1, this.chatInputFrame.width - 1);
+};
+
+Chat.prototype._buildCrumbContext = function() {
+    var currentUser = (typeof user !== 'undefined' && user && user.alias) ? user.alias : 'You';
+    var channelName = this.channel || 'main';
+    var upperChannel = channelName.toUpperCase();
+    var chan = (this.jsonchat && this.jsonchat.channels) ? this.jsonchat.channels[upperChannel] : null;
+    var rawUsers = (chan && chan.users) ? chan.users : [];
+    var names = [];
+    var seen = {};
+    if (rawUsers) {
+        var isArray = (typeof Array !== 'undefined' && Array.isArray) ? Array.isArray(rawUsers) : (Object.prototype.toString.call(rawUsers) === '[object Array]');
+        if (isArray) {
+            for (var i = 0; i < rawUsers.length; i++) {
+                var entry = rawUsers[i];
+                var name = entry ? (entry.nick || entry.name || entry.user || entry.alias || '') : '';
+                if (name && !seen[name]) {
+                    seen[name] = true;
+                    names.push(name);
                 }
             }
-            lastSender = from;
-            lastMsgSide = side;
-            prevMsg = msg;
         } else {
-            try { 
-                // log('[CHAT:SKIP] ' + JSON.stringify(msg));
-            } catch (e) {}
+            for (var key in rawUsers) {
+                if (!rawUsers.hasOwnProperty(key)) continue;
+                var obj = rawUsers[key];
+                var uname = obj ? (obj.nick || obj.name || obj.user || obj.alias || key) : key;
+                if (uname && !seen[uname]) {
+                    seen[uname] = true;
+                    names.push(uname);
+                }
+            }
         }
     }
-    return { row: y, side: lastMsgSide };
-}
+    return {
+        currentUser: currentUser,
+        channelName: channelName,
+        userCount: names.length,
+        userNames: names
+    };
+};
 
-// Helper: draw last divider
-Chat.prototype._drawLastDivider = function(messages, maxMsgWidth, centerWidth) {
-    var prevMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-    log("DRAW DIVIDER prev msg", JSON.stringify(prevMsg));
-    var y = arguments.length > 3 ? arguments[3] : this.centerMsgFrame.height;
-    var side = arguments.length > 4 ? arguments[4] : 'left';
-    if (messages.length > 0 && prevMsg) {
-        var lastMsgTime = prevMsg.time;
-        // (prevMsg && typeof prevMsg.time === 'number') ? new Date(prevMsg.time) : undefined;
-        var currentMsgTime = Date.now();
-        var dividerStr = getDividerString(side, maxMsgWidth, lastMsgTime, currentMsgTime );
-        var drawY = y;
-        this.centerMsgFrame.gotoxy(2, drawY);
-        this.centerMsgFrame.putmsg(Array(centerWidth + 1).join(' '));
-        if (side === 'left') {
-            this.centerMsgFrame.gotoxy(2, drawY);
-            this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
-        } else {
-            this.centerMsgFrame.gotoxy(2 + maxMsgWidth, drawY);
-            this.centerMsgFrame.putmsg(dividerStr, this.groupLineColor);
+Chat.prototype._formatPrimaryCrumb = function(context) {
+    var countText = context.userCount === 1 ? '1 user' : context.userCount + ' users';
+    return context.currentUser + ' chatting in ' + context.channelName + '. ' + countText + ' here [ESC exit]';
+};
+
+Chat.prototype._fitCrumbText = function(text, width) {
+    if (!text) return '';
+    if (text.length <= width) return text;
+    return text.substr(0, width);
+};
+
+Chat.prototype._buildUserListSegments = function(names, width) {
+    var label = 'Users here: ';
+    var fullList;
+    if (!names || names.length === 0) {
+        fullList = label + '(none)';
+    } else {
+        fullList = label + this._joinUserNames(names);
+    }
+    return this._chunkCrumbText(fullList, width);
+};
+
+Chat.prototype._joinUserNames = function(names) {
+    if (!names || names.length === 0) return '';
+    if (names.length === 1) return names[0];
+    if (names.length === 2) return names[0] + ' & ' + names[1];
+    var head = names.slice(0, names.length - 1).join(', ');
+    return head + ' & ' + names[names.length - 1];
+};
+
+Chat.prototype._chunkCrumbText = function(text, width) {
+    var chunks = [];
+    if (!text || width <= 0) return chunks;
+    var remaining = text;
+    while (remaining.length > 0) {
+        if (remaining.length <= width) {
+            chunks.push(remaining);
+            break;
+        }
+        var sliceLen = width;
+        for (var i = width; i > 0; i--) {
+            var ch = remaining.charAt(i - 1);
+            if (ch === ' ' || ch === ',' || ch === '&') {
+                sliceLen = i;
+                break;
+            }
+        }
+        if (sliceLen <= 0) sliceLen = width;
+        var segment = remaining.substr(0, sliceLen).trim();
+        if (!segment.length) segment = remaining.substr(0, width);
+        chunks.push(segment);
+        remaining = remaining.substr(sliceLen);
+        remaining = remaining.replace(/^[\s,]+/, '');
+    }
+    return chunks;
+};
+
+Chat.prototype._updateCrumbMessageSet = function(messages) {
+    if (!messages || messages.length === 0) messages = [''];
+    var changed = !this._crumbMessages || this._crumbMessages.length !== messages.length;
+    if (!changed) {
+        for (var i = 0; i < messages.length; i++) {
+            if (this._crumbMessages[i] !== messages[i]) {
+                changed = true;
+                break;
+            }
         }
     }
-}
+    if (changed) {
+        this._crumbMessages = messages;
+        this._crumbIndex = 0;
+        if (this.running) this._restartCrumbTimer();
+    }
+    this._writeCrumbMessage(this._getCurrentCrumbMessage());
+};
+
+Chat.prototype._getCurrentCrumbMessage = function() {
+    if (!this._crumbMessages || this._crumbMessages.length === 0) return '';
+    if (this._crumbIndex < 0 || this._crumbIndex >= this._crumbMessages.length) {
+        this._crumbIndex = 0;
+    }
+    return this._crumbMessages[this._crumbIndex] || '';
+};
+
+Chat.prototype._writeCrumbMessage = function(text) {
+    if (!this.chatInputFrame) return;
+    this.chatInputFrame.gotoxy(1, 2);
+    this.chatInputFrame.clearline();
+    this.chatInputFrame.gotoxy(2, 2);
+    if (!text) text = '';
+    var width = this._getCrumbContentWidth();
+    if (text.length > width) text = text.substr(0, width);
+    this.chatInputFrame.putmsg(text);
+};
+
+Chat.prototype._advanceCrumbMessage = function() {
+    if (!this._crumbMessages || this._crumbMessages.length <= 1) return;
+    this._crumbIndex = (this._crumbIndex + 1) % this._crumbMessages.length;
+    this._writeCrumbMessage(this._getCurrentCrumbMessage());
+    if (this.chatInputFrame) this.chatInputFrame.cycle();
+};
+
+Chat.prototype._restartCrumbTimer = function() {
+    this._stopCrumbCycle();
+    if (!this.timer || typeof this.timer.addEvent !== 'function' || !this.running) return;
+    var self = this;
+    this._crumbTimerEvent = this.timer.addEvent(this._crumbCycleIntervalMs, true, function() {
+        self._advanceCrumbMessage();
+    });
+};
+
+Chat.prototype._stopCrumbCycle = function() {
+    if (this._crumbTimerEvent && this._crumbTimerEvent.abort !== undefined) {
+        this._crumbTimerEvent.abort = true;
+    }
+    this._crumbTimerEvent = null;
+};
+
+Chat.prototype._renderAvatars = function(groups) {
+    if (!this.leftAvatarFrame || !this.rightAvatarFrame || groups.length === 0) return;
+
+    var aggregated = { left: {}, right: {} };
+
+    for (var g = 0; g < groups.length; g++) {
+        var group = groups[g];
+        if (!group || !group.sender || group.renderEnd < group.renderStart) continue;
+
+        var side = group.side === 'left' ? 'left' : 'right';
+        var frame = (side === 'left') ? this.leftAvatarFrame : this.rightAvatarFrame;
+        if (!frame || frame.height <= 0) continue;
+
+        var frameHeight = frame.height;
+        var startY = Math.max(1, Math.min(group.renderStart || 1, frameHeight));
+        var endY = Math.max(startY, Math.min(group.renderEnd || startY, frameHeight));
+        var height = Math.max(1, endY - startY + 1);
+        var center = startY + ((height - 1) / 2);
+
+        if (!aggregated[side][group.sender]) {
+            aggregated[side][group.sender] = {
+                rangeStart: startY,
+                rangeEnd: endY,
+                weightSum: 0,
+                weightTotal: 0
+            };
+        }
+
+        var bucket = aggregated[side][group.sender];
+        bucket.rangeStart = Math.min(bucket.rangeStart, startY);
+        bucket.rangeEnd = Math.max(bucket.rangeEnd, endY);
+        bucket.weightSum += center * height;
+        bucket.weightTotal += height;
+    }
+
+    var placements = { left: [], right: [] };
+    var sides = ['left', 'right'];
+    for (var s = 0; s < sides.length; s++) {
+        var sideKey = sides[s];
+        var frameRef = (sideKey === 'left') ? this.leftAvatarFrame : this.rightAvatarFrame;
+        if (!frameRef || frameRef.height <= 0) continue;
+
+        var frameHeightRef = frameRef.height;
+        var users = Object.keys(aggregated[sideKey]);
+        users.sort(function(a, b) {
+            return aggregated[sideKey][a].rangeStart - aggregated[sideKey][b].rangeStart;
+        });
+
+        for (var u = 0; u < users.length; u++) {
+            var user = users[u];
+            var info = aggregated[sideKey][user];
+            var rangeStart = Math.max(1, Math.min(info.rangeStart, frameHeightRef));
+            var rangeEnd = Math.max(rangeStart, Math.min(info.rangeEnd, frameHeightRef));
+            var rangeHeight = Math.max(1, rangeEnd - rangeStart + 1);
+            var weightedCenter = info.weightTotal
+                ? (info.weightSum / info.weightTotal)
+                : rangeStart + ((rangeHeight - 1) / 2);
+
+            if (weightedCenter < rangeStart) weightedCenter = rangeStart;
+            if (weightedCenter > rangeEnd) weightedCenter = rangeEnd;
+
+            var avatarMaxHeight = this.avatarHeight || rangeHeight;
+            var targetHeight = Math.max(1, Math.min(rangeHeight, avatarMaxHeight));
+            targetHeight = Math.min(targetHeight, frameHeightRef);
+
+            var minTop = Math.max(1, Math.min(rangeStart, frameHeightRef - targetHeight + 1));
+            var maxTop = Math.max(minTop, Math.min(rangeEnd - targetHeight + 1, frameHeightRef - targetHeight + 1));
+            var desiredTop = Math.round(weightedCenter - ((targetHeight - 1) / 2));
+            if (desiredTop < minTop) desiredTop = minTop;
+            if (desiredTop > maxTop) desiredTop = maxTop;
+
+            placements[sideKey].push({
+                user: user,
+                y: desiredTop,
+                height: targetHeight,
+                available: rangeHeight
+            });
+        }
+    }
+
+    var avatarLib = load({}, '../exec/load/avatar_lib.js');
+    var leftPacked = packAvatars(placements.left, this.leftAvatarFrame.height);
+    var rightPacked = packAvatars(placements.right, this.rightAvatarFrame.height);
+
+    this._drawAvatarSet(this.leftAvatarFrame, leftPacked, avatarLib);
+    this._drawAvatarSet(this.rightAvatarFrame, rightPacked, avatarLib);
+};
+
+Chat.prototype._drawAvatarSet = function(frame, avatarList, avatarLib) {
+    if (!frame || !Array.isArray(avatarList)) return;
+
+    var drawnUsers = {};
+    var frameWidth = frame.width;
+    var artWidth = Math.min(this.avatarWidth || frameWidth, frameWidth);
+    var artHeight = this.avatarHeight || frame.height;
+
+    for (var i = 0; i < avatarList.length; i++) {
+        var placement = avatarList[i];
+        if (!placement || !placement.user || drawnUsers[placement.user]) continue;
+
+        var availableHeight = placement.available || placement.height;
+        var frameRemaining = Math.max(1, frame.height - placement.y + 1);
+        var desiredHeight = Math.min(availableHeight, artHeight);
+        var targetHeight = Math.min(frameRemaining, Math.max(placement.height, desiredHeight));
+        if (placement.y < 1 || placement.y > frame.height || targetHeight <= 0) continue;
+
+        var avatarArt = null;
+        if (avatarLib && typeof avatarLib.read === 'function' && typeof system !== 'undefined' && typeof system.matchuser === 'function') {
+            var usernum = system.matchuser(placement.user);
+            if (usernum) {
+                var avatarObj = avatarLib.read(usernum, placement.user);
+                if (avatarObj && avatarObj.data) avatarArt = base64_decode(avatarObj.data);
+            }
+        }
+
+        frame.gotoxy(1, placement.y);
+        frame.clearline();
+        frame.gotoxy(1, placement.y);
+
+        var rendered = false;
+        if (avatarArt) {
+            var artRowCount = Math.floor(avatarArt.length / (artWidth * 2));
+            var usableHeight = Math.min(targetHeight, artRowCount);
+            if (usableHeight > 0) {
+                blitAvatarToFrame(frame, avatarArt, artWidth, usableHeight, 1, placement.y);
+                rendered = true;
+            }
+        }
+
+        if (!rendered) {
+            var initialsWidth = Math.max(1, frameWidth - 2);
+            var initials = placement.user.substr(0, initialsWidth).toUpperCase();
+            var label = '[' + initials + ']';
+            frame.putmsg(label.substr(0, frameWidth));
+        }
+
+        drawnUsers[placement.user] = true;
+    }
+};
 
 // Helper: draw input frame
 Chat.prototype._drawInputFrame = function() {
+    if (!this.chatInputFrame) return;
+    this.chatInputFrame.clear();
     this.chatInputFrame.gotoxy(2, 1);
     this.chatInputFrame.putmsg('You: ' + this.input + '_');
-    this.chatInputFrame.gotoxy(2, 2);
-    this.chatInputFrame.putmsg('[ESC to exit chat]');
+    this._refreshCrumbMessages();
 }
-
-

@@ -132,6 +132,9 @@ IconShell.prototype.main = function() {
             if(this.timer){
                 this.timer.cycle();
             }
+            if (this.activeSubprogram && typeof this.activeSubprogram.cycle === 'function') {
+                this.activeSubprogram.cycle();
+            }
             // If a subprogram launch was queued, process it now (after previous key fully handled)
             if (this._pendingSubLaunch) {
                 var p = this._pendingSubLaunch; delete this._pendingSubLaunch;
@@ -363,7 +366,6 @@ IconShell.prototype.showToast = function(params) {
     this.toasts.push(toast);
     return toast;
 };
-
 
 
 
