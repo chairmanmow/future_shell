@@ -13,6 +13,7 @@ function Chat(jsonchat) {
     this.leftMsgFrame = null;
     this.rightMsgFrame = null;
     this.rightAvatarFrame = null;
+    this.chatSpacerFrame = null;
     this.messageFrames = [];
     this.done = null;
     this.lastSender = null; // State tracking for last sender
@@ -27,6 +28,10 @@ function Chat(jsonchat) {
     this._crumbIndex = 0;
     this._crumbTimerEvent = null;
     this._crumbCycleIntervalMs = 5000;
+    this.scrollOffset = 0;
+    this._maxScrollOffset = 0;
+    this._userScrolled = false;
+    this._totalLineCount = 0;
     var indicatorColor = (typeof CYAN !== 'undefined') ? CYAN : undefined;
     if (!indicatorColor && typeof LIGHTCYAN !== 'undefined') indicatorColor = LIGHTCYAN;
     if (!indicatorColor && typeof WHITE !== 'undefined') indicatorColor = WHITE;
@@ -61,6 +66,10 @@ Chat.prototype.enter = function(done){
     this._stopCrumbCycle();
     this._crumbMessages = [];
     this._crumbIndex = 0;
+    this.scrollOffset = 0;
+    this._maxScrollOffset = 0;
+    this._userScrolled = false;
+    this._totalLineCount = 0;
     this.draw();
     // Start periodic redraw timer (every minute) using Synchronet Timer
 }
@@ -91,6 +100,47 @@ Chat.prototype.detachShellTimer = function() {
     this.timer = null;
 };
 Chat.prototype.handleKey = function(key){
+    var scrollHandled = false;
+    var pageStep = (this.leftMsgFrame && this.leftMsgFrame.height) ? Math.max(1, this.leftMsgFrame.height - 1) : 5;
+
+    switch (key) {
+        case KEY_UP:
+        case '\x1B[A':
+            scrollHandled = this._adjustScrollOffset(1);
+            break;
+        case KEY_DOWN:
+        case '\x1B[B':
+            scrollHandled = this._adjustScrollOffset(-1);
+            break;
+        case KEY_PGUP:
+            scrollHandled = this._adjustScrollOffset(pageStep);
+            break;
+        case KEY_PGDN:
+            scrollHandled = this._adjustScrollOffset(-pageStep);
+            break;
+        case KEY_HOME:
+            scrollHandled = this._setScrollOffset(this._maxScrollOffset || 0);
+            break;
+        case KEY_END:
+            scrollHandled = this._setScrollOffset(0);
+            break;
+        case KEY_LEFT:
+        case '\x1B[D':
+            scrollHandled = this._adjustScrollOffset(1);
+            break;
+        case KEY_RIGHT:
+        case '\x1B[C':
+            scrollHandled = this._adjustScrollOffset(-1);
+            break;
+        case 'wheel_up':
+            scrollHandled = this._adjustScrollOffset(1);
+            break;
+        case 'wheel_down':
+            scrollHandled = this._adjustScrollOffset(-1);
+            break;
+    }
+
+    if (scrollHandled) return;
     // ESC key (string '\x1B')
     if (key === '\x1B') {
         this.exit();
@@ -174,6 +224,10 @@ Chat.prototype.cleanup = function(){
         this.rightAvatarFrame.close();
         this.rightAvatarFrame = null;
     }
+    if (this.chatSpacerFrame) {
+        this.chatSpacerFrame.close();
+        this.chatSpacerFrame = null;
+    }
     if (this.chatInputFrame) {
         this.chatInputFrame.close();
         this.chatInputFrame = null;
@@ -197,27 +251,43 @@ Chat.prototype.initFrames = function() {
 	var w = this.parentFrame.width;
 	var h = this.parentFrame.height;
 	// Chat output area (above input)
-	var outputH = h - 3;
-	var avatarWidth = this.avatarWidth || 10;
-	if ((avatarWidth * 2) >= (w - 4)) avatarWidth = Math.max(2, Math.floor(w / 4));
-	if (avatarWidth < 2) avatarWidth = 2;
-	this.avatarWidth = avatarWidth;
-	var messageAreaWidth = Math.max(2, w - (avatarWidth * 2));
-	var leftMsgWidth = Math.max(2, Math.floor(messageAreaWidth / 2));
-	var rightMsgWidth = Math.max(2, messageAreaWidth - leftMsgWidth);
-	var leftAvatarX = 1;
-	var rightAvatarX = w - avatarWidth + 1;
-	var leftMsgX = leftAvatarX + avatarWidth;
-	var rightMsgX = rightAvatarX - rightMsgWidth;
-	// Column frames: avatar/message pairs on each side
-	this.leftAvatarFrame = new Frame(leftAvatarX, 1, avatarWidth, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-	this.leftMsgFrame = new Frame(leftMsgX, 1, leftMsgWidth, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-	this.rightMsgFrame = new Frame(rightMsgX, 1, rightMsgWidth, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-	this.rightAvatarFrame = new Frame(rightAvatarX, 1, avatarWidth, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-	this.leftAvatarFrame.open();
-	this.leftMsgFrame.open();
-	this.rightMsgFrame.open();
-	this.rightAvatarFrame.open();
+    var outputH = h - 3;
+    var avatarWidth = this.avatarWidth || 10;
+    if ((avatarWidth * 2) >= (w - 4)) avatarWidth = Math.max(2, Math.floor(w / 4));
+    if (avatarWidth < 2) avatarWidth = 2;
+    this.avatarWidth = avatarWidth;
+    var gapRows = outputH > 1 ? 1 : 0;
+    var messageHeight = Math.max(1, outputH - gapRows);
+    var spacerY = messageHeight + 1;
+    if (gapRows > 0 && spacerY >= outputH + 1) {
+        // Not enough room for spacer; fall back to full height.
+        gapRows = 0;
+        messageHeight = outputH;
+    }
+
+    var messageAreaWidth = Math.max(2, w - (avatarWidth * 2));
+    var leftMsgWidth = Math.max(2, Math.floor(messageAreaWidth / 2));
+    var rightMsgWidth = Math.max(2, messageAreaWidth - leftMsgWidth);
+    var leftAvatarX = 1;
+    var rightAvatarX = w - avatarWidth + 1;
+    var leftMsgX = leftAvatarX + avatarWidth;
+    var rightMsgX = rightAvatarX - rightMsgWidth;
+    // Column frames: avatar/message pairs on each side with optional spacer row
+    this.leftAvatarFrame = new Frame(leftAvatarX, 1, avatarWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+    this.leftMsgFrame = new Frame(leftMsgX, 1, leftMsgWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+    this.rightMsgFrame = new Frame(rightMsgX, 1, rightMsgWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+    this.rightAvatarFrame = new Frame(rightAvatarX, 1, avatarWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+    this.leftAvatarFrame.open();
+    this.leftMsgFrame.open();
+    this.rightMsgFrame.open();
+    this.rightAvatarFrame.open();
+    if (gapRows > 0) {
+        this.chatSpacerFrame = new Frame(1, spacerY, w, gapRows, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+        this.chatSpacerFrame.open();
+        this.chatSpacerFrame.clear();
+    } else {
+        this.chatSpacerFrame = null;
+    }
 	this.leftMsgFrame.word_wrap = true;
 	this.leftMsgFrame.h_scroll = false;
 	this.leftMsgFrame.v_scroll = false;
@@ -259,23 +329,30 @@ Chat.prototype.draw = function() {
     }
 
     var groups = this._groupMessages(renderMessages);
-    var visibleGroups = this._selectRenderableGroups(groups);
+    this._prepareGroupLayouts(groups);
+    var layout = this._buildLayoutLines(groups);
+    var windowInfo = this._resolveScrollWindow(layout.totalLines);
 
     this._clearChatFrames();
     this.messageFrames = [];
 
-    if (visibleGroups.length > 0) {
-        this._renderGroups(visibleGroups);
-        var tail = visibleGroups[visibleGroups.length - 1];
-        this.lastSender = tail.sender;
-        this.lastRow = tail.renderEnd || 0;
-        this._lastRenderedSide = tail.side;
+    if (layout.totalLines > 0 && windowInfo.endLine > windowInfo.startLine) {
+        this._renderGroups(groups, layout.lines, windowInfo.startLine, windowInfo.endLine);
+        var tailGroup = this._findLastVisibleGroup(groups);
+        if (tailGroup) {
+            this.lastSender = tailGroup.sender;
+            this.lastRow = tailGroup.renderEnd || 0;
+            this._lastRenderedSide = tailGroup.side;
+        } else {
+            this.lastSender = null;
+            this.lastRow = Math.max(0, windowInfo.endLine - windowInfo.startLine);
+        }
     } else {
         this.lastSender = null;
         this.lastRow = 0;
     }
 
-    this._renderAvatars(visibleGroups);
+    this._renderAvatars(groups);
     this._drawInputFrame();
     if (this.parentFrame) this.parentFrame.cycle();
 
@@ -290,6 +367,7 @@ Chat.prototype._clearChatFrames = function() {
     if (this.rightAvatarFrame) this.rightAvatarFrame.clear();
     if (this.leftMsgFrame) this.leftMsgFrame.clear();
     if (this.rightMsgFrame) this.rightMsgFrame.clear();
+    if (this.chatSpacerFrame) this.chatSpacerFrame.clear();
 };
 
 Chat.prototype._groupMessages = function(messages) {
@@ -327,39 +405,132 @@ Chat.prototype._groupMessages = function(messages) {
     return groups;
 };
 
-Chat.prototype._selectRenderableGroups = function(groups) {
-    if (!this.leftMsgFrame || !this.rightMsgFrame || groups.length === 0) return [];
+Chat.prototype._prepareGroupLayouts = function(groups) {
+    if (!this.leftMsgFrame || !this.rightMsgFrame || !groups || groups.length === 0) return groups;
 
-    var height = this.leftMsgFrame.height;
-    var selected = [];
-    var totalLines = 0;
-
-    for (var i = groups.length - 1; i >= 0; i--) {
+    for (var i = 0; i < groups.length; i++) {
         var group = groups[i];
         var width = group.side === 'left' ? this.leftMsgFrame.width : this.rightMsgFrame.width;
         group.messageLines = this._wrapGroupMessages(group, width);
-        group.lineCount = group.messageLines.length + 1; // header line + content
+        group.lineCount = group.messageLines.length + 1;
+    }
 
-        if (group.lineCount === 0) continue;
+    return groups;
+};
 
-        if (selected.length === 0 && group.lineCount > height) {
-            var room = Math.max(1, height - 1);
-            group.messageLines = group.messageLines.slice(Math.max(0, group.messageLines.length - room));
-            group.lineCount = group.messageLines.length + 1;
-            selected.unshift(group);
-            totalLines = group.lineCount;
-            break;
+Chat.prototype._buildLayoutLines = function(groups) {
+    var layout = { lines: [], totalLines: 0 };
+    if (!groups || groups.length === 0) return layout;
+
+    var lineIndex = 0;
+    for (var g = 0; g < groups.length; g++) {
+        var group = groups[g];
+        var prevGroup = (g > 0) ? groups[g - 1] : null;
+        var overlap = (prevGroup && prevGroup.side !== group.side);
+        if (overlap && lineIndex > 0) {
+            lineIndex -= 1;
         }
 
-        if (totalLines + group.lineCount <= height || selected.length === 0) {
-            selected.unshift(group);
-            totalLines += group.lineCount;
-        } else {
-            break;
+        var prevTime = prevGroup ? prevGroup.lastTime : undefined;
+        var timestamp = this._formatTimestamp(group.lastTime, prevTime);
+
+        layout.lines.push({
+            index: lineIndex,
+            type: 'header',
+            group: group,
+            side: group.side,
+            timestamp: timestamp,
+            overlap: overlap
+        });
+
+        lineIndex += 1;
+
+        for (var m = 0; m < group.messageLines.length; m++) {
+            var entry = group.messageLines[m];
+            layout.lines.push({
+                index: lineIndex,
+                type: 'message',
+                group: group,
+                side: group.side,
+                text: entry.text,
+                message: entry.message || group.messages[group.messages.length - 1],
+                isFirstLine: !!entry.isFirstLine
+            });
+            lineIndex += 1;
         }
     }
 
-    return selected;
+    layout.totalLines = lineIndex;
+    return layout;
+};
+
+Chat.prototype._resolveScrollWindow = function(totalLines) {
+    var height = (this.leftMsgFrame && this.leftMsgFrame.height) ? this.leftMsgFrame.height : 0;
+    if (height <= 0) height = 1;
+
+    if (!this._userScrolled) {
+        this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, totalLines));
+    }
+
+    if (this._userScrolled && typeof this._totalLineCount === 'number' && totalLines > this._totalLineCount) {
+        this.scrollOffset += (totalLines - this._totalLineCount);
+    }
+
+    this._totalLineCount = totalLines;
+    this._maxScrollOffset = Math.max(0, totalLines - height);
+
+    if (this.scrollOffset > this._maxScrollOffset) this.scrollOffset = this._maxScrollOffset;
+    if (this.scrollOffset < 0) this.scrollOffset = 0;
+    if (this.scrollOffset === 0) this._userScrolled = false;
+
+    var startLine = Math.max(0, totalLines - height - this.scrollOffset);
+    var endLine = Math.min(totalLines, startLine + height);
+
+    return { startLine: startLine, endLine: endLine, height: height };
+};
+
+Chat.prototype._findLastVisibleGroup = function(groups) {
+    if (!groups) return null;
+    for (var i = groups.length - 1; i >= 0; i--) {
+        var group = groups[i];
+        if (group && group.renderEnd !== undefined && group.renderEnd >= group.renderStart && group.renderEnd >= 1) {
+            return group;
+        }
+    }
+    return null;
+};
+
+Chat.prototype._adjustScrollOffset = function(delta) {
+    if (!this.leftMsgFrame || typeof delta !== 'number' || delta === 0) return false;
+
+    var prev = this.scrollOffset || 0;
+    var max = this._maxScrollOffset || 0;
+    var next = prev + delta;
+    if (next < 0) next = 0;
+    if (next > max) next = max;
+    if (next === prev) return false;
+
+    return this._setScrollOffset(next);
+};
+
+Chat.prototype._setScrollOffset = function(value) {
+    if (!this.leftMsgFrame) return false;
+
+    if (this.scrollOffset === 0 && value === 0) {
+        this._userScrolled = false;
+    }
+    if (typeof value !== 'number' || isNaN(value)) value = 0;
+
+    var max = this._maxScrollOffset || 0;
+    if (value < 0) value = 0;
+    if (value > max) value = max;
+    if (value === this.scrollOffset) return false;
+
+    this.scrollOffset = value;
+    this._userScrolled = this.scrollOffset > 0;
+    this._needsRedraw = true;
+    if (this.running) this.draw();
+    return true;
 };
 
 Chat.prototype._wrapGroupMessages = function(group, width) {
@@ -448,49 +619,44 @@ Chat.prototype._getChannelMessages = function() {
     return chan.messages;
 };
 
-Chat.prototype._renderGroups = function(groups) {
+Chat.prototype._renderGroups = function(groups, layoutLines, startLine, endLine) {
     if (!this.leftMsgFrame || !this.rightMsgFrame) return;
 
-    var y = 1;
+    var height = this.leftMsgFrame.height || 0;
+    if (height <= 0) return;
 
-    for (var g = 0; g < groups.length; g++) {
-        var group = groups[g];
-        var frame = group.side === 'left' ? this.leftMsgFrame : this.rightMsgFrame;
-        var otherFrame = group.side === 'left' ? this.rightMsgFrame : this.leftMsgFrame;
-        var width = frame.width;
-        var prevTime = (g > 0) ? groups[g - 1].lastTime : undefined;
-        var timestamp = this._formatTimestamp(group.lastTime, prevTime);
-        var headerParts = this._prepareHeaderParts(group.sender, timestamp, width);
+    for (var resetIndex = 0; resetIndex < groups.length; resetIndex++) {
+        groups[resetIndex].renderStart = 0;
+        groups[resetIndex].renderEnd = -1;
+    }
 
-        var overlap = (g > 0 && groups[g - 1].side !== group.side);
-        if (overlap) {
-            var reuseRow = groups[g - 1].renderEnd || (y - 1);
-            if (reuseRow && reuseRow >= 1) y = reuseRow;
+    for (var i = 0; i < layoutLines.length; i++) {
+        var line = layoutLines[i];
+        if (!line || line.index < startLine || line.index >= endLine) continue;
+
+        var row = (line.index - startLine) + 1;
+        if (row < 1 || row > height) continue;
+
+        var frame = (line.side === 'left') ? this.leftMsgFrame : this.rightMsgFrame;
+        var otherFrame = (line.side === 'left') ? this.rightMsgFrame : this.leftMsgFrame;
+        var group = line.group;
+
+        if (!frame || !otherFrame || !group) continue;
+
+        if (line.type === 'header') {
+            var headerParts = this._prepareHeaderParts(group.sender, line.timestamp, frame.width);
+            this._renderGroupHeader(frame, otherFrame, row, headerParts, line.side, !!line.overlap);
+            this.messageFrames.push({ msg: group.messages[group.messages.length - 1], y: row, side: line.side, isHeader: true });
+        } else if (line.type === 'message') {
+            this._writeLineToFrames(frame, otherFrame, row, line.text, false, line.side, line.isFirstLine);
+            this.messageFrames.push({ msg: line.message, y: row, side: line.side });
         }
-        if (y < 1) y = 1;
 
-        if (y > frame.height) break;
-        group.renderStart = y;
-
-        this._renderGroupHeader(frame, otherFrame, y, headerParts, group.side, overlap);
-        this.messageFrames.push({ msg: group.messages[group.messages.length - 1], y: y, side: group.side, isHeader: true });
-        y += 1;
-
-        for (var l = 0; l < group.messageLines.length; l++) {
-            if (y > frame.height) break;
-        var contentEntry = group.messageLines[l];
-        if (!contentEntry || !contentEntry.text) continue;
-        var contentLine = contentEntry.text;
-        var isFirstLine = !!contentEntry.isFirstLine;
-        this._writeLineToFrames(frame, otherFrame, y, contentLine, false, group.side, isFirstLine);
-        this.messageFrames.push({ msg: contentEntry.message || group.messages[group.messages.length - 1], y: y, side: group.side });
-        y += 1;
+        if (group.renderStart <= 0 || group.renderStart > row) group.renderStart = row;
+        if (group.renderEnd < row) group.renderEnd = row;
     }
 
-        group.renderEnd = y - 1;
-    }
-
-    this.lastRow = Math.max(0, y - 1);
+    this.lastRow = Math.max(0, Math.min(height, endLine - startLine));
 };
 
 Chat.prototype._prepareHeaderParts = function(sender, timestamp, width) {
@@ -709,7 +875,11 @@ Chat.prototype._buildCrumbContext = function() {
 
 Chat.prototype._formatPrimaryCrumb = function(context) {
     var countText = context.userCount === 1 ? '1 user' : context.userCount + ' users';
-    return context.currentUser + ' chatting in ' + context.channelName + '. ' + countText + ' here [ESC exit]';
+    var base = context.currentUser + ' chatting in ' + context.channelName + '. ' + countText + ' here [ESC exit]';
+    if (this.scrollOffset > 0) {
+        base += ' (scroll +' + this.scrollOffset + ')';
+    }
+    return base;
 };
 
 Chat.prototype._fitCrumbText = function(text, width) {
