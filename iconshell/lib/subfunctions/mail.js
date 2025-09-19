@@ -95,9 +95,8 @@ function Mail(opts) {
 		{ baseLabel: 'Exit', iconFile:'back', action: function(){ self.exit(); } },
 		{ baseLabel: 'Read Mail', iconFile:'messages', dynamic:true,  action: makeAction(function(){ bbs.read_mail(); }, 'Reading mail...') },
 		// Native interactive compose (custom pre-screen, no confirmation desired)
-		{ baseLabel: 'Compose Email', iconFile:'messages', confirm:false, action: function(){ self.composeInteractiveEmail(); } },
+		{ baseLabel: 'Compose Email', iconFile:'compose', confirm:false, action: function(){ self.composeInteractiveEmail(); } },
 		{ baseLabel: 'Scan For You', iconFile:'mailbox', action: makeAction(function(){ self._scanMessagesAddressedToUser(); }, 'Scanning for messages to you...') },
-		{ baseLabel: 'Send File', iconFile:'folder', action: makeAction(function(){ bbs.send_file(); }, 'Send file dialog...') }
 	];
 	this.updateUnreadCount();
 	// icon cell cache
@@ -135,19 +134,37 @@ Mail.prototype._promptRecipientStyled = function(){ return null; };
 // Overlay frame-based prompt to avoid global console attribute side-effects
 Mail.prototype._promptRecipientOverlay = function(){ return null; };
 
+Mail.prototype._destroyPromptFrames = function(){
+	var host = this._promptField ? this._promptField.parent : (this._promptLabel ? this._promptLabel.parent : (this._promptGuide ? this._promptGuide.parent : null));
+	['_promptField','_promptLabel','_promptGuide'].forEach(function(key){
+		try { if(this[key]) this[key].close(); } catch(e){}
+		this[key] = null;
+	}, this);
+	if(host){ try { host.cycle(); } catch(e){} }
+	else if(this.outputFrame){ try { this.outputFrame.cycle(); } catch(e){} }
+};
+
 // Enter non-blocking recipient prompt mode
 Mail.prototype._enterRecipientPrompt = function(){
+	this._destroyPromptFrames();
+	this._ensureFrames();
 	this.mode = 'promptRecipient';
 	this._recipBuf = '';
-	// Create prompt frames within parentFrame
-	var host = this.parentFrame;
-	if(!host) return; // cannot prompt without a parent frame
+	var host = this.outputFrame || this.parentFrame;
+	if(!host) return;
+	var startRow = (this._iconGridHeight || 0) + 1;
+	if(startRow < 1) startRow = 1;
+	if(startRow >= host.height) startRow = Math.max(1, host.height - 1);
+	var guideY = startRow;
+	var labelY = Math.min(host.height, guideY + 1);
 	var cols = host.width;
-	this._promptGuide = new Frame(1,1,cols,1,BG_BLACK|MAGENTA,host); this._promptGuide.open();
+	this._promptGuide = new Frame(1, guideY, cols, 1, BG_BLACK|MAGENTA, host); this._promptGuide.open();
 	this._promptGuide.putmsg('Who do you want to send this email to?');
-	this._promptLabel = new Frame(1,3,4,1,BG_BLACK|YELLOW,host); this._promptLabel.open(); this._promptLabel.putmsg('to:');
+	this._promptLabel = new Frame(1, labelY, 4, 1, BG_BLACK|YELLOW, host); this._promptLabel.open(); this._promptLabel.putmsg('to:');
 	var fieldW = Math.min(60, Math.max(10, cols - 6 - 1));
-	this._promptField = new Frame(6,3,fieldW,1,BG_BLUE|WHITE,host); this._promptField.open();
+	var fieldY = labelY;
+	if(fieldY > host.height) fieldY = host.height;
+	this._promptField = new Frame(6, fieldY, fieldW, 1, BG_BLUE|WHITE, host); this._promptField.open();
 	this._redrawRecipientField();
 };
 
@@ -164,7 +181,7 @@ Mail.prototype._redrawRecipientField = function(){
 
 Mail.prototype._commitRecipientPrompt = function(accepted){
 	var dest = (accepted && this._recipBuf) ? this._recipBuf.trim() : null;
-	['_promptField','_promptLabel','_promptGuide'].forEach(function(k){ try { if(this[k]) this[k].close(); } catch(e){} this[k]=null; }.bind(this));
+	this._destroyPromptFrames();
 	this.mode='icon';
 	var type = netaddr_type(dest)
 	if(type === 0) {
@@ -177,11 +194,14 @@ Mail.prototype._commitRecipientPrompt = function(accepted){
 	}
 
 	log('GOT' + type +  'RECIEPIENT: ' + dest);
-	var act = ( type == 0 || type == 2) ? function(){ try { bbs.email(dest, ''); sent=true; } catch(e){ } } : 
-	function(){ try { bbs.netmail(dest, ''); sent=true; } catch(e){ } };;
 	if(dest){
-		var shell=this.shell; var sent=false; var self=this;
-		act();
+		var sent = false;
+		var run = (type === 0 || type === 2)
+			? function(){ try { bbs.email(dest, ''); sent = true; } catch(e){} }
+			: function(){ try { bbs.netmail(dest, ''); sent = true; } catch(e){} };
+		var shell = this.shell;
+		if(shell && typeof shell.runExternal === 'function') shell.runExternal(run);
+		else run();
 		this.updateUnreadCount();
 		if(sent) this._toastSent && this._toastSent(dest);
 	}
@@ -189,17 +209,6 @@ Mail.prototype._commitRecipientPrompt = function(accepted){
 	this.draw();
 };
 
-Mail.prototype._promptSubject = function(){
-	try {
-		if(!console || !console.getstr) return null;
-		console.crlf(); console.putmsg('\x01hSubject: \x01n');
-		var s=console.getstr(72);
-		if(s===null) return null; // user aborted
-		s = s.replace(/\s+$/,'');
-		if(!s.length) return null; // treat empty as cancel
-		return s;
-	} catch(e){ return null; }
-};
 
 Mail.prototype._toastSent = function(dest){
 	try {
@@ -235,11 +244,20 @@ Mail.prototype.draw = function() {
 	// Clear any prior hotspots (avoid shell leftovers triggering unexpected exits)
 	if (typeof console.clear_hotspots === 'function') try { console.clear_hotspots(); } catch(e){}
 	var gridInfo = this.drawIconGrid(o) || { heightUsed: 3 };
+	this._iconGridHeight = gridInfo.heightUsed || 0;
 	// Register hotspots for each icon cell region (map to digit key 1..9 / A.. etc if >9 later)
 	this._addMouseHotspots();
 	// scrollback below icons
-	var visibleLines = o.height - gridInfo.heightUsed;
+	var reservedRows = 0;
+	if(this.mode==='promptRecipient'){
+		reservedRows = (gridInfo.heightUsed + 1 < o.height) ? 2 : 1;
+	}
+	var scrollStartY = gridInfo.heightUsed + 1 + reservedRows;
+	if(scrollStartY < 1) scrollStartY = 1;
+	if(scrollStartY > o.height + 1) scrollStartY = o.height + 1;
+	var visibleLines = Math.max(0, o.height - (scrollStartY - 1));
 	if(visibleLines>0){
+		o.gotoxy(1, scrollStartY);
 		var start=Math.max(0,this.scrollback.length-visibleLines - this.scrollOffset);
 		var end=Math.min(this.scrollback.length,start+visibleLines);
 		for(var li=start; li<end; li++){
@@ -257,7 +275,9 @@ Mail.prototype._drawInput = function() {
 	if (!this.inputFrame) return;
 	var f=this.inputFrame; f.clear(); f.gotoxy(1,1);
 	var prompt='';
-	if(this.mode==='confirm') prompt='Y/N confirm'; else prompt='Arrows/1-'+this.menuOptions.length+' Enter=Run PgUp/PgDn scroll';
+	if(this.mode==='promptRecipient') prompt='Type recipient, ENTER=send, ESC=cancel';
+	else if(this.mode==='confirm') prompt='Y/N confirm';
+	else prompt='Arrows/1-'+this.menuOptions.length+' Enter=Run PgUp/PgDn scroll';
 	if(prompt.length>f.width) prompt=prompt.substr(0,f.width);
 	f.putmsg(prompt);
 	f.cycle();
@@ -346,13 +366,7 @@ Mail.prototype.drawIconGrid = function(o){
 	if(this._iconCols !== cols || (this.iconCells && this.iconCells.length !== this.menuOptions.length)) needRebuild = true;
 	if(needRebuild){
 		// close old frames
-		if(this.iconCells){
-			for(var ci=0; ci<this.iconCells.length; ci++){
-				try{ this.iconCells[ci].icon.close(); }catch(e){}
-				try{ this.iconCells[ci].label.close(); }catch(e){}
-			}
-		}
-		this.iconCells = [];
+		this._destroyIconCells();
 		for(var i=0; i<this.menuOptions.length && i<maxIcons; i++){
 			var col = i % cols;
 			var row = Math.floor(i / cols);
@@ -407,9 +421,25 @@ Mail.prototype._addMouseHotspots = function(){
 };
 
 Mail.prototype.ensureIconVisible = function(){};
+
+Mail.prototype._destroyIconCells = function(){
+	if(!this.iconCells) return;
+	for(var i=0; i<this.iconCells.length; i++){
+		var cell = this.iconCells[i];
+		if(!cell) continue;
+		try { if(cell.icon) cell.icon.close(); } catch(e){}
+		try { if(cell.label) cell.label.close(); } catch(e){}
+	}
+	this.iconCells = [];
+	this._iconCols = null;
+	this._iconGridHeight = 0;
+};
+
 function pad(str,len,ch){ if(ch===undefined) ch=' '; if(str.length>len) return str.substr(0,len); while(str.length<len) str+=ch; return str; }
 
 Mail.prototype.cleanup = function() {
+	this._destroyPromptFrames();
+	this._destroyIconCells();
 	this._resetState();
 	try { 
 		if (typeof console.clear_hotspots === 'function') console.clear_hotspots(); 
@@ -429,14 +459,15 @@ Mail.prototype.cleanup = function() {
 };
 
 Mail.prototype._resetState = function() {
-    this.selectedIndex = 0;
+	this.selectedIndex = 0;
 	this.lastMessage = '';
-	this.mode = 'icon'; // icon | confirm only
+	this.mode = 'icon';
 	this.confirmFor = null;
 	this.scrollback = [];
 	this.scrollOffset = 0;
 	this.maxScrollLines = 1000;
-
+	this._recipBuf = '';
+	this._iconGridHeight = 0;
 };
 
 Mail.prototype.exit = function(){
