@@ -7,6 +7,7 @@
 
 load('sbbsdefs.js');
 load("iconshell/lib/subfunctions/subprogram.js");
+load("iconshell/lib/util/debug.js");
 if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';
 if (typeof KEY_BACKSPACE === 'undefined') var KEY_BACKSPACE = '\b';
@@ -30,7 +31,7 @@ var _TreeLibLoaded = false;
 var BOARD_ICONS = {
     'group': 'folder',
     'sub': 'bulletin_board',
-    'groups':'mario',
+    'groups':'back',
     'quit': 'logoff',
     'search': 'search'
 }
@@ -125,7 +126,10 @@ MessageBoard.prototype.enter = function(done) {
 };
 
 MessageBoard.prototype._beginInlineSearchPrompt = function(code, returnView){
-    if(!this.inputFrame) return false;
+    if(!this.inputFrame){
+        this._ensureFrames();
+        if(!this.inputFrame) return false;
+    }
     this._navSearchActive = true;
     this._navSearchBuffer = '';
     this._navSearchCode = code;
@@ -233,9 +237,33 @@ MessageBoard.prototype._handleInlineSearchKey = function(key){
 
 // Main loop (called externally by shell or could be invoked after enter)
 MessageBoard.prototype.cycle = function(){
-    if (this.outputFrame) this.outputFrame.cycle();
-    if (this.inputFrame) this.inputFrame.cycle();
-    this._updateTransitionOverlay();
+    if(!this.running) return;
+    this._startFrameCycle();
+};
+
+MessageBoard.prototype._startFrameCycle = function(){
+    this._pumpFrameCycle();
+    if(!this.timer || typeof this.timer.addEvent !== 'function') return;
+    if(this._frameCycleEvent) return;
+    var self = this;
+    this._frameCycleEvent = this.timer.addEvent(120, true, function(){
+        if(!self.running){
+            self._cancelFrameCycle();
+            return;
+        }
+        self._pumpFrameCycle();
+    });
+};
+
+MessageBoard.prototype._pumpFrameCycle = function(){
+    try { if(this.outputFrame) this.outputFrame.cycle(); } catch(e){}
+    try { if(this.inputFrame) this.inputFrame.cycle(); } catch(e){}
+};
+
+MessageBoard.prototype._cancelFrameCycle = function(){
+    if(!this._frameCycleEvent) return;
+    try { this._frameCycleEvent.abort = true; } catch(e){}
+    this._frameCycleEvent = null;
 };
 
 MessageBoard.prototype._ensureFrames = function() {
@@ -263,6 +291,7 @@ MessageBoard.prototype._drawInput = function() {
 // Guarded exit override (ensures done callback only fires once through base implementation)
 MessageBoard.prototype.exit = function(){
     if(!this.running) return; // already exited
+    this._cancelFrameCycle();
     this._releaseHotspots();
     Subprogram.prototype.exit.call(this);
     this._cleanup();
@@ -270,10 +299,7 @@ MessageBoard.prototype.exit = function(){
 
 MessageBoard.prototype._handleKey = function(key) {
     if (!key) return true;
-    if(this._transitionOverlayFrame){
-        this._clearTransitionOverlay();
-        return true;
-    }
+    if(this.view === 'read' && this._consumeReadNoticeKey && this._consumeReadNoticeKey(key)) return true;
     if(this._navSearchActive){
         return this._handleInlineSearchKey(key);
     }
@@ -391,8 +417,9 @@ MessageBoard.prototype._handleKey = function(key) {
 };
 
 MessageBoard.prototype._cleanup = function() {
-	this._clearTransitionOverlay();
 	this._destroyThreadUI();
+    this._hideReadNotice({ skipRepaint: true });
+    this._cancelFrameCycle();
 	try { if (this.outputFrame) this.outputFrame.close(); } catch(e) {}
 	try { if (this.inputFrame) this.inputFrame.close(); } catch(e) {}
     this._resetState();
@@ -431,14 +458,13 @@ MessageBoard.prototype._resetState = function() {
     this._threadSequenceCache = {};
     this._cachedSubCode = null;
     this._threadHeadersCache = {};
-    this._transitionOverlayFrame = null;
-    this._transitionOverlayExpires = 0;
-    this._transitionOverlayKind = null;
-    this._transitionOverlayTimerEvent = null;
-    this._tempOverlayTimer = null;
-    this._tempOverlayTimerInterval = null;
-    this._tempOverlayTimer = null;
-    this._tempOverlayTimerInterval = null;
+    this._readScroll = 0;
+    this._readBodyText = '';
+    this._readBodyLineCache = null;
+    this._frameCycleEvent = null;
+    this._readNoticeFrame = null;
+    this._readNoticeEvent = null;
+    this._readNoticeActive = false;
 }
 
 MessageBoard.prototype._releaseHotspots = function(){
@@ -449,6 +475,8 @@ MessageBoard.prototype._releaseHotspots = function(){
 };
 
 MessageBoard.prototype._init = function(reentry){
+    if(reentry) this._cancelFrameCycle();
+    this._hideReadNotice({ skipRepaint: true });
     this.outputFrame = null;
     this.inputFrame = null;
     this.cursub = bbs.cursub_code;
@@ -484,10 +512,8 @@ MessageBoard.prototype._init = function(reentry){
     this._threadSequenceCache = {};
     this._cachedSubCode = null;
     this._threadHeadersCache = {};
-    this._transitionOverlayFrame = null;
-    this._transitionOverlayExpires = 0;
-    this._transitionOverlayKind = null;
-    this._transitionOverlayTimerEvent = null;
+    this._setReadBodyText('');
+    this._readScroll = 0;
     // Build comprehensive hotspot character set (single-key tokens only)
     this._buildHotspotCharSet();
     // Thread limits bound by hotspot capacity but capped at 500 for performance
@@ -545,7 +571,6 @@ MessageBoard.prototype._renderCurrentView = function(view) {
 }
 
 MessageBoard.prototype._renderGroupView = function(groups) {
-    this._clearTransitionOverlay();
     // Render a grid of all top level message groups.
     // Use our icon paradigm to display as clickable items in a grid.
     // Selecting an item calls _renderSubView with that group.
@@ -593,7 +618,6 @@ MessageBoard.prototype._renderGroupView = function(groups) {
 
 MessageBoard.prototype._renderSubView = function(group) {
 	this.curgrp = group;
-    this._clearTransitionOverlay();
     this.view = 'sub';
     // Render a grid of all the subs in the specified group.
     // Use our icon paradigm to display as clickable items in a grid.
@@ -643,12 +667,11 @@ MessageBoard.prototype._renderSubView = function(group) {
 }
 
 MessageBoard.prototype._renderThreadsView = function(sub) {
-    this._clearTransitionOverlay();
     this.cursub = sub;
     if(this.cursub) this._lastActiveSubCode = this.cursub;
     this.view = 'threads';
     this._releaseHotspots();
-    dbug('MB enter threads view sub='+sub, 'messageboard');
+    dbug('MessageBoard: enter threads view sub=' + sub, 'messageboard');
     // Load messages in the specified sub (if not already loaded).
     // If no messages, call _renderPostView to prompt for first post.
     // Render a list of threads in the specified message area.
@@ -682,15 +705,15 @@ MessageBoard.prototype._renderThreadsView = function(sub) {
     if(this.threadTree && this.threadNodeIndex.length){
         this._paintThreadTree();
     } else {
-        dbug('MB tree empty, fallback list', 'messageboard');
+        dbug('MessageBoard: thread tree empty, fallback list', 'messageboard');
         this.threadSelection = 0; this.threadScrollOffset = 0; this._paintThreadList();
     }
 }
 
 
 MessageBoard.prototype._renderReadView = function(msg) {
+    // log('MessageBoard: enter read view', 'messageboard', JSON.stringify(msg));
     if(!msg) return;
-    this._clearTransitionOverlay();
     this.view = 'read';
     this.lastReadMsg = msg;
     this._storeFullHeader(msg);
@@ -710,46 +733,117 @@ MessageBoard.prototype._renderReadView = function(msg) {
     this._readBodyFrame = new Frame(f.x, bodyY, f.width, bodyH, f.attr || (BG_BLACK|LIGHTGRAY), f.parent);
     try { this._readHeaderFrame.open(); this._readBodyFrame.open(); } catch(e){}
     this._paintReadHeader && this._paintReadHeader(msg);
-    var code = this.cursub || (msg.sub || null);
-    var bodyLines = [];
-    try {
-        if(code){
-            var mb = new MsgBase(code);
-            if(mb.open()){
-                try {
-                    var body = mb.get_msg_body(msg.number || msg.id || msg, msg, true); // strip ctrl-a
-                    if(body) bodyLines = (''+body).split(/\r?\n/);
-                } catch(e) { dbug('MB read body error: '+e, 'messageboard'); }
+    var code = this.cursub || (msg.sub || null) || this._lastActiveSubCode || bbs.cursub_code;
+    var fullHeader = msg;
+    var bodyText = '';
+    if(code && msg && typeof msg.number === 'number'){
+        var mb = new MsgBase(code);
+        if(mb.open()){
+            try {
+                var cached = (this._fullHeaders && this._fullHeaders[msg.number]) || null;
+                if(!cached){
+                    try { cached = mb.get_msg_header(false, msg.number, true); } catch(e) { cached = null; }
+                    if(cached) this._storeFullHeader(cached);
+                }
+                if(cached) fullHeader = cached;
+                if(fullHeader) this._storeFullHeader(fullHeader);
+                bodyText = this._readMessageBody(mb, fullHeader) || '';
+            } finally {
                 try { mb.close(); } catch(_e){}
             }
         }
-    } catch(e){}
+    }
+    this.lastReadMsg = fullHeader;
+    this._updateScanPointer(fullHeader);
     this._readScroll = 0;
-    this._readLines = bodyLines;
+    this._setReadBodyText(bodyText);
     this._paintRead();
-    this._focusThreadNodeForMessage(msg);
 }
+
+MessageBoard.prototype._setReadBodyText = function(text){
+    this._readBodyText = text || '';
+    this._readBodyLineCache = null;
+};
+
+MessageBoard.prototype._getReadLines = function(){
+    if(this._readBodyLineCache) return this._readBodyLineCache;
+    var raw = this._readBodyText || '';
+    this._readBodyLineCache = raw.length ? raw.split(/\r?\n/) : [];
+    return this._readBodyLineCache;
+};
+
+MessageBoard.prototype._readMessageBody = function(msgbase, header){
+    if(!msgbase || !header) return '';
+    var body = '';
+    var msgNumber = (typeof header.number === 'number') ? header.number : null;
+    try {
+        body = msgbase.get_msg_body(header) || '';
+    } catch(e){ body = ''; }
+    if(!body && msgNumber !== null){
+        try { 
+            body = msgbase.get_msg_body(msgNumber) || '';
+         }
+        catch(e) { body = ''; }
+    }
+    if(!body && msgNumber !== null){
+        try {
+            var idx = msgbase.get_msg_index(msgNumber);
+            var offset = null;
+            if(typeof idx === 'object' && idx !== null && typeof idx.offset === 'number') offset = idx.offset;
+            else if(typeof idx === 'number' && idx >= 0) offset = idx;
+            if(offset !== null) body = msgbase.get_msg_body(true, offset) || '';
+        } catch(e){ body = ''; }
+    }
+    if(!body){
+        dbug('MessageBoard: empty body for msg #' + (msgNumber === null ? '?' : msgNumber) + ' offset=' + (header.offset === undefined ? 'n/a' : header.offset), 'messageboard');
+    }
+    return body || '';
+};
+
+MessageBoard.prototype._updateScanPointer = function(header){
+    if(!header || typeof header.number !== 'number') return;
+    if(!this.cursub || !msg_area[this.curgrp] || !msg_area[this.curgrp][this.cursub]) return;
+    if(header.number > msg_area[this.curgrp][this.cursub].scan_ptr){
+        msg_area[this.curgrp][this.cursub].scan_ptr = header.number;
+    }
+};
 
 MessageBoard.prototype._paintRead = function(){
     if(this.view !== 'read') return;
     var f=this._readBodyFrame || this.outputFrame; if(!f) return; f.clear();
-    var header = this.lastReadMsg;
     var usable = f.height - 1; if(usable < 1) usable = f.height;
     var start = this._readScroll || 0;
-    var end = Math.min(this._readLines.length, start + usable);
+    var lines = this._getReadLines();
+    var totalLines = lines.length;
+    if(start < 0) start = 0;
+    if(start >= totalLines) start = Math.max(0, totalLines - usable);
+    var end = Math.min(totalLines, start + usable);
     var lineY = 1;
     for(var i=start;i<end;i++){
-        try { f.gotoxy(1,lineY); var line=this._readLines[i]; if(line.length>f.width) line=line.substr(0,f.width); f.putmsg(line); } catch(e){}
-        lineY++; if(lineY>f.height) break;
+        var line = lines[i] || '';
+        if(line.length && line.indexOf('\x00') !== -1) line = line.replace(/\x00+/g,'');
+        if(line.length>f.width) line=line.substr(0,f.width);
+        try {
+            f.gotoxy(1,lineY);
+            f.putmsg(line);
+        } catch(e){
+            var err = (e && e.message) ? e.message : e;
+            dbug('MessageBoard: paintRead putmsg error ' + err, 'messageboard');
+        }
+        lineY++;
+        if(lineY>f.height) break;
     }
-    this._writeStatus('[ENTER]=Scroll/Next  [Bksp/Del]=Prev Msg  (Arrows: [Up]/[Down]=Scroll - [Right]/[Left]=Thread+/-) [ESC]=Threads  '+(start+1)+'-'+end+'/'+this._readLines.length);
+    var dispStart = totalLines ? (start + 1) : 0;
+    var dispEnd = totalLines ? end : 0;
+    this._writeStatus('[ENTER]=Scroll/NextMsg  [Bksp/Del]=PrevMsg (Arrows: [Up]/[Down]=Scroll - [Right]/[Left]=Thread+/-) [ESC]=Threads  '+dispStart+'-'+dispEnd+'/'+totalLines);
     try { f.cycle(); if(this._readHeaderFrame) this._readHeaderFrame.cycle(); } catch(e){}
 };
 
 MessageBoard.prototype._handleReadKey = function(key){
     if(this.view !== 'read') return true;
     var f=this._readBodyFrame || this.outputFrame; var usable = f?f.height-1:20; if(usable<1) usable=1;
-    var maxStart = Math.max(0, (this._readLines.length - usable));
+    var lines = this._getReadLines();
+    var maxStart = Math.max(0, (lines.length - usable));
     switch(key){
         case KEY_UP: this._readScroll = Math.max(0, (this._readScroll||0)-1); this._paintRead(); return true;
         case KEY_DOWN: this._readScroll = Math.min(maxStart, (this._readScroll||0)+1); this._paintRead(); return true;
@@ -758,29 +852,29 @@ MessageBoard.prototype._handleReadKey = function(key){
         case KEY_HOME: this._readScroll = 0; this._paintRead(); return true;
         case KEY_END: this._readScroll = maxStart; this._paintRead(); return true;
         case KEY_LEFT: // previous thread
-            if(this._openAdjacentThread(-1)) { this._showTransitionOverlay('thread', -1); return false; }
-            this._writeStatus('READ: No previous thread');
+            if(this._openAdjacentThread(-1)) return false;
             return true;
         case KEY_RIGHT: // next thread
-            if(this._openAdjacentThread(1)) { this._showTransitionOverlay('thread', 1); return false; }
-            this._writeStatus('READ: No next thread');
+            if(this._openAdjacentThread(1)) return false;
             return true;
-        case '\r': case '\n': case KEY_ENTER:
+        case KEY_ENTER:
+        case '\r':
+        case '\n':
             if((this._readScroll||0) < maxStart){
                 this._readScroll = Math.min(maxStart, (this._readScroll||0) + usable);
                 this._paintRead();
                 return true;
             }
-            if(this._openRelativeInThread(1)) { this._showTransitionOverlay('message', 1); return false; }
-            if(this._openAdjacentThread(1)) { this._showTransitionOverlay('thread', 1); return false; }
-            this._writeStatus('READ: End of messages');
+            if(this._openRelativeInThread(1)) return false;
+            if(this._openAdjacentThread(1)) return false;
             return true;
         case '\x7f': // DEL
-        case KEY_BACKSPACE:
         case '\x08': // Backspace -> previous message in thread
-            if(this._openRelativeInThread(-1)) { this._showTransitionOverlay('message', -1); return false; }
-            if(this._openAdjacentThread(-1)) { this._showTransitionOverlay('thread', -1); return false; }
-            this._writeStatus('READ: No previous message');
+            if(this._openRelativeInThread(-1)) return false; // consumed
+            // If no previous message, ignore (do not exit) ; ESC reserved for exit
+            return true;
+        case '\x08': // Backspace also returns
+            // (This case now repurposed above for prev message; unreachable duplicate kept for safety)
             return true;
         case 'R': case 'r': // Reply to current message
             if(this.lastReadMsg){ this._renderPostView({ replyTo: this.lastReadMsg }); return false; }
@@ -796,75 +890,37 @@ MessageBoard.prototype._handleReadKey = function(key){
     }
 };
 
-// Helpers for navigating thread containers and adjacent threads
-MessageBoard.prototype._getThreadRootEntries = function(){
-    var entries = [];
-    if(!this.threadNodeIndex || !this.threadNodeIndex.length) return entries;
-    for(var i=0; i<this.threadNodeIndex.length; i++){
-        var node = this.threadNodeIndex[i];
-        if(!node) continue;
-        if(node.__isTree){
-            entries.push({ index: i, node: node, type: 'tree' });
-        } else if(node.__threadRootId && (!node.parent || !node.parent.__isTree)){
-            entries.push({ index: i, node: node, type: 'single' });
-        }
-    }
-    return entries;
-};
-
 // Open previous/next thread container based on threadTreeSelection delta (-1 or +1)
 MessageBoard.prototype._openAdjacentThread = function(delta){
     if(!this.threadTree || !this.threadNodeIndex || !this.threadNodeIndex.length) return false;
     // Find current container node for lastReadMsg
     var currentMsgNum = this.lastReadMsg && this.lastReadMsg.number;
-    if(!currentMsgNum) return false;
-    this._indexThreadTree();
-    var rootEntries = this._getThreadRootEntries();
-    if(!rootEntries.length) return false;
-    var currentEntryIdx = -1;
-    for(var r=0; r<rootEntries.length && currentEntryIdx===-1; r++){
-        var entry = rootEntries[r];
-        if(entry.type === 'tree'){
-            var node = entry.node;
-            if(node && node.items){
-                for(var m=0;m<node.items.length;m++){
-                    var itm = node.items[m];
-                    if(itm && itm.__msgHeader && itm.__msgHeader.number === currentMsgNum){ currentEntryIdx = r; break; }
-                }
-            }
-        } else if(entry.node && entry.node.__msgHeader && entry.node.__msgHeader.number === currentMsgNum){
-            currentEntryIdx = r;
+    var containerIndex = -1;
+    for(var i=0;i<this.threadNodeIndex.length;i++){
+        var node=this.threadNodeIndex[i];
+        if(node && node.__isTree && node.items){
+            for(var m=0;m<node.items.length;m++){ var itm=node.items[m]; if(itm.__msgHeader && itm.__msgHeader.number===currentMsgNum){ containerIndex=i; break; } }
+            if(containerIndex!==-1) break;
         }
     }
-    if(currentEntryIdx === -1){
-        var rootId = this.lastReadMsg.thread_id || this.lastReadMsg.number;
-        for(var r2=0; r2<rootEntries.length; r2++){
-            if(rootEntries[r2].node && rootEntries[r2].node.__threadRootId === rootId){ currentEntryIdx = r2; break; }
-        }
+    if(containerIndex===-1) return false;
+    var target = containerIndex + delta;
+    // Seek next/prev container (__isTree) skipping non-container nodes
+    while(target>=0 && target < this.threadNodeIndex.length){
+        if(this.threadNodeIndex[target].__isTree) break; target += (delta>0?1:-1);
     }
-    if(currentEntryIdx === -1) return false;
-    var targetEntryIdx = currentEntryIdx + delta;
-    if(targetEntryIdx < 0 || targetEntryIdx >= rootEntries.length) return false;
-    var targetEntry = rootEntries[targetEntryIdx];
-    this.threadTreeSelection = targetEntry.index;
-    if(targetEntry.type === 'tree'){
-        var targetNode = targetEntry.node;
-        try { if(targetNode.status & targetNode.__flags__.CLOSED) targetNode.open(); } catch(e){}
-        if(targetNode.items && targetNode.items.length){
-            var first = targetNode.items[0];
-            if(first && first.__msgHeader){
-                this._renderReadView(first.__msgHeader);
-                return true;
-            }
-        }
-        var seq = this._buildThreadSequence(targetNode.__threadRootId || (targetNode.__msgHeader && targetNode.__msgHeader.number));
-        if(seq && seq.length){
-            this._renderReadView(seq[0]);
+    if(target<0 || target>=this.threadNodeIndex.length) return false;
+    var targetNode = this.threadNodeIndex[target];
+    if(!targetNode || !targetNode.__isTree) return false;
+    // Open container and read its first message
+    try { if(targetNode.status & targetNode.__flags__.CLOSED) targetNode.open(); } catch(e){}
+    if(targetNode.items && targetNode.items.length){
+        var first = targetNode.items[0];
+        if(first.__msgHeader){
+            this._renderReadView(first.__msgHeader);
+            this._showReadNotice(delta > 0 ? 'next-thread' : 'prev-thread');
             return true;
         }
-    } else if(targetEntry.node && targetEntry.node.__msgHeader){
-        this._renderReadView(targetEntry.node.__msgHeader);
-        return true;
     }
     return false;
 };
@@ -889,7 +945,11 @@ MessageBoard.prototype._openRelativeInThread = function(dir){
         var nidx = idx + dir;
         if(nidx >=0 && nidx < msgs.length){
             var target = msgs[nidx];
-            if(target && target.__msgHeader){ this._renderReadView(target.__msgHeader); return true; }
+            if(target && target.__msgHeader){
+                this._renderReadView(target.__msgHeader);
+                this._showReadNotice(dir > 0 ? 'next-message' : 'prev-message');
+                return true;
+            }
         }
     }
 
@@ -900,11 +960,83 @@ MessageBoard.prototype._openRelativeInThread = function(dir){
             var targetIndex = i + dir;
             if(targetIndex < 0 || targetIndex >= seq.length) return false;
             var next = seq[targetIndex];
-            if(next){ this._renderReadView(next); return true; }
+            if(next){
+                this._renderReadView(next);
+                this._showReadNotice(dir > 0 ? 'next-message' : 'prev-message');
+                return true;
+            }
             return false;
         }
     }
     return false;
+};
+
+MessageBoard.prototype._consumeReadNoticeKey = function(key){
+    if(!this._readNoticeActive) return false;
+    this._hideReadNotice();
+    return true;
+};
+
+MessageBoard.prototype._showReadNotice = function(kind){
+    if(this.view !== 'read') return;
+    if(!kind) return;
+    this._hideReadNotice({ skipRepaint: true });
+    var host = this._readBodyFrame || this.outputFrame || this.parentFrame || this.rootFrame;
+    if(!host) return;
+    var labelMap = {
+        'next-message': 'Showing next message',
+        'prev-message': 'Showing previous message',
+        'next-thread':  'Showing next thread',
+        'prev-thread':  'Showing previous thread'
+    };
+    var text = labelMap[kind] || labelMap['next-message'];
+    var isThread = (kind.indexOf('thread') !== -1);
+    var attr = (isThread ? BG_MAGENTA : BG_BLUE) | WHITE;
+    var width = Math.min(host.width, Math.max(20, text.length + 4));
+    var height = 3;
+    var x = Math.max(1, Math.floor((host.width - width) / 2) + 1);
+    var y = Math.max(1, Math.floor((host.height - height) / 2) + 1);
+    var frame = new Frame(x, y, width, height, attr, host);
+    try {
+        frame.open();
+        frame.attr = attr;
+        frame.clear();
+        var midY = Math.max(1, Math.floor((height + 1) / 2));
+        var startX = Math.max(1, Math.floor((width - text.length) / 2) + 1);
+        frame.gotoxy(startX, midY);
+        frame.putmsg(text);
+        frame.cycle();
+        try { frame.top(); } catch(_e){}
+    } catch(e){
+        try { frame.close(); } catch(_err){}
+        return;
+    }
+    this._readNoticeFrame = frame;
+    this._readNoticeActive = true;
+    if(this.timer && typeof this.timer.addEvent === 'function'){
+        var self = this;
+        this._readNoticeEvent = this.timer.addEvent(3000, false, function(){
+            self._readNoticeEvent = null;
+            self._hideReadNotice();
+        });
+    }
+};
+
+MessageBoard.prototype._hideReadNotice = function(opts){
+    opts = opts || {};
+    var skipRepaint = !!opts.skipRepaint;
+    if(this._readNoticeEvent){
+        try { this._readNoticeEvent.abort = true; } catch(e){}
+        this._readNoticeEvent = null;
+    }
+    if(this._readNoticeFrame){
+        try { this._readNoticeFrame.close(); } catch(e){}
+        this._readNoticeFrame = null;
+    }
+    this._readNoticeActive = false;
+    if(!skipRepaint && this.view === 'read' && this._readBodyFrame){
+        try { this._paintRead(); } catch(_e){}
+    }
 };
 
 MessageBoard.prototype._renderPostView = function(postOptions) {
@@ -971,7 +1103,7 @@ MessageBoard.prototype._paintReadHeader = function(msg){
                 }
                 this._blitAvatarToFrame(hf, bin, avatarWidth, Math.min(avatarHeight, hf.height), leftPad, 1);
             }
-        } catch(be){ log('avatar blit error: '+be); }
+        } catch(be){ return; }
     }
 };
 
@@ -980,7 +1112,7 @@ MessageBoard.prototype._fetchAvatarForMessage = function(msg){
     if(!this._avatarLib || !msg) return null; var full = msg;
     // Re-fetch full header if needed
     if(!full.from_net_addr && full.number && this.cursub){
-        try { var mb=new MsgBase(this.cursub); if(mb.open()){ var fh=mb.get_msg_header(false, full.number, false); if(fh){ fh.number=full.number; full=fh; } mb.close(); } } catch(e){ log('avatar refetch header error: '+e); }
+        try { var mb=new MsgBase(this.cursub); if(mb.open()){ var fh=mb.get_msg_header(false, full.number, true); if(fh){ fh.number=full.number; full=fh; } mb.close(); } } catch(e){ log('avatar refetch header error: '+e); }
     }
     if(!this._deriveAvatarCandidates){
         this._deriveAvatarCandidates = function(h){
@@ -1002,15 +1134,16 @@ MessageBoard.prototype._fetchAvatarForMessage = function(msg){
         attempts.push({ netaddr:c.netaddr, username:c.username, ok:ok, reason:c.reason });
         if(ok){ chosen=c; avatarObj=obj; break; }
     }
-    if(!avatarObj){ log('Avatar fetch failed msg#'+(full.number||'?')+' attempts='+attempts.map(function(a){return a.netaddr+':'+a.reason+'='+a.ok;}).join(', ')); }
-    else { log('Avatar fetch success msg#'+(full.number||'?')+' netaddr='+chosen.netaddr+' attempts='+attempts.length); }
     this._lastAvatarObj = avatarObj || null;
     return { obj: avatarObj, attempts: attempts, chosen: chosen, msg: full };
 };
 
 MessageBoard.prototype._destroyReadFrames = function(){
+    this._hideReadNotice({ skipRepaint: true });
     if(this._readHeaderFrame){ try { this._readHeaderFrame.close(); } catch(e){} this._readHeaderFrame=null; }
     if(this._readBodyFrame){ try { this._readBodyFrame.close(); } catch(e){} this._readBodyFrame=null; }
+    this._setReadBodyText('');
+    this._readScroll = 0;
 };
 
 MessageBoard.prototype._destroyThreadUI = function(){
@@ -1153,7 +1286,6 @@ MessageBoard.launch = function(shell, cb, opts){
     opts = opts || {};
     opts.parentFrame = opts.parentFrame || (shell && shell.subFrame) || (shell && shell.root) || null;
     opts.shell = shell || opts.shell;
-    if(shell && shell.timer) opts.timer = shell.timer;
     var mb = new MessageBoard(opts);
     mb.enter(function(){ if(typeof cb==='function') cb(); });
     if(opts.autoCycle) mb.autoCycle = true;
@@ -1277,6 +1409,7 @@ MessageBoard.prototype._resolveBoardIcon = function(name, type){
 };
 
 MessageBoard.prototype._promptSearch = function(preferredCode, returnView){
+    this._ensureFrames();
     var code = preferredCode || this.cursub || this._lastActiveSubCode || bbs.cursub_code || null;
     if(!code){
         this._writeStatus('SEARCH: Select a sub first');
@@ -1284,8 +1417,10 @@ MessageBoard.prototype._promptSearch = function(preferredCode, returnView){
     }
     this._lastActiveSubCode = code;
     if(this._beginInlineSearchPrompt(code, returnView)) return;
-    this._writeStatus('SEARCH input unavailable in this view');
+    var subName = this._getSubNameByCode(code) || code;
+    this._writeStatus('SEARCH: Unable to open inline prompt for '+subName);
 };
+
 
 MessageBoard.prototype._executeSearch = function(code, query){
     var results = [];
@@ -1298,7 +1433,7 @@ MessageBoard.prototype._executeSearch = function(code, query){
     try {
         var total = mb.total_msgs || 0;
         for(var n=1; n<=total; n++){
-            var hdr = mb.get_msg_header(false, n, false);
+            var hdr = mb.get_msg_header(false, n, true);
             if(!hdr) continue;
             var matched = false;
             var fields = [hdr.subject, hdr.from, hdr.to, hdr.from_net, hdr.to_net, hdr.id, hdr.reply_id];
@@ -1309,12 +1444,12 @@ MessageBoard.prototype._executeSearch = function(code, query){
             }
             var body = null;
             if(!matched){
-                try { body = mb.get_msg_body(hdr.number, hdr, true); } catch(e){ body = null; }
+                try { body = this._readMessageBody(mb, hdr); } catch(e){ body = null; }
                 if(body && body.toLowerCase().indexOf(lowered) !== -1) matched = true;
             }
             if(!matched) continue;
             if(body === null){
-                try { body = mb.get_msg_body(hdr.number, hdr, true); } catch(e){ body = ''; }
+                try { body = this._readMessageBody(mb, hdr); } catch(e){ body = ''; }
             }
             var snippet = '';
             if(body){
@@ -1363,7 +1498,6 @@ MessageBoard.prototype._executeSearch = function(code, query){
 };
 
 MessageBoard.prototype._renderSearchResults = function(preserveState){
-    this._clearTransitionOverlay();
     if(this._destroyReadFrames) {
         try { this._destroyReadFrames(); } catch(e){}
     }
@@ -1579,7 +1713,7 @@ MessageBoard.prototype._loadThreadHeaders = function(limit){
         }
         var start = Math.max(1, total - limit + 1);
         for(var n=start; n<=total; n++) {
-            var hdr = mb.get_msg_header(false, n, false);
+            var hdr = mb.get_msg_header(false, n, true);
             if(!hdr) continue;
             this._storeFullHeader(hdr);
             this.threadHeaders.push({
@@ -1684,7 +1818,7 @@ MessageBoard.prototype._buildThreadTree = function(){
         try {
             var mb = new MsgBase(code);
             if(!mb.open()) return null;
-            var hdr = mb.get_msg_header(false, num, false);
+            var hdr = mb.get_msg_header(false, num, true);
             try { mb.close(); } catch(e){}
             if(hdr){ self._storeFullHeader(hdr); return hdr; }
         } catch(e){}
@@ -1752,7 +1886,7 @@ MessageBoard.prototype._buildThreadTree = function(){
     this.threadTree = treeRoot;
     this._indexThreadTree();
     treeRoot.refresh();
-    dbug('MB buildThreadTree done nodes='+this.threadNodeIndex.length, 'messageboard');
+    dbug('MessageBoard: buildThreadTree done nodes=' + this.threadNodeIndex.length, 'messageboard');
 };
 MessageBoard.prototype._buildThreadSequence = function(rootId){
     if(!rootId && this.lastReadMsg) rootId = this.lastReadMsg.thread_id || this.lastReadMsg.number;
@@ -1770,7 +1904,7 @@ MessageBoard.prototype._buildThreadSequence = function(rootId){
         if(self._fullHeaders && self._fullHeaders[num]) return self._fullHeaders[num];
         try {
             if(!mb){ mb = new MsgBase(code); if(!mb.open()){ mb = null; return null; } }
-            var hdr = mb.get_msg_header(false, num, false);
+            var hdr = mb.get_msg_header(false, num, true);
             if(hdr){ self._storeFullHeader(hdr); return hdr; }
         } catch(e){}
         return self._fullHeaders[num] || null;
@@ -1802,18 +1936,6 @@ MessageBoard.prototype._buildThreadSequence = function(rootId){
     if(!sequence.length) return [];
     this._threadSequenceCache[rootId] = sequence;
     return sequence;
-};
-
-MessageBoard.prototype._focusThreadNodeForMessage = function(msg){
-    if(!msg || !this.threadTree || !this.threadNodeIndex) return;
-    this._indexThreadTree();
-    for(var i=0;i<this.threadNodeIndex.length;i++){
-        var node=this.threadNodeIndex[i];
-        if(node && node.__msgHeader && node.__msgHeader.number === msg.number){
-            this.threadTreeSelection = i;
-            return;
-        }
-    }
 };
 
 
@@ -1851,7 +1973,7 @@ MessageBoard.prototype._indexThreadTree = function(){
 MessageBoard.prototype._paintThreadTree = function(){
     var f=this._threadContentFrame || this.outputFrame; if(!f) return; f.clear();
     if(!this.threadTree){ f.putmsg('Loading thread tree...'); return; }
-    dbug('MB paintThreadTree selection='+this.threadTreeSelection, 'messageboard');
+    dbug('MessageBoard: paintThreadTree selection=' + this.threadTreeSelection, 'messageboard');
     // Ensure tree frame matches output frame dims
     this.threadTree.refresh();
     // Highlight selection manually by manipulating tree indices
@@ -2099,115 +2221,11 @@ MessageBoard.prototype._findMenuIndexByType = function(type){
     return -1;
 };
 
-MessageBoard.prototype._showTransitionOverlay = function(kind, direction){
-    dbug('MB transition overlay show kind='+kind+' direction='+direction, 'messageboard');
-    if(!this.outputFrame) return;
-    this._clearTransitionOverlay();
-    var parent = this.outputFrame.parent || this.outputFrame;
-    var maxWidth = Math.max(1, parent.width - 2);
-    var width = Math.min(40, maxWidth);
-    if(width < 20) width = maxWidth;
-    if(width < 1) width = parent.width;
-    var maxHeight = Math.max(1, parent.height - 2);
-    var height = Math.min(3, maxHeight);
-    if(height < 1) height = parent.height;
-    var x = parent.x + Math.max(0, Math.floor((parent.width - width) / 2));
-    var y = parent.y + Math.max(0, Math.floor((parent.height - height) / 2));
-    var bg = (kind === 'thread') ? BG_MAGENTA : BG_BLUE;
-    var attr = bg | WHITE;
-    var frame = new Frame(x, y, width, height, attr, parent);
-    try { frame.open(); frame.top(); } catch(e){}
-    try {
-        frame.clear(attr);
-        frame.gotoxy(1, Math.floor(height/2)+1);
-        var dirText = (direction < 0) ? 'previous' : 'next';
-        var text = 'Showing ' + dirText + ' ' + (kind === 'thread' ? 'thread' : 'message');
-        frame.putmsg(this._center(text, width));
-        frame.cycle();
-    } catch(e){}
-    this._transitionOverlayFrame = frame;
-    var now = (typeof time === 'function') ? time() : Math.floor(Date.now() / 1000);
-    this._transitionOverlayExpires = now + 1;
-    this._transitionOverlayKind = kind;
-    if(this._transitionOverlayTimerEvent){
-        this._transitionOverlayTimerEvent.abort = true;
-        this._transitionOverlayTimerEvent = null;
-    }
-    var timer = this.timer || (this.shell && this.shell.timer) || null;
-    dbug('MB transition overlay timer '+(timer ? 'existing' : 'none') + (this.timer ? ' instance' : (this.shell && this.shell.timer ? ' from shell' : '')), 'messageboard');
-    if(!timer && typeof Timer === 'function'){
-        dbug('MB transition overlay timer fallback new Timer', 'messageboard');
-        timer = new Timer();
-        this._tempOverlayTimer = timer;
-        if(typeof js !== 'undefined' && typeof js.setInterval === 'function'){
-            this._tempOverlayTimerInterval = js.setInterval(function(){ try { timer.cycle(); } catch(e){} }, 100);
-        }
-    }
-    if(timer && typeof timer.addEvent === 'function'){
-        var self = this;
-        this._transitionOverlayTimerEvent = timer.addEvent(1000, false, function(){ self._clearTransitionOverlay(); }, [], this);
-    }
-};
-
-MessageBoard.prototype._clearTransitionOverlay = function(){
-    if(this._transitionOverlayFrame){
-        try { this._transitionOverlayFrame.close(); } catch(e){}
-        this._transitionOverlayFrame = null;
-    }
-    this._transitionOverlayExpires = 0;
-    this._transitionOverlayKind = null;
-    if(this._transitionOverlayTimerEvent){
-        this._transitionOverlayTimerEvent.abort = true;
-        this._transitionOverlayTimerEvent = null;
-    }
-    if(this._tempOverlayTimerInterval && typeof js !== 'undefined' && typeof js.clearInterval === 'function'){
-        try { js.clearInterval(this._tempOverlayTimerInterval); } catch(e){}
-        this._tempOverlayTimerInterval = null;
-    }
-    if(this._tempOverlayTimer){
-        try { this._tempOverlayTimer.cycle(); } catch(e){}
-        this._tempOverlayTimer = null;
-    }
-};
-
-MessageBoard.prototype._updateTransitionOverlay = function(){
-    if(!this._transitionOverlayFrame) return;
-    if(this._tempOverlayTimer){
-        try { this._tempOverlayTimer.cycle(); } catch(e){}
-    }
-    var now = (typeof time === 'function') ? time() : Math.floor(Date.now() / 1000);
-    if(now >= (this._transitionOverlayExpires || 0)) {
-        this._clearTransitionOverlay();
-    } else {
-        try { this._transitionOverlayFrame.cycle(); } catch(e){}
-    }
-};
-
 
 MessageBoard.prototype.pauseForReason = function(reason){
     log('[Message Board] Pausing for reason: '+(reason||'unspecified reason'));
 };
 
 MessageBoard.prototype.resumeForReason = function(reason){
-    dbug('MB resume reason='+(reason||''), 'messageboard');
-    try { this._clearTransitionOverlay(); } catch(e){}
-    try { this._ensureFrames(); } catch(e){}
-    switch(this.view){
-        case 'read':
-            if(this.lastReadMsg) this._renderReadView(this.lastReadMsg);
-            else this._renderCurrentView('threads');
-            break;
-        case 'threads':
-            this._renderThreadsView(this.cursub || this._lastActiveSubCode || null);
-            break;
-        case 'search':
-            this._renderSearchResults(true);
-            break;
-        case 'post':
-            this._renderPostView();
-            break;
-        default:
-            this._renderCurrentView(this.view || 'group');
-            break;
-    }
+    log('[Message Board] Resuming from pause: '+(reason||'unspecified reason'));
 };
