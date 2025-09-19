@@ -20,7 +20,7 @@ var DEBUG_CONFIG = {
     external: {active: false, log_color: ANSI_COLORS.RED},
     init: {active: false, log_color: ANSI_COLORS.RED},
     subprogram: {active: false, log_color: ANSI_COLORS.RED},
-    keylog: {active: false, log_color: ANSI_COLORS.CYAN},
+    keylog: {active: true, log_color: ANSI_COLORS.CYAN},
     hotkeys: {active: false, log_color: ANSI_COLORS.CYAN},
     icons: {active: false, log_color: ANSI_COLORS.CYAN},
     config: {active: false, log_color: ANSI_COLORS.CYAN},

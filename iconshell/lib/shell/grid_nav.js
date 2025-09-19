@@ -202,9 +202,6 @@ IconShell.prototype.drawFolder = function() {
         });
     }
     this.assignViewHotkeys(items);
-    var total = items.length;
-    var selectedNum = this.selection + 1;
-    this._drawBreadcrumb(names, selectedNum, total);
     var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 2;
     var cols = Math.max(1, Math.floor(this.view.width / cellW));
     var rows = Math.max(1, Math.floor(this.view.height / cellH));
@@ -216,6 +213,7 @@ IconShell.prototype.drawFolder = function() {
     this._highlightSelectedCell();
     this._addMouseHotspots();
     this._adjustSelectionWithinBounds(items, maxIcons);
+    this._drawBreadcrumb(names, this.selection + 1, items.length);
     this.root.cycle();
     // Rendering complete; clear pending change flag
     this.folderChanged = false;
@@ -228,9 +226,11 @@ IconShell.prototype._updateMouseIndicator = function() {
     this.mouseIndicator.attr = vals.BG | vals.FG;
     this.mouseIndicator.clear();
     this.mouseIndicator.gotoxy(1, 1);
-    // Always write exactly 10 chars, pad if needed
+    // Always write exactly 10 chars, pad if needed; prefix with a space for visual gap
     var msg = isActive ? "MOUSE ON" : "MOUSE OFF";
+    msg = ' ' + msg;
     if (msg.length < 10) msg += Array(11 - msg.length).join(' ');
+    else if (msg.length > 10) msg = msg.substring(0, 10);
     this.mouseIndicator.putmsg(msg);
     this.mouseIndicator.cycle();
 };
@@ -270,19 +270,104 @@ IconShell.prototype._clearHotspots = function() {
 };
 
 IconShell.prototype._drawBreadcrumb = function(names, selectedNum, total) {
-    // Compose path as /folder1/folder2/...
-    var path = '/' + names.join('/');
-    // Get user and bbs info if available
-    var userName = (typeof user !== 'undefined' && user.name) ? user.name : 'user';
-    var bbsName = (typeof system !== 'undefined' && system.name) ? system.name : 'bbs';
-    // Get selected item name if available
-    var selectedItemName = '';
-    if (this.grid && this.grid.cells && this.selection >= 0 && this.selection < this.grid.cells.length) {
-        var item = this.grid.cells[this.selection].item;
-        if (item && item.label) selectedItemName = item.label;
+    if (!this.crumb) return;
+    this.crumb.clear(ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG);
+    this.crumb.gotoxy(1, 1);
+
+    var userNumber = (typeof user !== 'undefined' && typeof user.number === 'number') ? user.number : 0;
+    if (!userNumber || userNumber < 0) userNumber = 0;
+    var boardName = 'bbs';
+    if (typeof system !== 'undefined') {
+        if (system.qwk_id) boardName = system.qwk_id;
+        else if (system.name) boardName = system.name;
     }
-    var crumbText = userName + '@' + bbsName + ':' + path + '/' + selectedItemName + '$';
-    this.crumb.putmsg(crumbText);
+    boardName = ('' + boardName).replace(/\s+/g, '').toLowerCase();
+    if (!boardName) boardName = 'bbs';
+
+    var pathParts = names.slice();
+    if (pathParts.length && /^home$/i.test(pathParts[0])) pathParts.shift();
+    var path = pathParts.join('/');
+
+    var selectedLabel = this._getSelectedItemLabel();
+    var segments = userNumber + '@' + boardName + ':';
+    if (path) segments += '/' + path;
+    var crumbText = segments;
+    crumbText += '$';
+    if (selectedLabel) crumbText += selectedLabel;
+
+    var mailInfo = this._formatMailStatus();
+    var mailBlock = mailInfo.text;
+    var width = this.crumb.width;
+    var mailStart = Math.max(1, width - mailBlock.length + 1);
+    var maxCrumbLen = Math.max(0, mailStart - 2);
+    if (crumbText.length > maxCrumbLen) {
+        if (maxCrumbLen > 3) crumbText = crumbText.substring(0, maxCrumbLen - 3) + '...';
+        else crumbText = crumbText.substring(0, maxCrumbLen);
+    }
+    if (crumbText) {
+        this.crumb.gotoxy(1, 1);
+        this.crumb.putmsg(crumbText);
+    }
+    if (mailBlock && mailBlock.length && mailStart <= width) {
+        this.crumb.gotoxy(mailStart, 1);
+        this.crumb.putmsg(mailBlock);
+        this._installMailHotspot(mailStart, mailStart + mailBlock.length - 1);
+    }
+    this.crumb.cycle();
+};
+
+IconShell.prototype._getSelectedItemLabel = function() {
+    if (!this.grid || !this.grid.cells || !this.grid.cells.length) return '';
+    var selIdx = this.selection - this.scrollOffset;
+    if (selIdx < 0 || selIdx >= this.grid.cells.length) return '';
+    var cell = this.grid.cells[selIdx];
+    if (!cell || !cell.item) return '';
+    return cell.item.label || '';
+};
+
+IconShell.prototype._formatMailStatus = function() {
+    var unread = 0;
+    var read = 0;
+    var total = 0;
+    var stats = (typeof user !== 'undefined' && user && user.stats) ? user.stats : null;
+    if (stats) {
+        if (typeof stats.unread_mail_waiting === 'number') unread = stats.unread_mail_waiting;
+        if (typeof stats.read_mail_waiting === 'number') read = stats.read_mail_waiting;
+        if (typeof stats.mail_waiting === 'number') total = stats.mail_waiting;
+    }
+    if (typeof bbs !== 'undefined') {
+        try {
+            if (!total) {
+                if (typeof bbs.mail_waiting === 'number') total = bbs.mail_waiting;
+                else if (typeof bbs.mail_waiting === 'function') total = bbs.mail_waiting();
+            }
+            if (!unread && typeof bbs.unread_mail_waiting === 'number') unread = bbs.unread_mail_waiting;
+            if (!read && typeof bbs.read_mail_waiting === 'number') read = bbs.read_mail_waiting;
+        } catch (e) {}
+    }
+    unread = Math.max(0, parseInt(unread, 10) || 0);
+    read = Math.max(0, parseInt(read, 10) || 0);
+    total = Math.max(0, parseInt(total, 10) || 0);
+    if (!total) total = unread + read;
+    if (!unread && total && read) unread = Math.max(0, total - read);
+    if (total < unread) total = unread;
+    var text = '[' + unread + '] MAIL (' + total + ')';
+    return { text: text, unread: unread, total: total };
+};
+
+IconShell.prototype._installMailHotspot = function(startColumn, endColumn) {
+    log("[mail hotspot] installing at cols " + startColumn + "-" + endColumn + " (crumb x=" + (this.crumb ? this.crumb.x : '?') + ")");
+    if (!this._mailHotspotCmd || typeof console.add_hotspot !== 'function' || !this.crumb) return;
+    if (startColumn <= 0 || endColumn < startColumn) return;
+    var absStart = this.crumb.x + startColumn - 1;
+    var absEnd = this.crumb.x + endColumn - 1;
+    var y = this.crumb.y - 1;
+    try { 
+        console.add_hotspot(this._mailHotspotCmd, false, absStart, absEnd, y);
+        log("[mail hotspot] added at abs cols " + absStart + "-" + absEnd + " y=" + y);
+     } catch (e) {
+        log("[mail hotspot] error: " + e);
+    }
 };
 
 IconShell.prototype._clampSelection = function(items) {

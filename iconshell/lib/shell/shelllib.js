@@ -59,6 +59,15 @@ IconShell.prototype.init = function() {
     this.mouseActive = this.detectMouseSupport();
     // Toast tracking
     this.toasts = [];
+    // Track reserved hotspot commands so we avoid collisions
+    this._reservedHotspotCommands = {};
+    if (typeof ICSH_HOTSPOT_FILL_CMD === 'string' && ICSH_HOTSPOT_FILL_CMD.length === 1) {
+        this._reservedHotspotCommands[ICSH_HOTSPOT_FILL_CMD] = true;
+    }
+    // Screensaver hotspot state
+    this._screensaverDismissCmd = this._reserveHotspotCmd('\u0007');
+    this._screensaverHotspotActive = false;
+    this._mailHotspotCmd = this._reserveHotspotCmd('Z'); // this._reserveHotspotCmd('\u001D');
     // === End instance state ===
     // Inactivity tracking for background effects
     this._lastActivityTs = Date.now();
@@ -155,7 +164,7 @@ IconShell.prototype.main = function() {
                 this._lastWasCR = false;
             }
             if (typeof key === 'string' && key.length > 0) {
-                dbug("Key:" + key, "keylog");
+                // dbug("Key:" + JSON.stringify(key), "keylog");
                 // User activity resets inactivity timer and stops rain if active
                 this._lastActivityTs = Date.now();
 
@@ -164,14 +173,15 @@ IconShell.prototype.main = function() {
                     // Foreground redraw overwrites rain cells.
                         if(typeof this._matrixRain.requestInterrupt === 'function') this._matrixRain.requestInterrupt();
                     this._matrixRain.stop();
+                    this._removeScreensaverHotspot();
                     if(this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function'){
                         this.activeSubprogram.resumeForReason('screensaver_off');
                     }
                     if(this.activeSubprogram && typeof this.activeSubprogram.draw==='function') this.activeSubprogram.draw();
                     else if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
                 }
-                this.processKeyboardInput(key);
             }
+            if(key) this.processKeyboardInput(key);
             // Inactivity trigger (disabled if inactivityThresholdMs === -1)
             if(this._matrixRain && !this._matrixRain.running && this.inactivityThresholdMs !== -1){
                 if(Date.now() - this._lastActivityTs > this.inactivityThresholdMs){
@@ -179,6 +189,7 @@ IconShell.prototype.main = function() {
                         this.activeSubprogram.pauseForReason('screensaver_on');
                     }
                     this._matrixRain.start();
+                    if(this._matrixRain && this._matrixRain.running) this._activateScreensaverHotspot();
                 }
             }
             // Cycle all toasts for auto-dismiss
@@ -194,15 +205,37 @@ IconShell.prototype.main = function() {
         if (this._chatRedrawEvent && this._chatRedrawEvent.abort !== undefined) {
             this._chatRedrawEvent.abort = true;
         }
+        this._removeScreensaverHotspot();
         if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
     }
 };
 
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function(ch) {
-    dbug("Shell processing keyboard input:" + ch, "keylog");
+    dbug(ch === this._mailHotspotCmd + " Shell processing keyboard input:" + ch, "keylog");
+    if (ch === this._mailHotspotCmd) {
+        this._handleMailHotspot();
+        return true;
+    }
     // Ignore filler hotspot command (used to swallow empty grid area clicks)
     if (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined' && ch === ICSH_HOTSPOT_FILL_CMD) return true;
+    if (ch === this._screensaverDismissCmd) {
+        var saverActive = this._matrixRain && this._matrixRain.running;
+        if (saverActive && typeof this._matrixRain.requestInterrupt === 'function') this._matrixRain.requestInterrupt();
+        if (saverActive && typeof this._matrixRain.stop === 'function') this._matrixRain.stop();
+        this._removeScreensaverHotspot();
+        if (saverActive) {
+            if (this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function') {
+                this.activeSubprogram.resumeForReason('screensaver_off');
+            }
+            if (this.activeSubprogram && typeof this.activeSubprogram.draw === 'function') {
+                this.activeSubprogram.draw();
+            } else if (!this.activeSubprogram || !this.activeSubprogram.running) {
+                this.drawFolder();
+            }
+        }
+        return true;
+    }
     // If any toasts are active, ESC dismisses the oldest
     if (this.toasts && this.toasts.length > 0) {
         var toast = this.toasts[0];
@@ -253,6 +286,73 @@ IconShell.prototype._processChatUpdate = function(packet) {
         });
     }
 
+};
+
+IconShell.prototype._handleMailHotspot = function() {
+    dbug('mail hotspot activated', 'mail');
+    try {
+        if (typeof BUILTIN_ACTIONS !== 'undefined' && BUILTIN_ACTIONS && typeof BUILTIN_ACTIONS.mail === 'function') {
+            BUILTIN_ACTIONS.mail.call(this);
+            return;
+        }
+    } catch (e) {
+        dbug('mail hotspot builtin error: ' + e, 'mail');
+    }
+    try {
+        if (typeof Mail !== 'function') load('iconshell/lib/subfunctions/mail.js');
+    } catch (loadErr) {
+        dbug('mail hotspot load error: ' + loadErr, 'mail');
+        return;
+    }
+    if (typeof Mail === 'function' && typeof this.queueSubprogramLaunch === 'function') {
+        if (!this.mailSub) this.mailSub = new Mail({ parentFrame: this.subFrame, shell: this });
+        else {
+            this.mailSub.parentFrame = this.subFrame;
+            this.mailSub.shell = this;
+        }
+        this.queueSubprogramLaunch('mail', this.mailSub);
+    }
+};
+
+IconShell.prototype._reserveHotspotCmd = function(preferred) {
+    if (!this._reservedHotspotCommands) this._reservedHotspotCommands = {};
+    var taken = this._reservedHotspotCommands;
+    var forbidden = {};
+    if (typeof ICSH_HOTSPOT_FILL_CMD === 'string' && ICSH_HOTSPOT_FILL_CMD.length === 1) {
+        forbidden[ICSH_HOTSPOT_FILL_CMD] = true;
+    }
+    function isAsciiChar(ch) {
+        return typeof ch === 'string' && ch.length === 1 && ch.charCodeAt(0) > 0 && ch.charCodeAt(0) < 127;
+    }
+    function available(ch) {
+        return isAsciiChar(ch) && !taken[ch] && !forbidden[ch];
+    }
+    if (available(preferred)) {
+        taken[preferred] = true;
+        return preferred;
+    }
+    var candidates = [
+        '\u0002','\u0003','\u0004','\u0005','\u0006','\u000E','\u000F',
+        '\u0010','\u0011','\u0012','\u0013','\u0014','\u0015','\u0016','\u0017',
+        '\u0018','\u0019','\u001A','\u001C','\u001D','\u001E','\u001F'
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+        var candidate = candidates[i];
+        if (available(candidate)) {
+            taken[candidate] = true;
+            return candidate;
+        }
+    }
+    for (var code = 33; code <= 126; code++) {
+        var ch = String.fromCharCode(code);
+        if (/[A-Za-z0-9]/.test(ch)) continue;
+        if (available(ch)) {
+            taken[ch] = true;
+            return ch;
+        }
+    }
+    taken[preferred] = true;
+    return preferred;
 };
 
 IconShell.prototype._handleSubprogramKey = function(ch) {
@@ -354,6 +454,35 @@ IconShell.prototype.detectMouseSupport = function() {
     return false;
 };
 
+IconShell.prototype._activateScreensaverHotspot = function() {
+    if (this._screensaverHotspotActive) return;
+    if (typeof console.add_hotspot !== 'function') return;
+
+    if (typeof this._clearHotspots === 'function') this._clearHotspots();
+    else if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
+
+    var root = this.root;
+    var startX = root ? root.x : 1;
+    var startY = root ? root.y : 1;
+    var width = root ? root.width : console.screen_columns;
+    var height = root ? root.height : console.screen_rows;
+    var endX = startX + Math.max(0, width - 1);
+    var cmd = this._screensaverDismissCmd || '__ICSH_SAVER__';
+
+    for (var y = startY; y < startY + height; y++) {
+        try { console.add_hotspot(cmd, true, startX, endX, y); } catch (e) {}
+    }
+
+    this._screensaverHotspotActive = true;
+};
+
+IconShell.prototype._removeScreensaverHotspot = function() {
+    if (!this._screensaverHotspotActive) return;
+    if (typeof this._clearHotspots === 'function') this._clearHotspots();
+    else if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
+    this._screensaverHotspotActive = false;
+};
+
 IconShell.prototype.showToast = function(params) {
     var self = this;
     var opts = params || {};
@@ -366,13 +495,3 @@ IconShell.prototype.showToast = function(params) {
     this.toasts.push(toast);
     return toast;
 };
-
-
-
-
-
-
-
-
-
-
