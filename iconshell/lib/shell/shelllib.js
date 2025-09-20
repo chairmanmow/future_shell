@@ -67,6 +67,7 @@ IconShell.prototype.init = function() {
     // Screensaver hotspot state
     this._screensaverDismissCmd = this._reserveHotspotCmd('\u0007');
     this._screensaverHotspotActive = false;
+    // fixme, why cant we pass things outside of ascii range?
     this._mailHotspotCmd = this._reserveHotspotCmd('Z'); // this._reserveHotspotCmd('\u001D');
     // === End instance state ===
     // Inactivity tracking for background effects
@@ -164,7 +165,7 @@ IconShell.prototype.main = function() {
                 this._lastWasCR = false;
             }
             if (typeof key === 'string' && key.length > 0) {
-                // dbug("Key:" + JSON.stringify(key), "keylog");
+                dbug("Key:" + JSON.stringify(key), "keylog");
                 // User activity resets inactivity timer and stops rain if active
                 this._lastActivityTs = Date.now();
 
@@ -321,11 +322,8 @@ IconShell.prototype._reserveHotspotCmd = function(preferred) {
     if (typeof ICSH_HOTSPOT_FILL_CMD === 'string' && ICSH_HOTSPOT_FILL_CMD.length === 1) {
         forbidden[ICSH_HOTSPOT_FILL_CMD] = true;
     }
-    function isAsciiChar(ch) {
-        return typeof ch === 'string' && ch.length === 1 && ch.charCodeAt(0) > 0 && ch.charCodeAt(0) < 127;
-    }
     function available(ch) {
-        return isAsciiChar(ch) && !taken[ch] && !forbidden[ch];
+        return !taken[ch] && !forbidden[ch];
     }
     if (available(preferred)) {
         taken[preferred] = true;
