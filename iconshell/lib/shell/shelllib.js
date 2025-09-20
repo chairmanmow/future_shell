@@ -8,22 +8,9 @@ try { load('iconshell/lib/effects/matrix_rain.js'); } catch(e) {}
 IconShell.prototype.init = function() {
     dbug("Initialize icon shell 42A","init")
     // === Instance state ===
-    // Main root frame for the entire shell UI
-    var rootW = Math.max(1, console.screen_columns);
-    var rootH = Math.max(1, console.screen_rows);
-    this.root = new Frame(1, 1, rootW, rootH, ICSH_VALS.ROOT.BG | ICSH_VALS.ROOT.FG);
-    this.root.open();
-    // Main icon view area (excludes crumb bar)
-    var viewH = Math.max(1, this.root.height - 1);
-    this.view = new Frame(1, 1, this.root.width, viewH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.root);
-    this.view.open();
-    // Breadcrumb bar at the bottom
-    var crumbY = this.root.height;
-    var crumbH = 1;
-    if (crumbY < 1) crumbY = 1;
-    if (crumbY + crumbH - 1 > this.root.height) crumbH = Math.max(1, this.root.height - crumbY + 1);
-    this.crumb = new Frame(1, crumbY, this.root.width, crumbH, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.root);
-    this.crumb.open();
+    // Main root frame hierarchy (root/view/crumb)
+    var initialDims = this._getConsoleDimensions();
+    this._createShellFrames(initialDims);
     // Ensure view id generator exists BEFORE assigning any _viewId
     if (typeof this.generateViewId !== 'function') {
         this._viewSeq = 0;
@@ -45,8 +32,9 @@ IconShell.prototype.init = function() {
     // Set true if folder was changed and needs redraw
     this.folderChanged = false;
     // Last known screen size (for resize detection)
-    this.lastCols = console.screen_columns;
-    this.lastRows = console.screen_rows;
+    this._lastConsoleDimensions = initialDims;
+    this.lastCols = initialDims.cols;
+    this.lastRows = initialDims.rows;
     // Current view ID (assigned lazily); using dynamic generator avoids coupling to config
     this.currentView = null; // set just-in-time (root assigned above)
     // Hotkey map for current view
@@ -67,8 +55,7 @@ IconShell.prototype.init = function() {
     // Screensaver hotspot state
     this._screensaverDismissCmd = this._reserveHotspotCmd('\u0007');
     this._screensaverHotspotActive = false;
-    // fixme, why cant we pass things outside of ascii range?
-    this._mailHotspotCmd = this._reserveHotspotCmd('Z'); // this._reserveHotspotCmd('\u001D');
+    this._mailHotspotCmd = this._reserveHotspotCmd('z');
     // === End instance state ===
     // Inactivity tracking for background effects
     this._lastActivityTs = Date.now();
@@ -108,6 +95,9 @@ IconShell.prototype.init = function() {
         if(this._matrixRain && typeof this._matrixRain.attachTimer === 'function'){
             this._matrixRain.attachTimer(this.timer);
         }
+        this._resizePollEvent = this.timer.addEvent(2500, true, function() {
+            self._checkConsoleResize();
+        });
     }
 
     // Assign hotkeys for root view
@@ -141,6 +131,8 @@ IconShell.prototype.main = function() {
             }
             if(this.timer){
                 this.timer.cycle();
+            } else {
+                this._checkConsoleResize();
             }
             if (this.activeSubprogram && typeof this.activeSubprogram.cycle === 'function') {
                 this.activeSubprogram.cycle();
@@ -206,6 +198,9 @@ IconShell.prototype.main = function() {
         if (this._chatRedrawEvent && this._chatRedrawEvent.abort !== undefined) {
             this._chatRedrawEvent.abort = true;
         }
+        if (this._resizePollEvent && this._resizePollEvent.abort !== undefined) {
+            this._resizePollEvent.abort = true;
+        }
         this._removeScreensaverHotspot();
         if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
     }
@@ -213,7 +208,7 @@ IconShell.prototype.main = function() {
 
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function(ch) {
-    dbug(ch === this._mailHotspotCmd + " Shell processing keyboard input:" + ch, "keylog");
+    dbug('Shell processing keyboard input:' + JSON.stringify(ch), 'keylog');
     if (ch === this._mailHotspotCmd) {
         this._handleMailHotspot();
         return true;
@@ -312,6 +307,112 @@ IconShell.prototype._handleMailHotspot = function() {
             this.mailSub.shell = this;
         }
         this.queueSubprogramLaunch('mail', this.mailSub);
+    }
+};
+
+IconShell.prototype._getConsoleDimensions = function() {
+    var cols = null;
+    var rows = null;
+    if (typeof console !== 'undefined') {
+        if (typeof console.ansi_getdims === 'function') {
+            try {
+                var dims = console.ansi_getdims();
+                if (dims) {
+                    if (typeof dims.cols === 'number' && dims.cols > 0) cols = dims.cols;
+                    else if (typeof dims.width === 'number' && dims.width > 0) cols = dims.width;
+                    if (typeof dims.rows === 'number' && dims.rows > 0) rows = dims.rows;
+                    else if (typeof dims.height === 'number' && dims.height > 0) rows = dims.height;
+                }
+            } catch (e) { dbug('[resize] ansi_getdims error: ' + e, 'resize'); }
+        }
+        if (cols === null && typeof console.screen_columns === 'number' && console.screen_columns > 0) cols = console.screen_columns;
+        if (rows === null && typeof console.screen_rows === 'number' && console.screen_rows > 0) rows = console.screen_rows;
+    }
+    if (cols === null) cols = 80;
+    if (rows === null) rows = 24;
+    return { cols: Math.max(1, cols), rows: Math.max(1, rows) };
+};
+
+IconShell.prototype._disposeShellFrames = function() {
+    try { this._removeScreensaverHotspot(); } catch (e) {}
+    this._screensaverHotspotActive = false;
+    if (typeof this._clearHotspots === 'function') this._clearHotspots();
+    if (typeof this._closePreviousFrames === 'function') this._closePreviousFrames();
+    if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') {
+        try { this.mouseIndicator.close(); } catch(e) {}
+    }
+    if (this.crumb && typeof this.crumb.close === 'function') {
+        try { this.crumb.close(); } catch(e) {}
+    }
+    if (this.view && typeof this.view.close === 'function') {
+        try { this.view.close(); } catch(e) {}
+    }
+    if (this.root && typeof this.root.close === 'function') {
+        try { this.root.close(); } catch(e) {}
+    }
+    this.mouseIndicator = null;
+    this.crumb = null;
+    this.view = null;
+    this.root = null;
+    this.grid = null;
+    this.subFrame = null;
+};
+
+IconShell.prototype._createShellFrames = function(dims) {
+    dims = dims || this._getConsoleDimensions();
+    var cols = Math.max(1, dims.cols);
+    var rows = Math.max(1, dims.rows);
+    this.root = new Frame(1, 1, cols, rows, ICSH_VALS.ROOT.BG | ICSH_VALS.ROOT.FG);
+    this.root.open();
+    var viewH = Math.max(1, rows - 1);
+    this.view = new Frame(1, 1, cols, viewH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.root);
+    this.view.open();
+    var crumbY = rows;
+    if (crumbY < 1) crumbY = 1;
+    this.crumb = new Frame(1, crumbY, cols, 1, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.root);
+    this.crumb.open();
+    this.subFrame = this.view;
+    this.mouseIndicator = null;
+    if (typeof console !== 'undefined' && typeof console.mouse_mode !== 'undefined') {
+        console.mouse_mode = !!this.mouseActive;
+    }
+};
+
+IconShell.prototype._handleConsoleResize = function(dims) {
+    dims = dims || this._getConsoleDimensions();
+    dbug('[resize] detected console resize to ' + dims.cols + 'x' + dims.rows, 'resize');
+    this._disposeShellFrames();
+    this._createShellFrames(dims);
+    this._lastConsoleDimensions = { cols: dims.cols, rows: dims.rows };
+    this.lastCols = dims.cols;
+    this.lastRows = dims.rows;
+    if (this._matrixRain) {
+        this._matrixRain.parent = this.view;
+        if (typeof this._matrixRain.resize === 'function') {
+            try { this._matrixRain.resize({ width: this.view.width, height: this.view.height, parent: this.view }); } catch(e) { dbug('[resize] matrixRain resize error: ' + e, 'resize'); }
+        }
+    }
+    if (this.activeSubprogram && this.activeSubprogram.running) {
+        if (typeof this.activeSubprogram.setParentFrame === 'function') {
+            try { this.activeSubprogram.setParentFrame(this.subFrame || this.view); } catch (e) { dbug('[resize] subprogram setParentFrame error: ' + e, 'resize'); }
+        }
+        if (typeof this.activeSubprogram.onShellResize === 'function') {
+            try { this.activeSubprogram.onShellResize(dims); } catch (e2) { dbug('[resize] subprogram onShellResize error: ' + e2, 'resize'); }
+        } else if (typeof this.activeSubprogram.refresh === 'function') {
+            try { this.activeSubprogram.refresh(); } catch (e3) { dbug('[resize] subprogram refresh error: ' + e3, 'resize'); }
+        } else if (typeof this.activeSubprogram.draw === 'function') {
+            try { this.activeSubprogram.draw(); } catch (e4) { dbug('[resize] subprogram draw error: ' + e4, 'resize'); }
+        }
+        return;
+    }
+    this.drawFolder();
+};
+
+IconShell.prototype._checkConsoleResize = function() {
+    var dims = this._getConsoleDimensions();
+    var last = this._lastConsoleDimensions;
+    if (!last || dims.cols !== last.cols || dims.rows !== last.rows) {
+        this._handleConsoleResize(dims);
     }
 };
 

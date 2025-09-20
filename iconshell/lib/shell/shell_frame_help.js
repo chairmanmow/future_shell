@@ -17,16 +17,19 @@ IconShell.prototype.disposeAllFrames = function() {
 };
 
 IconShell.prototype.recreateFramesIfNeeded = function() {
+	if (typeof this._checkConsoleResize === 'function') {
+		this._checkConsoleResize();
+		return;
+	}
 	if (console.screen_columns !== this.lastCols || console.screen_rows !== this.lastRows) {
 		this.lastCols = console.screen_columns;
 		this.lastRows = console.screen_rows;
 		this.disposeAllFrames();
-		// recreate root/view/crumb
-        this.root = new Frame(1, 1, console.screen_columns, console.screen_rows, ICSH_ATTR('FRAME_STANDARD'));
+		this.root = new Frame(1, 1, console.screen_columns, console.screen_rows, ICSH_ATTR('FRAME_STANDARD'));
 		this.root.open();
-        this.view = new Frame(1, 1, this.root.width, this.root.height - 1, ICSH_ATTR('FRAME_STANDARD'), this.root);
+		this.view = new Frame(1, 1, this.root.width, this.root.height - 1, ICSH_ATTR('FRAME_STANDARD'), this.root);
 		this.view.open();
-        this.crumb = new Frame(1, this.root.height, this.root.width, 1, ICSH_ATTR('STATUS_BAR'), this.root);
+		this.crumb = new Frame(1, this.root.height, this.root.width, 1, ICSH_ATTR('STATUS_BAR'), this.root);
 		this.crumb.open();
 		this.drawFolder();
 	}
@@ -136,4 +139,3 @@ IconShell.prototype.moveSelection = function(dx, dy) {
     dbug('[moveSelection] final selection=' + this.selection + ' total=' + total + ' scrollOffset=' + this.scrollOffset, 'nav');
     }
 }
-
