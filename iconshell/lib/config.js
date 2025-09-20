@@ -40,7 +40,8 @@ var BUILTIN_ACTIONS = {
 		else { this.ircChatSub.parentFrame = this.subFrame; this.ircChatSub.shell = this; }
 		this.queueSubprogramLaunch('irc-chat', this.ircChatSub);
 	},
-	settings: function(){ if (typeof bbs.user_config==='function') {this.runExternal(function(){bbs.user_config()}) } else { console.clear(); console.putmsg('\x01h\x01cUser settings editor not available.\x01n\r\n'); mswait(800);} },
+	msg_scan_config: function(){ if (typeof bbs.cfg_msg_scan==='function') {this.runExternal(function(){bbs.cfg_msg_scan()}) }  },
+	user_settings: function(){ if (typeof bbs.user_config==='function') {this.runExternal(function(){bbs.user_config()}) }  },
 	hello: function(){ if(!this.helloWorld) this.helloWorld = new HelloWorld(); this.queueSubprogramLaunch('hello-world', this.helloWorld); },
 	exit: function(){ throw('Exit Shell'); },
 	msg_boards: function(){

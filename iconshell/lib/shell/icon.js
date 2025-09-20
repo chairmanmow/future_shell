@@ -73,24 +73,25 @@ Icon.prototype._renderFallbackBg = function(hasBg, hasFg) {
 
 Icon.prototype._renderLabel = function(iconW) {
     this.labelFrame.clear(ICSH_ATTR('FRAME_STANDARD'));
-    this.labelFrame.home();
+    if (typeof this.labelFrame.word_wrap !== 'undefined') this.labelFrame.word_wrap = false;
     var name = this.data.label || "";
-    var hotkey = this.data.hotkey || null;
-    var labelOut = "";
+    if (!name) return;
+    var hotkey = this.data.hotkey ? ("" + this.data.hotkey).toUpperCase() : null;
+    var maxChars = iconW;
+    var visible = name.length > maxChars ? name.substr(0, maxChars) : name;
+    var start = Math.max(0, Math.floor((maxChars - visible.length) / 2));
+    this.labelFrame.gotoxy(start + 1, 1);
     var usedHotkey = false;
-    for (var i = 0; i < name.length; i++) {
-        var c = name[i];
-        if (!usedHotkey && hotkey && c.toUpperCase() === hotkey) {
-            labelOut += "\x01h\x01b" + c + "\x01n";
+    for (var i = 0; i < visible.length; i++) {
+        var ch = visible.charAt(i);
+        if (!usedHotkey && hotkey && ch.toUpperCase() === hotkey) {
+            this.labelFrame.putmsg("\x01h\x01b" + ch + "\x01n");
             usedHotkey = true;
         } else {
-            labelOut += c;
+            this.labelFrame.putmsg(ch);
         }
     }
-    var start = Math.max(0, Math.floor((iconW - name.length) / 2));
-    var pad = repeatChar(" ", start);
-    this.labelFrame.putmsg(pad + labelOut.substr(0, iconW));
-};
+}; 
 
 Icon.prototype.redraw = function(){
     //this.iconFrame.home();
@@ -105,4 +106,3 @@ Icon.prototype.redraw = function(){
 
 // Make Icon globally available for load()
 this.Icon = Icon;
-

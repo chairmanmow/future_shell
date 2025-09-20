@@ -364,6 +364,13 @@ MessageBoard.prototype._handleKey = function(key) {
             }
             return false;
         }
+        if(idx === 'read-sub-icon'){
+            if(this.view === 'read' && typeof this._destroyReadFrames === 'function') {
+                try { this._destroyReadFrames(); } catch(e){}
+            }
+            this._renderSubView(this.curgrp);
+            return false;
+        }
         if (typeof idx === 'number') {
             if(this.view === 'group' || this.view === 'sub') {
                 this.selection = idx;
@@ -514,6 +521,8 @@ MessageBoard.prototype._init = function(reentry){
     this._threadHeadersCache = {};
     this._setReadBodyText('');
     this._readScroll = 0;
+    this._readSubIconFrame = null;
+    this._readSubIconHotspotKey = '@';
     // Build comprehensive hotspot character set (single-key tokens only)
     this._buildHotspotCharSet();
     // Thread limits bound by hotspot capacity but capped at 500 for performance
@@ -667,11 +676,16 @@ MessageBoard.prototype._renderSubView = function(group) {
 }
 
 MessageBoard.prototype._renderThreadsView = function(sub) {
-    this.cursub = sub;
-    if(this.cursub) this._lastActiveSubCode = this.cursub;
+    var previousCode = this.cursub || this._lastActiveSubCode || this._cachedSubCode || bbs.cursub_code || null;
+    var state = this._syncSubState(sub || previousCode);
+    var code = state && state.code ? state.code : (this.cursub || this._lastActiveSubCode || bbs.cursub_code);
+    if (!code) return;
+    this.cursub = code;
+    this._lastActiveSubCode = code;
+    var subChanged = previousCode && code !== previousCode;
     this.view = 'threads';
     this._releaseHotspots();
-    dbug('MessageBoard: enter threads view sub=' + sub, 'messageboard');
+    dbug('MessageBoard: enter threads view sub=' + code, 'messageboard');
     // Load messages in the specified sub (if not already loaded).
     // If no messages, call _renderPostView to prompt for first post.
     // Render a list of threads in the specified message area.
@@ -684,9 +698,22 @@ MessageBoard.prototype._renderThreadsView = function(sub) {
     this._destroyThreadUI();
     if(!this._fullHeaders) this._fullHeaders = {};
     if(!this._threadSequenceCache) this._threadSequenceCache = {};
+    if (subChanged) {
+        this.threadTreeSelection = 0;
+        this.threadHeaders = [];
+        this.threadNodeIndex = [];
+        this.threadTree = null;
+        this.threadScrollOffset = 0;
+        this.threadSelection = 0;
+    }
     this._ensureThreadSearchUI();
-    this._threadSearchFocus = false;
-    this._threadSearchBuffer = this._threadSearchBuffer || '';
+    if (subChanged) {
+        this._threadSearchFocus = false;
+        this._threadSearchBuffer = '';
+    } else {
+        this._threadSearchFocus = false;
+        this._threadSearchBuffer = this._threadSearchBuffer || '';
+    }
     this._renderThreadSearchBar();
     var contentFrame = this._threadContentFrame || this.outputFrame;
     // Immediate visual feedback before heavy work
@@ -715,6 +742,8 @@ MessageBoard.prototype._renderReadView = function(msg) {
     // log('MessageBoard: enter read view', 'messageboard', JSON.stringify(msg));
     if(!msg) return;
     this.view = 'read';
+    this._releaseHotspots();
+    this._hotspotMap = {};
     this.lastReadMsg = msg;
     this._storeFullHeader(msg);
     if(!this.outputFrame) this._ensureFrames();
@@ -1059,39 +1088,80 @@ MessageBoard.prototype._renderPostView = function(postOptions) {
 
 MessageBoard.prototype._paintReadHeader = function(msg){
     if(!this._readHeaderFrame || !msg) return;
-    var hf=this._readHeaderFrame; hf.clear(BG_BLUE|WHITE);
+    var hf=this._readHeaderFrame;
+    hf.clear(BG_BLUE|WHITE);
+    if(this._readSubIconFrame){ try { this._readSubIconFrame.close(); } catch(e){} this._readSubIconFrame=null; }
+    var iconW = (typeof ICSH_CONSTANTS !== 'undefined' && ICSH_CONSTANTS) ? ICSH_CONSTANTS.ICON_W : 12;
+    var iconH = (typeof ICSH_CONSTANTS !== 'undefined' && ICSH_CONSTANTS) ? ICSH_CONSTANTS.ICON_H : 6;
+    var iconMaxWidth = Math.min(iconW, hf.width);
+    var iconHeight = Math.min(iconH, hf.height);
+    var iconLoaded = false;
+    var subCode = this.cursub || msg.sub || msg.sub_code || this._lastActiveSubCode || bbs.cursub_code;
+    var iconBase = this._resolveBoardIcon(subCode || this._getCurrentSubName(), 'sub');
+    if(iconBase){
+        if (!this._Icon) {
+            try { this._Icon = load('iconshell/lib/shell/icon.js').Icon || Icon; }
+            catch(e){ try { load('iconshell/lib/shell/icon.js'); this._Icon = Icon; } catch(e2){} }
+        }
+        if(this._Icon){
+            var iconFrame = null;
+            var labelFrame = null;
+            try {
+                iconFrame = new Frame(hf.x, hf.y, iconMaxWidth, iconHeight, hf.attr, hf.parent);
+                iconFrame.open();
+                labelFrame = new Frame(iconFrame.x, iconFrame.y + iconFrame.height, iconFrame.width, 1, hf.attr, hf.parent);
+                labelFrame.open();
+                labelFrame.clear();
+                var iconObj = new this._Icon(iconFrame, labelFrame, { iconFile: iconBase, label: '' });
+                iconObj.render();
+                iconLoaded = true;
+                this._readSubIconFrame = iconFrame;
+            } catch(e) {
+                iconLoaded = false;
+                if(iconFrame){ try { iconFrame.close(); } catch(_e3){} }
+                this._readSubIconFrame = null;
+            } finally {
+                if(labelFrame){ try { labelFrame.close(); } catch(_lf2){} }
+            }
+        }
+    }
     var from = (msg.from || msg.from_net || 'unknown');
+    var toField = msg.to || msg.to_net || msg.to_net_addr || msg.replyto || msg.reply_to || '';
     var subj = (msg.subject || '(no subject)');
-    var replyTo = msg.replyto || msg.reply_to || msg.replyto_net_addr || '';
     var when = msg.when_written_time || msg.when_written || msg.when_imported_time || 0;
     var dateStr = 'Unknown';
     try { if(when) dateStr = strftime('%Y-%m-%d %H:%M', when); } catch(e){}
     var avatarWidth = (this._avatarLib && this._avatarLib.defs && this._avatarLib.defs.width) || 10;
     var avatarHeight = (this._avatarLib && this._avatarLib.defs && this._avatarLib.defs.height) || 6;
-    var leftPad = 1; // where avatar starts
-    var textStartX = 1;
-    // Attempt avatar fetch first (so we know if we need to reserve space)
     var avatarInfo = null;
     if(this._avatarLib){
         try { avatarInfo = this._fetchAvatarForMessage ? this._fetchAvatarForMessage(msg) : null; } catch(e){ log('avatar fetch error: '+e); }
     }
     var haveAvatar = avatarInfo && avatarInfo.obj && avatarInfo.obj.data;
-    if(haveAvatar && hf.width > avatarWidth + 3){
-        textStartX = avatarWidth + 3; // leave a gap after avatar
+    var textStartX = iconLoaded ? Math.min(iconMaxWidth + 2, hf.width) : 1;
+    var textEndX = hf.width;
+    var avatarStartX = hf.width - avatarWidth + 1;
+    if(haveAvatar && avatarStartX > textStartX){
+        textEndX = Math.max(textStartX, avatarStartX - 2);
     }
     var lines = [];
+    lines.push({ label: null, value: '\x01h\x01g'+(subCode || this._getCurrentSubName() || 'unknown' ).toUpperCase() });
     lines.push({ label: 'Date', value: dateStr });
-    lines.push({ label: 'From', value: from });
-    if(replyTo && replyTo.length) lines.push({ label: 'Reply-To', value: replyTo });
-    lines.push({ label: 'Subj', value: subj });
+    lines.push({ label: 'From', value: '\x01h\x01r'+from });
+    if(toField && toField.length) lines.push({ label: 'To', value: '\x01h\x01m'+toField });
+    if(msg.replyto && msg.replyto.length && (!toField || toField.toLowerCase() !== msg.replyto.toLowerCase())) {
+        lines.push({ label: 'Reply-To', value: msg.replyto });
+    }
+    lines.push({ label: 'Subj', value: '\x01h\x01y'+subj });
+    var textWidth = Math.max(1, textEndX - textStartX + 1);
     for(var i=0;i<lines.length && i<hf.height;i++){
         var info = lines[i];
-        var label = '\x01h\x01y'+info.label+':\x01n ';
-        var text = label + info.value;
-        if(text.length > hf.width - textStartX + 1) text = text.substr(0, hf.width - textStartX + 1);
+        var label = !!info.label ? '\x01h\x01c'+info.label+':\x01n ' : '';
+        var value = info.value || '';
+        var text = label + value;
+        if(text.length > textWidth) text = text.substr(0, textWidth);
         try { hf.gotoxy(textStartX, i+1); hf.putmsg(text); } catch(e){}
     }
-    // Blit avatar into header frame (no direct console cursor side-effects)
     if(haveAvatar){
         try {
             var bin = (typeof base64_decode==='function') ? base64_decode(avatarInfo.obj.data) : null;
@@ -1101,10 +1171,38 @@ MessageBoard.prototype._paintReadHeader = function(msg){
                         var offset=0; for(var y=0;y<h;y++){ for(var x=0;x<w;x++){ if(offset+1>=binData.length) return; var ch=binData.substr(offset++,1); var attr=ascii(binData.substr(offset++,1)); try{ frame.setData(dstX + x - 1, dstY + y - 1, ch, attr, false); }catch(se){} } }
                     };
                 }
-                this._blitAvatarToFrame(hf, bin, avatarWidth, Math.min(avatarHeight, hf.height), leftPad, 1);
+                var drawWidth = Math.min(avatarWidth, hf.width);
+                var drawHeight = Math.min(avatarHeight, hf.height);
+                var startX = Math.max(textStartX, hf.width - drawWidth + 1);
+                this._blitAvatarToFrame(hf, bin, drawWidth, drawHeight, startX, 1);
             }
-        } catch(be){ return; }
+        } catch(be){}
     }
+    if(this._readSubIconFrame && this._readSubIconHotspotKey){
+        this._readSubIconFrame.cycle();
+        this._hotspotMap = this._hotspotMap || {};
+        this._hotspotMap[this._readSubIconHotspotKey] = 'read-sub-icon';
+        if(this._readSubIconHotspotKey.length === 1){
+            var lowerHot = this._readSubIconHotspotKey.toLowerCase();
+            if(lowerHot !== this._readSubIconHotspotKey) this._hotspotMap[lowerHot] = 'read-sub-icon';
+        }
+        if(typeof console.add_hotspot === 'function'){
+            var minX = this._readSubIconFrame.x;
+            var maxX = this._readSubIconFrame.x + this._readSubIconFrame.width - 1;
+            for(var sy=0; sy<this._readSubIconFrame.height; sy++){
+                try { console.add_hotspot(this._readSubIconHotspotKey, false, minX, maxX, this._readSubIconFrame.y + sy); } catch(e){}
+            }
+            if(this._readSubIconHotspotKey.length === 1){
+                var lowerHotspot = this._readSubIconHotspotKey.toLowerCase();
+                if(lowerHotspot !== this._readSubIconHotspotKey){
+                    for(var sy2=0; sy2<this._readSubIconFrame.height; sy2++){
+                        try { console.add_hotspot(lowerHotspot, false, minX, maxX, this._readSubIconFrame.y + sy2); } catch(e){}
+                    }
+                }
+            }
+        }
+    }
+    try { hf.cycle(); } catch(e){}
 };
 
 // Fetch avatar for a message without rendering. Returns {obj, attempts:[{netaddr,username,ok,reason}], chosen:{...}}
@@ -1142,6 +1240,7 @@ MessageBoard.prototype._destroyReadFrames = function(){
     this._hideReadNotice({ skipRepaint: true });
     if(this._readHeaderFrame){ try { this._readHeaderFrame.close(); } catch(e){} this._readHeaderFrame=null; }
     if(this._readBodyFrame){ try { this._readBodyFrame.close(); } catch(e){} this._readBodyFrame=null; }
+    if(this._readSubIconFrame){ try { this._readSubIconFrame.close(); } catch(e){} this._readSubIconFrame=null; }
     this._setReadBodyText('');
     this._readScroll = 0;
 };
@@ -1165,7 +1264,11 @@ MessageBoard.prototype._storeFullHeader = function(hdr){
     this._fullHeaders[hdr.number] = hdr;
     if(this._threadSequenceCache){
         var rootId = hdr.thread_id || hdr.number;
-        if(rootId && this._threadSequenceCache[rootId]) delete this._threadSequenceCache[rootId];
+        if(rootId){
+            var code = this.cursub || this._lastActiveSubCode || bbs.cursub_code || '';
+            var cacheKey = code + ':' + rootId;
+            if(this._threadSequenceCache.hasOwnProperty(cacheKey)) delete this._threadSequenceCache[cacheKey];
+        }
     }
 };
 
@@ -1893,7 +1996,8 @@ MessageBoard.prototype._buildThreadSequence = function(rootId){
     var code = this.cursub || this._lastActiveSubCode || bbs.cursub_code;
     if(!rootId || !code) return [];
     if(!this._threadSequenceCache) this._threadSequenceCache = {};
-    if(this._threadSequenceCache[rootId]) return this._threadSequenceCache[rootId];
+    var cacheKey = code + ':' + rootId;
+    if(this._threadSequenceCache[cacheKey]) return this._threadSequenceCache[cacheKey];
 
     var self = this;
     if(!this._fullHeaders) this._fullHeaders = {};
@@ -1934,7 +2038,7 @@ MessageBoard.prototype._buildThreadSequence = function(rootId){
     traverse(root);
     if(mb){ try { mb.close(); } catch(e){} }
     if(!sequence.length) return [];
-    this._threadSequenceCache[rootId] = sequence;
+    this._threadSequenceCache[cacheKey] = sequence;
     return sequence;
 };
 
