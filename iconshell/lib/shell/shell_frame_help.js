@@ -18,7 +18,12 @@ IconShell.prototype.disposeAllFrames = function() {
 
 IconShell.prototype.recreateFramesIfNeeded = function() {
 	if (typeof this._checkConsoleResize === 'function') {
-		this._checkConsoleResize();
+		var cols = (typeof console !== 'undefined' && typeof console.screen_columns === 'number') ? console.screen_columns : null;
+		var rows = (typeof console !== 'undefined' && typeof console.screen_rows === 'number') ? console.screen_rows : null;
+		if (cols !== null && rows !== null) {
+			var last = this._lastConsoleDimensions;
+			if (!last || cols !== last.cols || rows !== last.rows) this._checkConsoleResize();
+		}
 		return;
 	}
 	if (console.screen_columns !== this.lastCols || console.screen_rows !== this.lastRows) {

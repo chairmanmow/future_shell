@@ -95,7 +95,7 @@ IconShell.prototype.init = function() {
         if(this._matrixRain && typeof this._matrixRain.attachTimer === 'function'){
             this._matrixRain.attachTimer(this.timer);
         }
-        this._resizePollEvent = this.timer.addEvent(2500, true, function() {
+        this._resizePollEvent = this.timer.addEvent(3000, true, function() {
             self._checkConsoleResize();
         });
     }
@@ -390,6 +390,9 @@ IconShell.prototype._handleConsoleResize = function(dims) {
         this._matrixRain.parent = this.view;
         if (typeof this._matrixRain.resize === 'function') {
             try { this._matrixRain.resize({ width: this.view.width, height: this.view.height, parent: this.view }); } catch(e) { dbug('[resize] matrixRain resize error: ' + e, 'resize'); }
+        }
+        if (this._matrixRain.running) {
+            this._activateScreensaverHotspot();
         }
     }
     if (this.activeSubprogram && this.activeSubprogram.running) {
