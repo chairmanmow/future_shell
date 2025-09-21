@@ -229,7 +229,9 @@ Mail.prototype._ensureFrames = function() {
 		this.outputFrame.open();
 	}
 	if (!this.inputFrame) {
-		this.inputFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, BG_BLUE|WHITE, this.parentFrame);
+		var host = this.parentFrame.parent || this.parentFrame;
+		var y = host.y + host.height - 1;
+		this.inputFrame = new Frame(1, y, this.parentFrame.width, 1, BG_BLUE|WHITE, host);
 		this.inputFrame.open();
 	}
 };
@@ -302,13 +304,23 @@ Mail.prototype.handleKey = function(k) {
 		return;
 	}
 	switch(k){
+		case '\x1B[A':
 		case '\x1E':
 		case KEY_UP:
-			if(this.selectedIndex>0){ this.selectedIndex--; if(this.mode==='icon') this.ensureIconVisible(); this.draw(); }
+			if(this.mode==='icon' && this.selectedIndex>0){ this.selectedIndex--; this.ensureIconVisible(); this.draw(); }
 			return;
+		case '\x1B[B':
 		case '\x0A':
 		case KEY_DOWN:
-			if(this.selectedIndex<this.menuOptions.length-1){ this.selectedIndex++; if(this.mode==='icon') this.ensureIconVisible(); this.draw(); }
+			if(this.mode==='icon' && this.selectedIndex<this.menuOptions.length-1){ this.selectedIndex++; this.ensureIconVisible(); this.draw(); }
+			return;
+		case '\x1B[D':
+		case KEY_LEFT:
+			if(this.mode==='icon' && this.selectedIndex>0){ this.selectedIndex--; this.ensureIconVisible(); this.draw(); }
+			return;
+		case '\x1B[C':
+		case KEY_RIGHT:
+			if(this.mode==='icon' && this.selectedIndex<this.menuOptions.length-1){ this.selectedIndex++; this.ensureIconVisible(); this.draw(); }
 			return;
 		case KEY_HOME:
 			this.selectedIndex=0; this.draw(); return;

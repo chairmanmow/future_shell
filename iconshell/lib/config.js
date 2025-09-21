@@ -11,6 +11,7 @@ load("iconshell/lib/subfunctions/mail.js");
 load("iconshell/lib/subfunctions/system_info.js");
 load("iconshell/lib/subfunctions/message_boards.js");
 load("iconshell/lib/subfunctions/users.js");
+load("iconshell/lib/subfunctions/sysop_commands.js");
 
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
@@ -32,6 +33,14 @@ function _icsh_err(msg) { try { log(LOG_ERR, '[icsh-config] '+msg); } catch(e) {
 // Builtin actions mapping
 var BUILTIN_ACTIONS = {
 	chat: function(){ this.queueSubprogramLaunch('chat', this.chat); },
+	sysop_commands: function(){
+		try { if(typeof SysopCommand !== 'function') load('iconshell/lib/subfunctions/sysop_commands.js'); } catch(e) { dbug('subprogram','Failed loading sysop_commands.js '+e); return; }
+		if(typeof SysopCommand !== 'function') { dbug('subprogram','SysopCommand class missing after load'); return; }
+		if(!this.sysopCommand) this.sysopCommand = new SysopCommand({ parentFrame: this.subFrame, shell: this });
+		else { this.sysopCommand.parentFrame = this.subFrame; this.sysopCommand.shell = this; }
+		this.queueSubprogramLaunch('sysop-commands', this.sysopCommand);
+	},
+
 	// Dedicated IRC chat section (distinct from generic 'chat')
 	irc_chat: function(){
 		try { if(typeof IrcSection !== 'function') load('iconshell/lib/subfunctions/irc.js'); } catch(e) { dbug('subprogram','Failed loading irc.js '+e); return; }
@@ -681,4 +690,3 @@ var ICSH_CONSTANTS = {
     "ICON_W":12,
     "ICON_H":6
 }
-

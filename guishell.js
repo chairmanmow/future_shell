@@ -51,6 +51,10 @@ function main() {
                 safeLog(LOG_ERR, "[chshell] IconShell crashed: " + crashText(e));
                 if (BEEP_ON_CRASH) beep(880, 120);
             }
+            if( exitSignal ) {
+                // User requested exit to BasicShell
+               return bbs.logoff(false); 
+            }
             // else: treat as fallback, do not log error
         }
 

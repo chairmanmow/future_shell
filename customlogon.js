@@ -66,6 +66,7 @@ if(target) {
 	l('No art files; using fallback bases');
 	drawAnsiBin(null, commonOpts);
 }
+bbs.exec_xtrn('ONELINER');
 
 // bbs.logon();
 // Optional cleanup: leave ICE mode on for subsequent menus; uncomment below to clear after art
