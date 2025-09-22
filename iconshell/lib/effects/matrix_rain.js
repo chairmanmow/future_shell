@@ -2,20 +2,38 @@
  * Usage: var rain = new MatrixRain({ parent:this.root }); rain.start(); in init()
  */
 (function(){
+    var DEFAULT_VALS = {
+        RAIN_HEAD:            { BG: BG_BLACK,     FG: LIGHTGREEN },
+        RAIN_FADE_HIGH:       { BG: BG_BLACK,     FG: GREEN },
+        RAIN_DIM1:            { BG: BG_BLACK,     FG: LIGHTGRAY },
+        RAIN_DIM2:            { BG: BG_BLACK,     FG: DARKGRAY },
+        RAIN_SPARK:           { BG: BG_BLACK,     FG: WHITE }
+    };
+    function _vals(key, fallback){
+        try {
+            if(typeof ICSH_VALS === 'object' && ICSH_VALS[key]) return ICSH_VALS[key];
+        } catch(_) {}
+        return DEFAULT_VALS[key] || fallback;
+    }
+
     function MatrixRain(opts){
         opts = opts || {};
+        this._opts = opts;
         this.parent = opts.parent; // required Frame
         this.cols = this.parent ? this.parent.width : 0;
         this.rows = this.parent ? this.parent.height : 0;
         this.drops = [];
         this.chars = opts.chars || '01';
-        this.color = opts.color || (ICSH_VALS.RAIN_HEAD.FG | ICSH_VALS.RAIN_HEAD.BG);
-        this.fadeColor = opts.fadeColor || (ICSH_VALS.RAIN_FADE_HIGH.FG | ICSH_VALS.RAIN_FADE_HIGH.BG);
+        var head = _vals('RAIN_HEAD', DEFAULT_VALS.RAIN_HEAD);
+        var fade = _vals('RAIN_FADE_HIGH', DEFAULT_VALS.RAIN_FADE_HIGH);
+        this.color = opts.color || (head.FG | head.BG);
+        this.fadeColor = opts.fadeColor || (fade.FG | fade.BG);
     this.intervalMs = opts.intervalMs || 120;
     // Previous impl iterated every column each tick. Replace with capped random spawns.
     this.spawnChance = opts.spawnChance || 0.12; // retained for probability basis
     this.maxTrail = opts.maxTrail || 12;
-    this.maxDrops = opts.maxDrops || Math.max(5, Math.floor(this.cols / 2));
+    this._maxDropsPref = (typeof opts.maxDrops === 'number') ? opts.maxDrops : null;
+    this.maxDrops = this._maxDropsPref || Math.max(5, Math.floor(this.cols / 2));
     this.maxSpawnPerTick = opts.maxSpawnPerTick || Math.max(1, Math.floor(this.cols / 20));
     this.timeBudgetMs = opts.timeBudgetMs || 18; // soft budget per tick for drawing
         this.running = false;
@@ -183,6 +201,7 @@
     };
 
     MatrixRain.prototype.start = function(){
+        if(!this.parent) return;
         this.running = true;
         // Disable scrollback/history on parent if possible to avoid memory growth
         try {
@@ -215,11 +234,18 @@
 
     MatrixRain.prototype.resize = function(){
         if(!this.parent) return;
-        this.cols = this.parent.width; this.rows = this.parent.height;
-    this.maxDrops = opts.maxDrops || Math.max(5, Math.floor(this.cols / 2));
+        this.cols = this.parent.width;
+        this.rows = this.parent.height;
+    this.maxDrops = this._maxDropsPref || Math.max(5, Math.floor(this.cols / 2));
     };
 
     MatrixRain.prototype.requestInterrupt = function(){ this._interrupt = true; };
+
+    MatrixRain.prototype.setParent = function(frame){
+        if(!frame) return;
+        this.parent = frame;
+        this.resize();
+    };
 
     this.MatrixRain = MatrixRain;
 })();

@@ -1,6 +1,11 @@
 load('iconshell/lib/subfunctions/subprogram.js');
 // Use shared Icon renderer for consistency with main shell
 load('iconshell/lib/shell/icon.js');
+require('sbbsdefs.js','MAIL_SENT','MAIL_YOUR','LM_REVERSE','LM_UNREAD','LM_INCDEL','NMAIL_KILL');
+require('smbdefs.js','NET_FIDO','NETMSG_INTRANSIT','NETMSG_SENT','NETMSG_KILLSENT','NETMSG_HOLD','NETMSG_CRASH','NETMSG_IMMEDIATE','NETMSG_DIRECT','NETMSG_ARCHIVESENT');
+require('userdefs.js','U_NAME');
+require('msgdefs.js','MM_REALNAME');
+if (typeof NET_NONE === 'undefined') var NET_NONE = 0;
 // Fallback key codes if not defined globally (Synchronet usually defines in sbbsdefs.js)
 if (typeof KEY_PGUP === 'undefined') var KEY_PGUP = 0x4900;
 if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = 0x5100;
@@ -83,9 +88,12 @@ function Mail(opts) {
 		return function(){
 			var sh = self.shell;
 			if(animate && sh && typeof sh.runExternal === 'function') {
-				sh.runExternal(function(){ try { fn(); } catch(ex){ /* suppressed error */ } });
+				sh.runExternal(function(){ try { fn(); } catch(ex){ 
+					log("run external error", ex) } });
 			} else {
-				try { fn(); } catch(ex){ /* suppressed error */ }
+				try { fn(); } catch(ex){ 
+					log("exec fn() error", ex)
+				 }
 			}
 			self.updateUnreadCount();
 			self.draw();
@@ -97,6 +105,35 @@ function Mail(opts) {
 		// Native interactive compose (custom pre-screen, no confirmation desired)
 		{ baseLabel: 'Compose Email', iconFile:'compose', confirm:false, action: function(){ self.composeInteractiveEmail(); } },
 		{ baseLabel: 'Scan For You', iconFile:'mailbox', action: makeAction(function(){ self._scanMessagesAddressedToUser(); }, 'Scanning for messages to you...') },
+		{ baseLabel: 'Netmail Queue', iconFile:'clock', action: makeAction(function(){
+			self._renderNetmailList({ mode: 'queue', title: 'Fido Netmail Queue' });
+		}, 'Viewing netmail queue...') },
+		{ baseLabel: 'Sent Mail', iconFile:'redman', action: makeAction(function(){
+			if(typeof bbs === 'undefined' || typeof bbs.read_mail !== 'function') return;
+			var currentUserNum = (typeof user !== 'undefined' && user && typeof user.number === 'number' && user.number > 0) ? user.number : null;
+			var mode = 0;
+			if(typeof user !== 'undefined' && user && typeof user.mail_settings === 'number' && (user.mail_settings & LM_REVERSE))
+				mode |= LM_REVERSE;
+			if(typeof msg_area !== 'undefined' && msg_area) {
+				var killFlags = 0;
+				if(typeof msg_area.fido_netmail_settings === 'number') killFlags |= msg_area.fido_netmail_settings;
+				if(typeof msg_area.inet_netmail_settings === 'number') killFlags |= msg_area.inet_netmail_settings;
+				if(killFlags & NMAIL_KILL)
+					mode |= LM_INCDEL;
+			}
+			try {
+				if(currentUserNum !== null) {
+					if(mode)
+						bbs.read_mail(MAIL_SENT, currentUserNum, mode);
+					else
+						bbs.read_mail(MAIL_SENT, currentUserNum);
+				} else {
+					bbs.read_mail(MAIL_SENT);
+				}
+			} catch(e) {
+				log('Sent Mail read_mail crashed', e);
+			}
+		}, 'Opening sent mail...') },
 	];
 	this.updateUnreadCount();
 	// icon cell cache
@@ -125,6 +162,117 @@ Mail.prototype._scanMessagesAddressedToUser = function(){
 	}
 };
 
+Mail.prototype._renderNetmailList = function(opts){
+	opts = opts || {};
+	console.clear();
+	console.print('\1n\1h' + (opts.title || 'Fido Netmail') + '\1n\r\n\r\n');
+	if (typeof MsgBase !== 'function') {
+		console.print('Mail base access is unavailable in this runtime.\r\n');
+		console.pause();
+		return;
+	}
+	var gather = this._gatherNetmailRows(opts.mode || 'queue');
+	if (gather.error) {
+		console.print(gather.error + '\r\n');
+		console.pause();
+		return;
+	}
+	var rows = gather.rows || [];
+	if (!rows.length) {
+		console.print('No matching Fido netmail messages were found.\r\n');
+		console.pause();
+		return;
+	}
+	for (var i = 0; i < rows.length; i++) {
+		var row = rows[i];
+		console.print(pad((i+1)+'.', 4));
+		console.print((row.whenText || 'unknown time') + '\r\n');
+		console.print('   To: ' + row.to + '\r\n');
+		if (row.subject)
+			console.print('   Subj: ' + row.subject + '\r\n');
+		if (row.from)
+			console.print('   From: ' + row.from + '\r\n');
+		console.print('   Status: ' + row.status + '\r\n\r\n');
+	}
+	console.print('Press any key to return...');
+	console.getkey();
+};
+
+Mail.prototype._gatherNetmailRows = function(mode){
+	var rows = [];
+	var mailBase = new MsgBase('mail');
+	if (!mailBase.open())
+		return { error: 'Unable to open mail base: ' + mailBase.error };
+	try {
+		for (var off = 0; off < mailBase.total_msgs; off++) {
+			var hdr = mailBase.get_msg_header(true, off);
+			if (!hdr || hdr.to_net_type !== NET_FIDO)
+				continue;
+			var outgoing = !!(hdr.netattr & NETMSG_SENT);
+			if (mode === 'inbox') {
+				if (outgoing) continue;
+				if (!this._isNetmailForCurrentUser(hdr)) continue;
+			} else if (mode === 'queue') {
+				if (!outgoing) continue;
+			}
+			rows.push(this._summarizeNetmailHeader(hdr));
+		}
+	} finally {
+		mailBase.close();
+	}
+	rows.sort(function(a, b) { return b.when - a.when; });
+	return { rows: rows };
+};
+
+Mail.prototype._summarizeNetmailHeader = function(hdr){
+	var statusBits = [];
+	if (hdr.netattr & NETMSG_INTRANSIT) statusBits.push('in-transit');
+	if (hdr.netattr & NETMSG_SENT) statusBits.push('sent');
+	if (hdr.netattr & NETMSG_KILLSENT) statusBits.push('kill');
+	if (hdr.netattr & NETMSG_ARCHIVESENT) statusBits.push('archive');
+	if (hdr.netattr & NETMSG_HOLD) statusBits.push('hold');
+	if (hdr.netattr & NETMSG_CRASH) statusBits.push('crash');
+	if (hdr.netattr & NETMSG_IMMEDIATE) statusBits.push('immediate');
+	if (hdr.netattr & NETMSG_DIRECT) statusBits.push('direct');
+	if (!statusBits.length) statusBits.push('pending');
+	var when = hdr.when_written_time || hdr.when_imported_time || 0;
+	return {
+		to: hdr.to || hdr.to_net_addr || '(unknown)',
+		subject: hdr.subject || '',
+		from: hdr.from || '',
+		when: when,
+		whenText: when ? system.timestr(when) : 'unknown time',
+		status: statusBits.join(', ')
+	};
+};
+
+Mail.prototype._isNetmailForCurrentUser = function(hdr){
+	if (typeof user === 'undefined' || !user)
+		return false;
+	if (typeof hdr.to_ext === 'number' && hdr.to_ext > 0 && typeof user.number === 'number' && hdr.to_ext === user.number)
+		return true;
+	var targets = [];
+	if (user.alias) targets.push(user.alias);
+	if (user.name) targets.push(user.name);
+	if (user.handle) targets.push(user.handle);
+	if (user.netmail) targets.push(user.netmail);
+	var toVal = (hdr.to || '').trim().toLowerCase();
+	for (var i = 0; i < targets.length; i++) {
+		var target = (targets[i] || '').trim().toLowerCase();
+		if (target && target === toVal)
+			return true;
+	}
+	if (hdr.to_net_addr) {
+		var addr = hdr.to_net_addr.trim().toLowerCase();
+		for (var j = 0; j < targets.length; j++) {
+			var t2 = (targets[j] || '').trim().toLowerCase();
+			if (t2 && t2 === addr)
+				return true;
+		}
+	}
+	return false;
+};
+
 // Deprecated blocking APIs replaced by non-blocking promptRecipient mode
 Mail.prototype._promptRecipient = function(){ return null; };
 
@@ -142,6 +290,44 @@ Mail.prototype._destroyPromptFrames = function(){
 	}, this);
 	if(host){ try { host.cycle(); } catch(e){} }
 	else if(this.outputFrame){ try { this.outputFrame.cycle(); } catch(e){} }
+};
+
+Mail.prototype._resolveLocalUser = function(name){
+	if(!name) return 0;
+	var num = 0;
+	if(name.charAt(0)==='#') {
+		num = parseInt(name.substr(1),10) || 0;
+		if(num) return num;
+	}
+	if(/^[0-9]+$/.test(name)) {
+		var nodeNum = parseInt(name,10);
+		if(nodeNum>0 && nodeNum<=system.nodes){
+			try {
+				var node = system.get_node(nodeNum);
+				if(node && node.useron) return node.useron;
+			} catch(e){}
+		}
+	}
+	try { if(typeof bbs.finduser === 'function') num = bbs.finduser(name); } catch(e){}
+	if(num) return num;
+	try { if(typeof system.matchuser === 'function') num = system.matchuser(name); } catch(e){}
+	if(num) return num;
+	try {
+		if(typeof system.matchuserdata === 'function' && typeof U_NAME !== 'undefined' && typeof msg_area !== 'undefined' && msg_area && (msg_area.settings & MM_REALNAME))
+			num = system.matchuserdata(U_NAME, name);
+	} catch(e){}
+	return num || 0;
+};
+
+Mail.prototype._isLikelyNetAddress = function(addr){
+	if(!addr) return false;
+	if(typeof netaddr_type === 'function') {
+		var type = netaddr_type(addr);
+		if(typeof NET_NONE !== 'undefined') {
+			if(type !== NET_NONE) return true;
+		} else if(type) return true;
+	}
+	return /[@:!\\/]/.test(addr);
 };
 
 // Enter non-blocking recipient prompt mode
@@ -180,31 +366,33 @@ Mail.prototype._redrawRecipientField = function(){
 };
 
 Mail.prototype._commitRecipientPrompt = function(accepted){
-	var dest = (accepted && this._recipBuf) ? this._recipBuf.trim() : null;
+	var rawDest = (accepted && this._recipBuf) ? this._recipBuf.trim() : null;
 	this._destroyPromptFrames();
 	this.mode='icon';
-	var type = netaddr_type(dest)
-	if(type === 0) {
-		dest = system.matchuser(dest); // convert alias to user number if possible
-		if(!dest) {
-			this._toastSent && this._toastSent('Unknown user');
-			this.draw();
-			return; // invalid user
-		}
+	if(!rawDest){ this.draw(); return; }
+	var localUser = this._resolveLocalUser(rawDest);
+	var destDisplay = rawDest;
+	var sent = false;
+	var run;
+    if(localUser) {
+        destDisplay = system.username(localUser) || ('User #' + localUser);
+        run = function(){ try { bbs.email(localUser, ''); sent = true; } catch(e){} };
+    } else if(this._isLikelyNetAddress(rawDest)) {
+        var addrs = rawDest.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+        if(!addrs.length){ this._toastSent && this._toastSent('Invalid address'); this.draw(); return; }
+        run = function(){ try { bbs.netmail(addrs); sent = true; } catch(e){} };
+	} else {
+		this._toastSent && this._toastSent('Unknown user');
+		this.draw();
+		return;
 	}
-
-	log('GOT' + type +  'RECIEPIENT: ' + dest);
-	if(dest){
-		var sent = false;
-		var run = (type === 0 || type === 2)
-			? function(){ try { bbs.email(dest, ''); sent = true; } catch(e){} }
-			: function(){ try { bbs.netmail(dest, ''); sent = true; } catch(e){} };
-		var shell = this.shell;
-		if(shell && typeof shell.runExternal === 'function') shell.runExternal(run);
-		else run();
-		this.updateUnreadCount();
-		if(sent) this._toastSent && this._toastSent(dest);
-	}
+	var shell = this.shell;
+	if(shell && typeof shell.runExternal === 'function') shell.runExternal(run);
+	else run();
+	this.updateUnreadCount();
+	if(sent) this._toastSent && this._toastSent(destDisplay);
+	else if(!localUser)
+		this._toastSent && this._toastSent('Delivery failed');
 	this._resetState();
 	this.draw();
 };
@@ -227,6 +415,7 @@ Mail.prototype._ensureFrames = function() {
 		var h = Math.max(1, this.parentFrame.height - 1);
 		this.outputFrame = new Frame(1, 1, this.parentFrame.width, h, BG_BLACK|LIGHTGRAY, this.parentFrame);
 		this.outputFrame.open();
+		this.setBackgroundFrame(this.outputFrame);
 	}
 	if (!this.inputFrame) {
 		var host = this.parentFrame.parent || this.parentFrame;

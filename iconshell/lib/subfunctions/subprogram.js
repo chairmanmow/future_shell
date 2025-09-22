@@ -1,5 +1,6 @@
 load('sbbsdefs.js');
 function Subprogram(opts) {
+    this.__bg_frame = null;  
     opts = opts || {};
     this.name = opts.name || 'subprogram';
     this.parentFrame = opts.parentFrame || null;
@@ -92,6 +93,15 @@ Subprogram.prototype.attachShellTimer = function(timer){
 
 Subprogram.prototype.detachShellTimer = function(){
     this.timer = null;
+};
+
+Subprogram.prototype.setBackgroundFrame = function(frame) { 
+    this.__bg_frame = frame; 
+    return frame; 
+};
+
+Subprogram.prototype.backgroundFrame = function() { 
+    return this.__bg_frame || false;
 };
 
 // Unified toast helper available to every subprogram.

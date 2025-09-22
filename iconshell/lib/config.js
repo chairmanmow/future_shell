@@ -25,10 +25,16 @@ load("iconshell/lib/subfunctions/sysop_commands.js");
 // [Item.files]\n type=command\n command=exec_xtrn:ANSIVIEW\n label=Files\n icon=folder
 // [Item.settings]\n type=builtin\n builtin=settings\n label=Settings\n icon=settings
 // [Item.exit]\n type=builtin\n builtin=exit\n label=Exit\n icon=exit
-
-function _icsh_log(msg) { try { log(LOG_INFO, '[icsh-config] '+msg); } catch(e) {} }
-function _icsh_warn(msg){ try { log(LOG_WARNING,'[icsh-config] '+msg);} catch(e){} }
-function _icsh_err(msg) { try { log(LOG_ERR, '[icsh-config] '+msg); } catch(e) {} }
+var debug_icsh = false;
+function _icsh_log(msg) { try { 
+	if(debug_icsh) log(LOG_INFO, '[icsh-config] '+msg);
+ } catch(e) {} }
+function _icsh_warn(msg){ try {
+	if(debug_icsh) log(LOG_WARNING,'[icsh-config] '+msg);
+	} catch(e){} }
+function _icsh_err(msg) { try { 
+	if(debug_icsh) log(LOG_ERR, '[icsh-config] '+msg);
+ } catch(e) {} }
 
 // Builtin actions mapping
 var BUILTIN_ACTIONS = {

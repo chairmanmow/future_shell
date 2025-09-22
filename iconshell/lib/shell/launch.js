@@ -61,6 +61,7 @@ IconShell.prototype.launchSubprogram = function(name, handlers) {
     // Proactively shelve (dispose) folder frames to prevent residual redraw artifacts.
     if (typeof this._shelveFolderFrames === 'function') this._shelveFolderFrames();
     this.activeSubprogram.enter(this.exitSubprogram.bind(this));
+    this._updateMatrixRainParent();
 };
 
 // Exit subprogram and return to shell
@@ -72,6 +73,7 @@ IconShell.prototype.exitSubprogram = function() {
     this.activeSubprogram = null;
     // Mark shelved state false so folder will rebuild cleanly
     this._folderShelved = false;
+    this._updateMatrixRainParent();
     this.recreateFramesIfNeeded();
     if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
 };

@@ -47,13 +47,15 @@ function main() {
         } catch (e) {
             // If IconShell throws 'Exit Shell' (string or Error), treat as fallback, not logoff
             var exitSignal = (typeof e === 'string' && e === 'Exit Shell') || (e && e.message === 'Exit Shell');
+            var isSysop = false;
+            try { isSysop = (user && (user.is_sysop || (user.security && user.security.level >= 90))); } catch(_) {}
+
             if (!exitSignal) {
                 safeLog(LOG_ERR, "[chshell] IconShell crashed: " + crashText(e));
                 if (BEEP_ON_CRASH) beep(880, 120);
             }
-            if( exitSignal ) {
-                // User requested exit to BasicShell
-               return bbs.logoff(false); 
+            if(exitSignal && !isSysop){
+                return bbs.logoff(false);
             }
             // else: treat as fallback, do not log error
         }

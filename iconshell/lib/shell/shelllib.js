@@ -109,6 +109,7 @@ IconShell.prototype.init = function() {
     // NOTE: Do NOT start immediately; main loop will start it after inactivity threshold.
     if (typeof MatrixRain === 'function') {
         this._matrixRain = new MatrixRain({ parent: this.view, deterministic: true });
+        this._updateMatrixRainParent();
         // Defer start; will activate after inactivity.
     }
     // Enable mouse mode for hotspots
@@ -181,6 +182,7 @@ IconShell.prototype.main = function() {
                     if(this.activeSubprogram && typeof this.activeSubprogram.pauseForReason === 'function'){
                         this.activeSubprogram.pauseForReason('screensaver_on');
                     }
+                    this._updateMatrixRainParent();
                     this._matrixRain.start();
                     if(this._matrixRain && this._matrixRain.running) this._activateScreensaverHotspot();
                 }
@@ -285,7 +287,6 @@ IconShell.prototype._processChatUpdate = function(packet) {
 };
 
 IconShell.prototype._handleMailHotspot = function() {
-    dbug('mail hotspot activated', 'mail');
     try {
         if (typeof BUILTIN_ACTIONS !== 'undefined' && BUILTIN_ACTIONS && typeof BUILTIN_ACTIONS.mail === 'function') {
             BUILTIN_ACTIONS.mail.call(this);
@@ -387,10 +388,7 @@ IconShell.prototype._handleConsoleResize = function(dims) {
     this.lastCols = dims.cols;
     this.lastRows = dims.rows;
     if (this._matrixRain) {
-        this._matrixRain.parent = this.view;
-        if (typeof this._matrixRain.resize === 'function') {
-            try { this._matrixRain.resize({ width: this.view.width, height: this.view.height, parent: this.view }); } catch(e) { dbug('[resize] matrixRain resize error: ' + e, 'resize'); }
-        }
+        this._updateMatrixRainParent();
         if (this._matrixRain.running) {
             this._activateScreensaverHotspot();
         }
@@ -409,6 +407,34 @@ IconShell.prototype._handleConsoleResize = function(dims) {
         return;
     }
     this.drawFolder();
+};
+
+IconShell.prototype._selectMatrixRainParent = function(){
+    if (this.activeSubprogram && typeof this.activeSubprogram.backgroundFrame === 'function') {
+        try {
+            var frame = this.activeSubprogram.backgroundFrame();
+            if (frame && frame.is_open !== false) return frame;
+        } catch(e) { dbug('matrix rain backgroundFrame error: ' + e, 'screensaver'); }
+    }
+    return this.view;
+};
+
+IconShell.prototype._updateMatrixRainParent = function(){
+    if (!this._matrixRain) return;
+    var target = this._selectMatrixRainParent();
+    if (!target) return;
+    if (this._matrixRain.parent !== target) {
+        if (typeof this._matrixRain.setParent === 'function') {
+            try { this._matrixRain.setParent(target); } catch(e) { dbug('matrix rain setParent error: ' + e, 'screensaver'); }
+        } else {
+            this._matrixRain.parent = target;
+            if (typeof this._matrixRain.resize === 'function') {
+                try { this._matrixRain.resize(); } catch(e) { dbug('matrix rain resize error: ' + e, 'screensaver'); }
+            }
+        }
+    } else if (typeof this._matrixRain.resize === 'function') {
+        try { this._matrixRain.resize(); } catch(e) { dbug('matrix rain resize error: ' + e, 'screensaver'); }
+    }
 };
 
 IconShell.prototype._checkConsoleResize = function() {

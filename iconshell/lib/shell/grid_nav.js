@@ -356,7 +356,6 @@ IconShell.prototype._formatMailStatus = function() {
 };
 
 IconShell.prototype._installMailHotspot = function(startColumn, endColumn) {
-    log("[mail hotspot] installing at cols " + startColumn + "-" + endColumn + " (crumb x=" + (this.crumb ? this.crumb.x : '?') + ")");
     if (!this._mailHotspotCmd || typeof console.add_hotspot !== 'function' || !this.crumb) return;
     if (startColumn <= 0 || endColumn < startColumn) return;
     var absStart = this.crumb.x + startColumn - 1;
@@ -364,7 +363,6 @@ IconShell.prototype._installMailHotspot = function(startColumn, endColumn) {
     var y = this.crumb.y - 1;
     try { 
         console.add_hotspot(this._mailHotspotCmd, false, absStart, absEnd, y);
-        log("[mail hotspot] added at abs cols " + absStart + "-" + absEnd + " y=" + y);
      } catch (e) {
         log("[mail hotspot] error: " + e);
     }
