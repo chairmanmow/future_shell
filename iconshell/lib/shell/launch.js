@@ -28,12 +28,9 @@ IconShell.prototype.runExternal = function(fn) {
                 try { this.activeSubprogram.draw(); } catch(e) {}
             }
         }
-        // Reset inactivity so rain won't instantly start; also ensure rain stopped.
+        // Reset inactivity so the screensaver won't instantly resume.
         this._lastActivityTs = Date.now();
-        if(this._matrixRain && this._matrixRain.running){
-            this._matrixRain.stop();
-            this._matrixRain.clear();
-        }
+        this._stopScreenSaver();
     }
 };
 
@@ -61,7 +58,7 @@ IconShell.prototype.launchSubprogram = function(name, handlers) {
     // Proactively shelve (dispose) folder frames to prevent residual redraw artifacts.
     if (typeof this._shelveFolderFrames === 'function') this._shelveFolderFrames();
     this.activeSubprogram.enter(this.exitSubprogram.bind(this));
-    this._updateMatrixRainParent();
+    this._refreshScreenSaverFrame();
 };
 
 // Exit subprogram and return to shell
@@ -73,7 +70,7 @@ IconShell.prototype.exitSubprogram = function() {
     this.activeSubprogram = null;
     // Mark shelved state false so folder will rebuild cleanly
     this._folderShelved = false;
-    this._updateMatrixRainParent();
+    this._refreshScreenSaverFrame();
     this.recreateFramesIfNeeded();
     if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
 };

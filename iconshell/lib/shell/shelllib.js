@@ -1,6 +1,6 @@
 
 load("event-timer.js");
-try { load('iconshell/lib/effects/matrix_rain.js'); } catch(e) {}
+try { load('iconshell/lib/effects/screensaver.js'); } catch(e) {}
 
 // IconShell prototype extensions for member logic
 // Run time logic
@@ -91,10 +91,6 @@ IconShell.prototype.init = function() {
                 self.activeSubprogram.updateChat();
             }
         }); // 60 seconds
-        // If matrix rain already instantiated, attach it to the shared timer
-        if(this._matrixRain && typeof this._matrixRain.attachTimer === 'function'){
-            this._matrixRain.attachTimer(this.timer);
-        }
         this._resizePollEvent = this.timer.addEvent(3000, true, function() {
             self._checkConsoleResize();
         });
@@ -107,10 +103,15 @@ IconShell.prototype.init = function() {
     if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
     // Background matrix rain effect (behind content)
     // NOTE: Do NOT start immediately; main loop will start it after inactivity threshold.
-    if (typeof MatrixRain === 'function') {
-        this._matrixRain = new MatrixRain({ parent: this.view, deterministic: true });
-        this._updateMatrixRainParent();
-        // Defer start; will activate after inactivity.
+    if (typeof ShellScreenSaver === 'function') {
+        var saverConfig = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.screensaver) ? ICSH_SETTINGS.screensaver : {};
+        this._screenSaver = new ShellScreenSaver({
+            shell: this,
+            getFrame: this._resolveScreensaverFrame.bind(this),
+            config: saverConfig
+        });
+        if (this.timer) this._screenSaver.attachTimer(this.timer);
+        this._refreshScreenSaverFrame();
     }
     // Enable mouse mode for hotspots
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
@@ -126,15 +127,12 @@ IconShell.prototype.main = function() {
                 this.jsonchat.cycle();
                 // TODO: notification logic (step 4)
             }
-            // Background rain animation cycle (only if no timer event attached)
-            if(this._matrixRain && this._matrixRain.running && !this._matrixRain._timerEvent){
-                this._matrixRain.cycle();
-            }
             if(this.timer){
                 this.timer.cycle();
             } else {
                 this._checkConsoleResize();
             }
+            if(this._screenSaver) this._screenSaver.pump();
             if (this.activeSubprogram && typeof this.activeSubprogram.cycle === 'function') {
                 this.activeSubprogram.cycle();
             }
@@ -143,8 +141,6 @@ IconShell.prototype.main = function() {
                 var p = this._pendingSubLaunch; delete this._pendingSubLaunch;
                 this.launchSubprogram(p.name, p.instance);
             }
-            // Non-blocking input: shorter timeout when rain active for faster responsiveness
-            var _pollMs = (this._matrixRain && this._matrixRain.running) ? 40 : 100;
             var key = console.inkey(K_NOECHO|K_NOSPIN, 100);
             // Normalize CRLF: if CR received, peek for immediate LF next loop; treat as single ENTER
             if (key === '\r') {
@@ -162,12 +158,7 @@ IconShell.prototype.main = function() {
                 // User activity resets inactivity timer and stops rain if active
                 this._lastActivityTs = Date.now();
 
-                if(this._matrixRain && this._matrixRain.running){
-                    // Stop rain without an immediate full-frame clear (expensive & causes lag).
-                    // Foreground redraw overwrites rain cells.
-                        if(typeof this._matrixRain.requestInterrupt === 'function') this._matrixRain.requestInterrupt();
-                    this._matrixRain.stop();
-                    this._removeScreensaverHotspot();
+                if(this._stopScreenSaver()){
                     if(this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function'){
                         this.activeSubprogram.resumeForReason('screensaver_off');
                     }
@@ -177,14 +168,12 @@ IconShell.prototype.main = function() {
             }
             if(key) this.processKeyboardInput(key);
             // Inactivity trigger (disabled if inactivityThresholdMs === -1)
-            if(this._matrixRain && !this._matrixRain.running && this.inactivityThresholdMs !== -1){
+            if(this._screenSaver && !this._screenSaver.isActive() && this.inactivityThresholdMs !== -1){
                 if(Date.now() - this._lastActivityTs > this.inactivityThresholdMs){
                     if(this.activeSubprogram && typeof this.activeSubprogram.pauseForReason === 'function'){
                         this.activeSubprogram.pauseForReason('screensaver_on');
                     }
-                    this._updateMatrixRainParent();
-                    this._matrixRain.start();
-                    if(this._matrixRain && this._matrixRain.running) this._activateScreensaverHotspot();
+                    if(this._startScreenSaver()) this._activateScreensaverHotspot();
                 }
             }
             // Cycle all toasts for auto-dismiss
@@ -203,7 +192,7 @@ IconShell.prototype.main = function() {
         if (this._resizePollEvent && this._resizePollEvent.abort !== undefined) {
             this._resizePollEvent.abort = true;
         }
-        this._removeScreensaverHotspot();
+        this._stopScreenSaver();
         if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
     }
 };
@@ -218,11 +207,7 @@ IconShell.prototype.processKeyboardInput = function(ch) {
     // Ignore filler hotspot command (used to swallow empty grid area clicks)
     if (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined' && ch === ICSH_HOTSPOT_FILL_CMD) return true;
     if (ch === this._screensaverDismissCmd) {
-        var saverActive = this._matrixRain && this._matrixRain.running;
-        if (saverActive && typeof this._matrixRain.requestInterrupt === 'function') this._matrixRain.requestInterrupt();
-        if (saverActive && typeof this._matrixRain.stop === 'function') this._matrixRain.stop();
-        this._removeScreensaverHotspot();
-        if (saverActive) {
+        if (this._stopScreenSaver()) {
             if (this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function') {
                 this.activeSubprogram.resumeForReason('screensaver_off');
             }
@@ -387,9 +372,9 @@ IconShell.prototype._handleConsoleResize = function(dims) {
     this._lastConsoleDimensions = { cols: dims.cols, rows: dims.rows };
     this.lastCols = dims.cols;
     this.lastRows = dims.rows;
-    if (this._matrixRain) {
-        this._updateMatrixRainParent();
-        if (this._matrixRain.running) {
+    if (this._screenSaver) {
+        this._screenSaver.refreshFrame();
+        if (this._screenSaver.isActive()) {
             this._activateScreensaverHotspot();
         }
     }
@@ -409,32 +394,19 @@ IconShell.prototype._handleConsoleResize = function(dims) {
     this.drawFolder();
 };
 
-IconShell.prototype._selectMatrixRainParent = function(){
+IconShell.prototype._resolveScreensaverFrame = function(){
     if (this.activeSubprogram && typeof this.activeSubprogram.backgroundFrame === 'function') {
         try {
             var frame = this.activeSubprogram.backgroundFrame();
             if (frame && frame.is_open !== false) return frame;
-        } catch(e) { dbug('matrix rain backgroundFrame error: ' + e, 'screensaver'); }
+        } catch(e) { dbug('screensaver backgroundFrame error: ' + e, 'screensaver'); }
     }
     return this.view;
 };
 
-IconShell.prototype._updateMatrixRainParent = function(){
-    if (!this._matrixRain) return;
-    var target = this._selectMatrixRainParent();
-    if (!target) return;
-    if (this._matrixRain.parent !== target) {
-        if (typeof this._matrixRain.setParent === 'function') {
-            try { this._matrixRain.setParent(target); } catch(e) { dbug('matrix rain setParent error: ' + e, 'screensaver'); }
-        } else {
-            this._matrixRain.parent = target;
-            if (typeof this._matrixRain.resize === 'function') {
-                try { this._matrixRain.resize(); } catch(e) { dbug('matrix rain resize error: ' + e, 'screensaver'); }
-            }
-        }
-    } else if (typeof this._matrixRain.resize === 'function') {
-        try { this._matrixRain.resize(); } catch(e) { dbug('matrix rain resize error: ' + e, 'screensaver'); }
-    }
+IconShell.prototype._refreshScreenSaverFrame = function(){
+    if (!this._screenSaver) return;
+    this._screenSaver.refreshFrame();
 };
 
 IconShell.prototype._checkConsoleResize = function() {
@@ -580,6 +552,19 @@ IconShell.prototype.detectMouseSupport = function() {
     //     }
     // }
     return false;
+};
+
+IconShell.prototype._startScreenSaver = function(){
+    if(!this._screenSaver) return false;
+    if(this._screenSaver.isActive()) return false;
+    return this._screenSaver.activate();
+};
+
+IconShell.prototype._stopScreenSaver = function(){
+    if(!this._screenSaver || !this._screenSaver.isActive()) return false;
+    this._screenSaver.deactivate();
+    this._removeScreensaverHotspot();
+    return true;
 };
 
 IconShell.prototype._activateScreensaverHotspot = function() {

@@ -385,6 +385,25 @@ var _DYNAMIC_ICSH_CONFIG = buildDynamicConfig();
 // Global shell settings (e.g., inactivity -> matrix rain) loaded from guishell.ini if present.
 var ICSH_SETTINGS = (function(){
 	var out = { inactivityMinutes: 3 }; // default 3 minutes
+	function _parseBool(val){
+		if(val === undefined || val === null) return undefined;
+		var s = String(val).trim().toLowerCase();
+		if(!s) return undefined;
+		if(s === 'true' || s === 'yes' || s === 'on' || s === '1') return true;
+		if(s === 'false' || s === 'no' || s === 'off' || s === '0') return false;
+		return undefined;
+	}
+	function _parseNumber(val){
+		if(val === undefined || val === null) return undefined;
+		var s = String(val).trim();
+		if(!s) return undefined;
+		if(!/^[-+]?\d*(?:\.\d+)?$/.test(s)) return undefined;
+		var n = parseFloat(s);
+		return isNaN(n) ? undefined : n;
+	}
+	function _sanitiseName(name){
+		return String(name || '').trim().toLowerCase().replace(/[^a-z0-9_\-]+/g,'').replace(/-/g,'_');
+	}
 	try {
 		var iniRaw = readIniFile(system.mods_dir + 'guishell.ini');
 		if(iniRaw){
@@ -397,6 +416,50 @@ var ICSH_SETTINGS = (function(){
 			if(val !== null){
 				var mins = parseInt(val,10);
 				if(!isNaN(mins)) out.inactivityMinutes = mins; // can be -1 to disable
+			}
+			if(ini.Screensaver){
+				var ss = ini.Screensaver;
+				var cfg = {};
+				if(ss.animations){
+					cfg.animations = ss.animations.split(',').map(function(n){ return _sanitiseName(n); }).filter(Boolean);
+				}
+				if(ss.random !== undefined){
+					var b = _parseBool(ss.random);
+					if(b !== undefined) cfg.random = b;
+				}
+				if(ss.switch_interval !== undefined){
+					var si = _parseNumber(ss.switch_interval);
+					if(si !== undefined) cfg.switch_interval = Math.max(0, si|0);
+				}
+				if(ss.fps !== undefined){
+					var fps = _parseNumber(ss.fps);
+					if(fps !== undefined) cfg.fps = Math.max(1, fps|0);
+				}
+				if(ss.clear_on_switch !== undefined){
+					var cos = _parseBool(ss.clear_on_switch);
+					if(cos !== undefined) cfg.clear_on_switch = cos;
+				}
+				// animation-specific overrides using dot notation e.g. life.density=0.25
+				var animOpts = {};
+				for(var key in ss){
+					if(!Object.prototype.hasOwnProperty.call(ss,key)) continue;
+					if(key.indexOf('.') === -1) continue;
+					var parts = key.split('.');
+					var animName = _sanitiseName(parts.shift());
+					var optName = parts.join('.');
+					if(!animName || !optName) continue;
+					if(!animOpts[animName]) animOpts[animName] = {};
+					var raw = ss[key];
+					var boolVal = _parseBool(raw);
+					if(boolVal !== undefined) animOpts[animName][optName] = boolVal;
+					else {
+						var numVal = _parseNumber(raw);
+						if(numVal !== undefined) animOpts[animName][optName] = numVal;
+						else animOpts[animName][optName] = raw;
+					}
+				}
+				if(Object.keys(animOpts).length) cfg.animationOptions = animOpts;
+				if(Object.keys(cfg).length) out.screensaver = cfg;
 			}
 		}
 	} catch(e){ _icsh_warn('Error loading ICSH_SETTINGS: '+e); }
