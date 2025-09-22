@@ -130,6 +130,22 @@ ShellScreenSaver.prototype._registerBuiltins = function(){
             this.register('comet_trails', { type: 'class', ctor: CanvasAnimations.CometTrails });
         if(typeof CanvasAnimations.Plasma === 'function')
             this.register('plasma', { type: 'class', ctor: CanvasAnimations.Plasma });
+        if(typeof CanvasAnimations.Fireworks === 'function')
+            this.register('fireworks', { type: 'class', ctor: CanvasAnimations.Fireworks });
+        if(typeof CanvasAnimations.Aurora === 'function')
+            this.register('aurora', { type: 'class', ctor: CanvasAnimations.Aurora });
+        if(typeof CanvasAnimations.FireSmoke === 'function')
+            this.register('fire_smoke', { type: 'class', ctor: CanvasAnimations.FireSmoke });
+        if(typeof CanvasAnimations.OceanRipple === 'function')
+            this.register('ocean_ripple', { type: 'class', ctor: CanvasAnimations.OceanRipple });
+        if(typeof CanvasAnimations.LissajousTrails === 'function')
+            this.register('lissajous', { type: 'class', ctor: CanvasAnimations.LissajousTrails });
+        if(typeof CanvasAnimations.LightningStorm === 'function')
+            this.register('lightning', { type: 'class', ctor: CanvasAnimations.LightningStorm });
+        if(typeof CanvasAnimations.RecursiveTunnel === 'function')
+            this.register('tunnel', { type: 'class', ctor: CanvasAnimations.RecursiveTunnel });
+        if(typeof CanvasAnimations.FigletMessage === 'function')
+            this.register('figlet_message', { type: 'class', ctor: CanvasAnimations.FigletMessage });
     }
     if(typeof AvatarsFloat === 'function')
         this.register('avatars_float', { type: 'class', ctor: AvatarsFloat });

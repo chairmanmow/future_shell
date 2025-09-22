@@ -260,8 +260,12 @@ SineWave.prototype.init = function(frame, opts){
 	this.f=frame; opts = opts || {};
 	if(opts.wave_frequency !== undefined){ var fq = parseFloat(opts.wave_frequency); if(!isNaN(fq) && fq > 0) this.freq = fq; }
 	var maxAmp = Math.max(1, Math.floor(frame.height/2));
-	if(opts.wave_amplitude !== undefined){ var amp = parseFloat(opts.wave_amplitude); if(!isNaN(amp) && amp > 0) this.amp = Math.min(maxAmp, Math.max(1, amp)); }
-	else this.amp = Math.max(1, Math.min(maxAmp, Math.floor(frame.height/2) - 1));
+	if(opts.wave_amplitude !== undefined){
+		var amp = parseFloat(opts.wave_amplitude);
+		if(!isNaN(amp) && amp > 0) this.amp = Math.min(maxAmp, Math.max(1, amp));
+	} else {
+		this.amp = Math.max(1, Math.min(maxAmp, Math.floor(frame.height/2) - 1));
+	}
 	if(opts.wave_speed !== undefined){ var sp = parseFloat(opts.wave_speed); if(!isNaN(sp) && sp > 0) this.speed = sp; }
 	if(opts.wave_char){ this.char = String(opts.wave_char).charAt(0) || this.char; }
 	this.phase = 0;
@@ -330,8 +334,12 @@ CometTrails.prototype.tick = function(){
 		if(c.trail.length > 10) c.trail.pop();
 		for(var t=0;t<c.trail.length;t++){
 			var entry = c.trail[t];
-			var char = (t===0)?'@':(t<4?'*':'.');
+			var char = (t===0)?'@':(t<3?'O':(t<6?'+':'.'));
 			this._drawPoint(entry.x, entry.y, char, t);
+			if(t <= 1){
+				this._drawPoint(entry.x+0.6, entry.y, t===0?'*':'+', t+1);
+				this._drawPoint(entry.x-0.6, entry.y, t===0?'*':'+', t+1);
+			}
 		}
 	}
 	f.cycle();
@@ -351,26 +359,881 @@ Plasma.prototype.init = function(frame, opts){
 Plasma.prototype.tick = function(){
 	var f=this.f; if(!f) return;
 	this.t += this.speed;
-    for(var y=1;y<=f.height;y++){
-        for(var x=1;x<=f.width;x++){
-            var nx = x*this.scale;
-            var ny = y*this.scale;
-            var val = Math.sin(nx + this.t) + Math.sin((ny + this.t*0.7)*1.3) + Math.sin(Math.sqrt(nx*nx + ny*ny) + this.t*0.4);
-            var norm = (val + 3) / 6; // 0..1
-            var paletteIndex = Math.min(this.palette.length-1, Math.max(0, Math.floor(norm * this.palette.length)));
-            var ch;
-            if(norm < 0.2) ch = ' ';
-            else if(norm < 0.4) ch = '.';
-            else if(norm < 0.6) ch = '*';
-            else if(norm < 0.8) ch = 'o';
-            else ch = '@';
-            f.setData(x-1, y-1, ch, (this.palette[paletteIndex] || LIGHTBLUE) | BG_BLACK, false);
-        }
-    }
-    try { f.cycle(); } catch(e){}
+	for(var y=1;y<=f.height;y++){
+		for(var x=1;x<=f.width;x++){
+			var nx = x*this.scale;
+			var ny = y*this.scale;
+			var val = Math.sin(nx + this.t) + Math.sin((ny + this.t*0.7)*1.3) + Math.sin(Math.sqrt(nx*nx + ny*ny) + this.t*0.4);
+			var norm = (val + 3) / 6; // 0..1
+			var paletteIndex = Math.min(this.palette.length-1, Math.max(0, Math.floor(norm * this.palette.length)));
+			var ch = norm < 0.2 ? ' ' : norm < 0.4 ? '.' : norm < 0.6 ? '*' : norm < 0.8 ? 'o' : '@';
+			f.setData(x-1, y-1, ch, (this.palette[paletteIndex] || LIGHTBLUE) | BG_BLACK, false);
+		}
+	}
+	try { f.cycle(); } catch(e){}
 };
 Plasma.prototype.dispose = function(){};
 
+// Fireworks: colourful bursting particles
+function Fireworks(){
+	this.f=null; this.bursts=[]; this.palette=[YELLOW,WHITE,LIGHTRED,LIGHTMAGENTA,LIGHTCYAN,LIGHTGREEN];
+}
+Fireworks.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.maxBursts = parseInt(opts.fireworks_bursts,10);
+	if(isNaN(this.maxBursts) || this.maxBursts<=0) this.maxBursts = 4;
+	this.gravity = (!isNaN(parseFloat(opts.fireworks_gravity))) ? parseFloat(opts.fireworks_gravity) : 0.08;
+	this.spawnDelay = 0;
+	this.bursts.length = 0;
+};
+Fireworks.prototype._spawnBurst = function(){
+	var f=this.f;
+	var count = 24 + Math.floor(Math.random()*22);
+	var particles = [];
+	for(var i=0;i<count;i++){
+		var angle = (Math.PI * 2) * (i / count);
+		var speed = 0.7 + Math.random()*1.3;
+		particles.push({
+			x: 1 + Math.random()*f.width,
+			y: 1 + Math.random()*(f.height/2),
+			dx: Math.cos(angle)*speed,
+			dy: Math.sin(angle)*speed,
+			life: 25 + Math.floor(Math.random()*18),
+			colorIndex: Math.floor(Math.random()*this.palette.length)
+		});
+	}
+	this.bursts.push({ particles: particles });
+};
+Fireworks.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	this.spawnDelay--;
+	if(this.spawnDelay <= 0 && this.bursts.length < this.maxBursts){
+		this._spawnBurst();
+		this.spawnDelay = 18 + Math.floor(Math.random()*18);
+	}
+	try { f.clear(); } catch(e){}
+	for(var b=this.bursts.length-1;b>=0;b--){
+		var burst = this.bursts[b];
+		var particles = burst.particles;
+		for(var p=particles.length-1;p>=0;p--){
+			var part = particles[p];
+			part.x += part.dx;
+			part.y += part.dy;
+			part.dy += this.gravity;
+			part.life--;
+			if(part.life <= 0 || part.y > f.height+1){
+				particles.splice(p,1);
+				continue;
+			}
+			var intensity = Math.max(0, Math.min(this.palette.length-1, part.colorIndex + Math.floor((part.life/10))));
+			var ch = (part.life > 20) ? '*' : (part.life > 10 ? '+' : '.');
+			var cx = Math.round(part.x);
+			var cy = Math.round(part.y);
+			if(cx < 1 || cy < 1 || cx > f.width || cy > f.height) continue;
+			f.gotoxy(cx, cy);
+			f.attr = (this.palette[intensity] || YELLOW) | BG_BLACK;
+			f.putmsg(ch);
+		}
+		if(!particles.length) this.bursts.splice(b,1);
+	}
+	try { f.cycle(); } catch(e){}
+};
+Fireworks.prototype.dispose = function(){ this.bursts.length = 0; };
+
+// Aurora: flowing vertical light bands
+function Aurora(){
+	this.f=null; this.time=0; this.columns=[]; this.palette=[LIGHTCYAN,CYAN,LIGHTGREEN,LIGHTMAGENTA,YELLOW,WHITE];
+}
+Aurora.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.speed = (!isNaN(parseFloat(opts.aurora_speed))) ? parseFloat(opts.aurora_speed) : 0.12;
+	this.wave = (!isNaN(parseFloat(opts.aurora_wave))) ? parseFloat(opts.aurora_wave) : 0.35;
+	this.columns.length = 0;
+	for(var x=0;x<frame.width;x++) this.columns.push(Math.random()*Math.PI*2);
+	this.time = 0;
+};
+Aurora.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	this.time += this.speed;
+	try { f.clear(); } catch(e){}
+	for(var x=1;x<=f.width;x++){
+		var phase = this.columns[x-1] + this.time;
+		var center = Math.sin(phase) * (f.height/4) + (f.height/2);
+		var thickness = (Math.cos(phase*0.7)+1) * (f.height/6) + 2;
+		for(var y=1;y<=f.height;y++){
+			var dist = Math.abs(y - center);
+			if(dist > thickness) continue;
+			var norm = 1 - (dist / (thickness+0.01));
+			var idx = Math.min(this.palette.length-1, Math.floor(norm * this.palette.length));
+			f.gotoxy(x,y);
+			f.attr = (this.palette[idx] || LIGHTCYAN) | BG_BLACK;
+			f.putmsg('|');
+		}
+	}
+	try { f.cycle(); } catch(e){}
+};
+Aurora.prototype.dispose = function(){ this.columns.length = 0; };
+
+// OceanRipple: expanding circular waves
+function OceanRipple(){
+	this.f=null; this.ripples=[]; this.tickCount=0; this.maxRipples=4;
+	this.palette=[LIGHTBLUE,CYAN,LIGHTCYAN,WHITE];
+}
+OceanRipple.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.ripples=[];
+	this.tickCount=0;
+	this.maxRipples = Math.max(2, parseInt(opts.ripple_count,10) || 4);
+	for(var i=0;i<this.maxRipples;i++) this._spawn();
+};
+OceanRipple.prototype._spawn = function(){
+	var f=this.f; if(!f) return;
+	this.ripples.push({
+		x: Math.random()*f.width,
+		y: Math.random()*f.height,
+		radius: 0,
+		speed: 0.6 + Math.random()*0.5,
+		max: Math.max(f.width, f.height) + 10
+	});
+};
+OceanRipple.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	this.tickCount++;
+	if(this.ripples.length < this.maxRipples && this.tickCount % 45 === 0) this._spawn();
+	for(var r=this.ripples.length-1;r>=0;r--){
+		var ripple=this.ripples[r];
+		ripple.radius += ripple.speed;
+		if(ripple.radius > ripple.max) this.ripples.splice(r,1);
+	}
+	for(var y=1;y<=f.height;y++){
+		for(var x=1;x<=f.width;x++){
+			var value = 0;
+			for(var j=0;j<this.ripples.length;j++){
+				var rp=this.ripples[j];
+				var dx = x - rp.x;
+				var dy = y - rp.y;
+				var dist = Math.sqrt(dx*dx + dy*dy) + 0.01;
+				var wave = Math.sin(dist*0.35 - rp.radius*0.5);
+				value += wave / (1 + dist*0.15);
+			}
+			var norm = (value + 1.2)/2.4; // approx 0..1
+			if(norm < 0) norm = 0; else if(norm>1) norm = 1;
+			var idx = Math.min(this.palette.length-1, Math.floor(norm * this.palette.length));
+			var ch = norm < 0.2 ? ' ' : norm < 0.4 ? '.' : norm < 0.6 ? '~' : norm < 0.8 ? '-' : '=';
+			f.setData(x-1, y-1, ch, (this.palette[idx] || LIGHTBLUE) | BG_BLACK, false);
+		}
+	}
+	try { f.cycle(); } catch(e){}
+};
+OceanRipple.prototype.dispose = function(){ this.ripples=[]; };
+
+// LissajousTrails: flowing harmonic curves
+function LissajousTrails(){
+	this.f=null; this.time=0; this.curves=[]; this.trail=[]; this.speed=0.15;
+}
+LissajousTrails.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.speed = (!isNaN(parseFloat(opts.lissajous_speed))) ? parseFloat(opts.lissajous_speed) : 0.12;
+	this.time = 0;
+	this.trail=[];
+	this.curves=[
+		{ a:3, b:2, phase:0, color: LIGHTMAGENTA },
+		{ a:4, b:5, phase:Math.PI/2, color: LIGHTCYAN },
+		{ a:5, b:4, phase:Math.PI/3, color: YELLOW }
+	];
+};
+LissajousTrails.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	this.time += this.speed;
+	var midX = (f.width-1)/2;
+	var midY = (f.height-1)/2;
+	var ampX = Math.max(1, f.width/2 - 2);
+	var ampY = Math.max(1, f.height/2 - 2);
+	for(var i=0;i<this.curves.length;i++){
+		var c=this.curves[i];
+		var x = midX + Math.sin(this.time*c.a + c.phase) * ampX;
+		var y = midY + Math.cos(this.time*c.b + c.phase) * ampY;
+		this.trail.push({ x:x, y:y, color:c.color, life:28 });
+	}
+	try { f.clear(); } catch(e){}
+	for(var t=this.trail.length-1; t>=0; t--){
+		var point=this.trail[t];
+		point.life -= 1.2;
+		if(point.life <= 0){ this.trail.splice(t,1); continue; }
+		var sx = Math.round(point.x);
+		var sy = Math.round(point.y);
+		if(sx < 0 || sy < 0 || sx >= f.width || sy >= f.height) continue;
+		var norm = point.life/28;
+		var ch = norm > 0.7 ? '@' : norm > 0.45 ? 'o' : norm > 0.2 ? '+' : '.';
+		var attr = (point.color || LIGHTMAGENTA) | BG_BLACK;
+		if(norm < 0.25) attr = (point.color === YELLOW ? LIGHTGRAY : point.color) | BG_BLACK;
+		f.setData(sx, sy, ch, attr, false);
+	}
+	try { f.cycle(); } catch(e){}
+};
+LissajousTrails.prototype.dispose = function(){ this.trail=[]; };
+
+// LightningStorm: jagged bolts with afterglow
+function LightningStorm(){
+	this.f=null; this.w=0; this.h=0;
+	this.fade=[]; this.charGrid=[]; this.bolts=[]; this.cooldown=0;
+}
+LightningStorm.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.w = frame.width;
+	this.h = frame.height;
+	this.cooldown = 0;
+	this.fade=[]; this.charGrid=[]; this.bolts=[];
+	for(var y=0;y<this.h;y++){
+		var fadeRow = []; var charRow=[];
+		for(var x=0;x<this.w;x++){ fadeRow.push(0); charRow.push(' '); }
+		this.fade.push(fadeRow); this.charGrid.push(charRow);
+	}
+};
+LightningStorm.prototype._spawnBolt = function(){
+	var path=[];
+	var x=Math.floor(Math.random()*this.w);
+	var y=0;
+	path.push({x:x,y:y});
+	while(y < this.h-1){
+		y += (Math.random()<0.25)?2:1;
+		if(y >= this.h) y = this.h-1;
+		x += (Math.floor(Math.random()*3)-1);
+		if(x<0) x=0; else if(x>=this.w) x=this.w-1;
+		path.push({x:x,y:y});
+	}
+	this.bolts.push({ path:path, life:6 });
+};
+LightningStorm.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	if(this.cooldown <= 0){
+		this._spawnBolt();
+		this.cooldown = 15 + Math.floor(Math.random()*25);
+	}else this.cooldown--;
+	for(var y=0;y<this.h;y++){
+		for(var x=0;x<this.w;x++){
+			var val = this.fade[y][x] - 6;
+			if(val < 0){ val = 0; if(this.charGrid[y][x] !== ' ') this.charGrid[y][x] = ' '; }
+			this.fade[y][x] = val;
+		}
+	}
+	for(var b=this.bolts.length-1;b>=0;b--){
+		var bolt=this.bolts[b];
+		bolt.life--;
+		for(var i=0;i<bolt.path.length;i++){
+			var seg=bolt.path[i];
+			var x=seg.x, y=seg.y;
+			if(x<0||y<0||x>=this.w||y>=this.h) continue;
+			var prev = (i>0)?bolt.path[i-1]:null;
+			var ch='|';
+			if(prev){
+				var dx = seg.x - prev.x;
+				if(dx > 0) ch = '/';
+				else if(dx < 0) ch = '\\';
+			}
+			this.charGrid[y][x] = ch;
+			this.fade[y][x] = 255;
+			if(y+1 < this.h) this.fade[y+1][x] = Math.max(this.fade[y+1][x], 120);
+			if(x>0) this.fade[y][x-1] = Math.max(this.fade[y][x-1], 80);
+			if(x+1 < this.w) this.fade[y][x+1] = Math.max(this.fade[y][x+1], 80);
+		}
+		if(bolt.life <= 0) this.bolts.splice(b,1);
+	}
+	for(var yy=0; yy<this.h; yy++){
+		for(var xx=0; xx<this.w; xx++){
+			var intensity = this.fade[yy][xx];
+			var ch = this.charGrid[yy][xx];
+			if(intensity <= 0){
+				f.setData(xx, yy, ' ', BG_BLACK|BLACK, false);
+				continue;
+			}
+			var attr = (intensity > 180) ? WHITE|BG_BLACK
+				: intensity > 120 ? LIGHTCYAN|BG_BLACK
+				: intensity > 60 ? CYAN|BG_BLACK
+				: LIGHTGRAY|BG_BLACK;
+			f.setData(xx, yy, ch, attr, false);
+		}
+	}
+	try { f.cycle(); } catch(e){}
+};
+LightningStorm.prototype.dispose = function(){ this.fade=[]; this.charGrid=[]; this.bolts=[]; };
+
+// RecursiveTunnel: infinite tunnel illusion
+function RecursiveTunnel(){
+	this.f=null; this.time=0; this.speed=0.25; this.scale=0.15;
+	this.palette=[LIGHTBLUE,CYAN,LIGHTMAGENTA,LIGHTGRAY,WHITE];
+}
+RecursiveTunnel.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.speed = (!isNaN(parseFloat(opts.tunnel_speed))) ? parseFloat(opts.tunnel_speed) : 0.22;
+	this.scale = (!isNaN(parseFloat(opts.tunnel_scale))) ? parseFloat(opts.tunnel_scale) : 0.17;
+	this.time = 0;
+};
+RecursiveTunnel.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	this.time += this.speed;
+	var cx = (f.width-1)/2;
+	var cy = (f.height-1)/2;
+	for(var y=1;y<=f.height;y++){
+		for(var x=1;x<=f.width;x++){
+			var dx = x-1 - cx;
+			var dy = y-1 - cy;
+			var dist = Math.sqrt(dx*dx + dy*dy) * this.scale;
+			var angle = Math.atan2(dy, dx);
+			var band = Math.sin(dist - this.time) * 0.5 + 0.5;
+			var twist = Math.sin(angle*3 + this.time*0.7) * 0.5 + 0.5;
+			var mix = (band + twist) / 2;
+			if(mix < 0) mix = 0; else if(mix > 1) mix = 1;
+			var idx = Math.min(this.palette.length-1, Math.floor(mix * this.palette.length));
+			var ch = mix > 0.8 ? '#'
+				: mix > 0.6 ? '='
+				: mix > 0.4 ? '-'
+				: mix > 0.25 ? '+'
+				: mix > 0.1 ? '.' : ' ';
+			f.setData(x-1, y-1, ch, (this.palette[idx] || LIGHTBLUE) | BG_BLACK, false);
+		}
+	}
+	try { f.cycle(); } catch(e){}
+};
+RecursiveTunnel.prototype.dispose = function(){};
+
+// FigletMessage: render text using FIGlet/tdfonts
+
+function FigletMessage(){
+	this.f = null;
+	this.tdf = null;
+	this.fontPool = [];
+	this.messages = [];
+	this.lines = [];
+	this.refreshTicks = 180;
+	this.tickCounter = 0;
+	this.box = null;
+	this.inner = null;
+	this.colorPalette = [LIGHTRED, YELLOW, LIGHTMAGENTA, LIGHTCYAN, WHITE];
+	this.colorsEnabled = true;
+	this.moveEnabled = true;
+	this.dx = 0.45;
+	this.dy = 0.25;
+	this.posX = null;
+	this.posY = null;
+	this.contentWidth = 10;
+	this.contentHeight = 1;
+	this.currentColorIndex = -1;
+	this.currentColor = WHITE;
+}
+FigletMessage.prototype.init = function(frame, opts){
+	this.f = frame;
+	opts = opts || {};
+	this.tdf = load('tdfonts_lib.js');
+	if(!this.tdf.opt) this.tdf.opt = {};
+	this.tdf.opt.width = frame.width;
+	this.tdf.opt.justify = this.tdf.CENTER_JUSTIFY;
+	this.tdf.opt.margin = 0;
+	this.tdf.opt.wrap = false;
+	this.tdf.opt.blankline = false;
+	this.tdf.opt.ansi = false;
+	this.tdf.opt.random = false;
+	this.messages = this._parseMessages(opts);
+	this.fontPool = this._parseFonts(opts);
+	this.colorsEnabled = opts.figlet_colors !== false;
+	this.moveEnabled = opts.figlet_move !== false;
+	var customDx = parseFloat(opts.figlet_dx);
+	var customDy = parseFloat(opts.figlet_dy);
+	if(!isNaN(customDx)) this.dx = customDx || 0;
+	if(!isNaN(customDy)) this.dy = customDy || 0;
+	if(!this.moveEnabled){ this.dx = 0; this.dy = 0; }
+	if(this.moveEnabled && this.dx === 0) this.dx = 0.45;
+	if(this.moveEnabled && this.dy === 0) this.dy = 0.25;
+	var refresh = parseInt(opts.figlet_refresh, 10);
+	if(!isNaN(refresh) && refresh > 0) this.refreshTicks = refresh;
+	else this.refreshTicks = 180;
+	this.tickCounter = 0;
+	this._renderNew(false);
+	this._draw();
+};
+FigletMessage.prototype._parseMessages = function(opts){
+	var list = [];
+	if(typeof opts.figlet_messages === 'string' && opts.figlet_messages.trim()){
+		list = opts.figlet_messages.split('|').map(function(s){ return s.trim(); }).filter(Boolean);
+	}
+	if(!list.length && typeof opts.figlet_message === 'string' && opts.figlet_message.trim())
+		list = [opts.figlet_message.trim()];
+	if(!list.length) list = ['Future Land'];
+	return list;
+};
+FigletMessage.prototype._parseFonts = function(opts){
+	var fonts = [];
+	if(typeof opts.figlet_fonts === 'string' && opts.figlet_fonts.trim()){
+		fonts = opts.figlet_fonts.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+	}
+	if(!fonts.length){
+		var files = this.tdf.getlist() || [];
+		for(var i=0;i<files.length;i++) fonts.push(file_getname(files[i]));
+	}
+	if(!fonts.length && this.tdf.DEFAULT_FONT) fonts.push(this.tdf.DEFAULT_FONT);
+	return fonts;
+};
+FigletMessage.prototype._pickMessage = function(){
+	if(!this.messages.length) return 'HELLO WORLD';
+	var idx = random(this.messages.length);
+	if(idx >= this.messages.length) idx = this.messages.length - 1;
+	return this.messages[idx];
+};
+FigletMessage.prototype._pickFont = function(){
+	if(!this.fontPool.length) return this.tdf.DEFAULT_FONT || 'brndamgx';
+	var idx = random(this.fontPool.length);
+	if(idx >= this.fontPool.length) idx = this.fontPool.length - 1;
+	return this.fontPool[idx];
+};
+FigletMessage.prototype._sanitizeLines = function(text){
+	if(!text) return [];
+	var plain = text.replace(/\r/g,'').replace(/\x1B\[[0-9;]*m/g,'');
+	plain = plain.replace(/\x01./g,'');
+	var lines = plain.split('\n');
+	while(lines.length && lines[lines.length-1].trim()==='') lines.pop();
+	return lines;
+};
+FigletMessage.prototype._measureContent = function(){
+	var lines = this.lines || [];
+	var maxLen = 0;
+	for(var i=0;i<lines.length;i++){
+		var ln = lines[i].replace(/\s+$/,'');
+		if(ln.length > maxLen) maxLen = ln.length;
+	}
+	this.contentHeight = Math.max(1, lines.length);
+	var limit = this.f ? Math.max(1, this.f.width - 4) : 40;
+	this.contentWidth = Math.max(1, Math.min(limit, maxLen || 10));
+};
+FigletMessage.prototype._renderNew = function(preserve){
+	var message = this._pickMessage();
+	var fontName = this._pickFont();
+	var fontObj = fontName;
+	try {
+		fontObj = this.tdf.loadfont(fontName);
+	} catch(e){
+		try { log(LOG_WARNING, 'figlet loadfont failed for '+fontName+': '+e); } catch(_){}
+		fontObj = fontName;
+	}
+	var output;
+	try {
+		this.tdf.opt.width = this.f.width;
+		output = this.tdf.output(message, fontObj);
+	} catch(e){
+		try { log(LOG_WARNING, 'figlet render failed ('+fontName+'): '+e); } catch(_){}
+		this.lines = [message];
+		this._selectColor();
+		this._measureContent();
+		this._createFrames(preserve === true);
+		return;
+	}
+	var lines = this._sanitizeLines(output);
+	if(!lines.length) lines = [message];
+	this.lines = lines;
+	this._selectColor();
+	this._measureContent();
+	this._createFrames(preserve === true);
+};
+FigletMessage.prototype._selectColor = function(){
+	if(!this.colorsEnabled || !this.colorPalette.length){
+		this.currentColor = WHITE;
+		return;
+	}
+	this.currentColorIndex = (this.currentColorIndex + 1) % this.colorPalette.length;
+	this.currentColor = this.colorPalette[this.currentColorIndex] || WHITE;
+};
+FigletMessage.prototype._createFrames = function(preservePosition){
+	var prevX = this.posX;
+	var prevY = this.posY;
+	if(this.box){
+		try { this.box.close(); } catch(e){}
+		this.box = null;
+		this.inner = null;
+	}
+	var innerHeight = Math.min(Math.max(1, this.contentHeight), Math.max(1, this.f.height - 2));
+	var innerWidth = Math.min(Math.max(1, this.contentWidth), Math.max(1, this.f.width - 2));
+	var boxHeight = Math.min(this.f.height, Math.max(3, innerHeight + 2));
+	var boxWidth = Math.min(this.f.width, Math.max(4, innerWidth + 2));
+	this.box = new Frame(1, 1, boxWidth, boxHeight, BG_BLACK|LIGHTGRAY, this.f);
+	this.box.transparent = true;
+	if(typeof this.box.drawBorder === 'function') this.box.drawBorder();
+	if(typeof this.box.open === 'function') this.box.open();
+	else if(typeof this.box.show === 'function') this.box.show();
+	if(typeof this.box.top === 'function') this.box.top();
+	var innerH = Math.max(1, boxHeight - 2);
+	this.inner = new Frame(2, 2, Math.max(1, boxWidth-2), innerH, BG_BLACK|WHITE, this.box);
+	this.inner.transparent = true;
+	if(typeof this.inner.open === 'function') this.inner.open();
+	else if(typeof this.inner.show === 'function') this.inner.show();
+	var maxX = Math.max(1, this.f.width - boxWidth + 1);
+	var maxY = Math.max(1, this.f.height - boxHeight + 1);
+	if(preservePosition && typeof prevX === 'number') this.posX = Math.min(Math.max(1, prevX), maxX);
+	else this.posX = Math.max(1, Math.floor((this.f.width - boxWidth)/2) + 1);
+	if(preservePosition && typeof prevY === 'number') this.posY = Math.min(Math.max(1, prevY), maxY);
+	else this.posY = Math.max(1, Math.floor((this.f.height - boxHeight)/2) + 1);
+	this.box.moveTo(Math.round(this.posX), Math.round(this.posY));
+};
+FigletMessage.prototype._updatePosition = function(){
+	if(!this.moveEnabled || !this.box) return;
+	var maxX = Math.max(1, this.f.width - this.box.width + 1);
+	var maxY = Math.max(1, this.f.height - this.box.height + 1);
+	this.posX += this.dx;
+	this.posY += this.dy;
+	if(this.posX < 1){ this.posX = 1; this.dx = Math.abs(this.dx); }
+	else if(this.posX > maxX){ this.posX = maxX; this.dx = -Math.abs(this.dx); }
+	if(this.posY < 1){ this.posY = 1; this.dy = Math.abs(this.dy); }
+	else if(this.posY > maxY){ this.posY = maxY; this.dy = -Math.abs(this.dy); }
+	this.box.moveTo(Math.round(this.posX), Math.round(this.posY));
+};
+FigletMessage.prototype._draw = function(){
+	if(!this.box || !this.inner) return;
+	try { this.box.clear(); } catch(e){}
+	if(typeof this.box.drawBorder === 'function'){
+		this.box.attr = BG_BLACK|LIGHTGRAY;
+		try { this.box.drawBorder(); } catch(e){}
+	}
+	try { this.inner.clear(); } catch(e){}
+	var lineCount = Math.min(this.lines.length, this.inner.height);
+	for(var i=0;i<lineCount;i++){
+		var line = this.lines[i];
+		if(line.length > this.inner.width) line = line.substr(0, this.inner.width);
+		var trimmed = line.replace(/\s+$/,'');
+		var startX = Math.max(1, Math.floor((this.inner.width - trimmed.length)/2) + 1);
+		this.inner.gotoxy(startX, i+1);
+		var color = this.currentColor || WHITE;
+		this.inner.attr = color | BG_BLACK;
+		this.inner.putmsg(trimmed);
+	}
+	try {
+		this.inner.cycle();
+		this.box.cycle();
+	} catch(e){}
+};
+FigletMessage.prototype.tick = function(){
+	if(++this.tickCounter >= this.refreshTicks){
+		this._renderNew(true);
+		this.tickCounter = 0;
+	}
+	this._updatePosition();
+	this._draw();
+};
+FigletMessage.prototype.dispose = function(){
+	if(this.inner){ try { this.inner.close(); } catch(e){} }
+	if(this.box){ try { this.box.close(); } catch(e){} }
+	this.box = this.inner = null;
+	this.lines = [];
+};
+
+// FireSmoke: classic fire column with drifting smoke
+function FireSmoke(){
+	this.f=null; this.w=0; this.h=0;
+	this.buffer=[]; this.smoke=[];
+	this.decay=1;
+	this.gradient=[
+		{ threshold:20, ch:' ', attr: BG_BLACK|BLACK },
+		{ threshold:70, ch:'.', attr: BG_BLACK|DARKGRAY },
+		{ threshold:120, ch:'`', attr: BG_RED|YELLOW },
+		{ threshold:170, ch:'^', attr: BG_RED|WHITE },
+	];
+}
+FireSmoke.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.w = frame.width;
+	this.h = frame.height;
+	this.decay = Math.max(1, parseInt(opts.fire_decay,10) || 1);
+	this.buffer = [];
+	for(var y=0;y<this.h+2;y++){
+		var row=[];
+		for(var x=0;x<this.w;x++) row.push(0);
+		this.buffer.push(row);
+	}
+	this.smoke=[];
+};
+FireSmoke.prototype._sample = function(row,x){
+	var w=this.w;
+	if(x<0) x=0; else if(x>=w) x=w-1;
+	if(row<0) row=0; else if(row>=this.buffer.length) row=this.buffer.length-1;
+	return this.buffer[row][x];
+};
+FireSmoke.prototype._findGradient = function(value){
+	var grad=this.gradient;
+	for(var i=0;i<grad.length;i++) if(value <= grad[i].threshold) return grad[i];
+	return grad[grad.length-1];
+};
+FireSmoke.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	var w=this.w, h=this.h;
+	var buf=this.buffer;
+	var bottomIndex = this.h+1;
+	for(var x=0;x<w;x++) buf[bottomIndex][x] = (Math.random() < 0.22) ? 255 : 0;
+	for(var y=h; y>0; y--){
+		var dest = buf[y-1];
+		for(var x=0;x<w;x++){
+			var val = (
+				this._sample(y, x) +
+				this._sample(y, x-1) +
+				this._sample(y, x+1) +
+				this._sample(y+1, x)
+				) / 4;
+			val -= this.decay + ((Math.random()*3)|0);
+			if(val < 0) val = 0;
+			dest[x] = val;
+			if(val > 200 && y < h-4 && Math.random() < 0.035){
+				this.smoke.push({ x:x + Math.random()*0.6 - 0.3, y:y-1, life: 18 });
+			}
+		}
+	}
+	for(var sy=this.smoke.length-1; sy>=0; sy--){
+		var s=this.smoke[sy];
+		s.y -= 0.25 + Math.random()*0.15;
+		s.x += (Math.random()*0.5) - 0.25;
+		s.life--;
+		if(s.y < 0 || s.x < -1 || s.x > w || s.life <= 0){
+			this.smoke.splice(sy,1);
+		}
+	}
+	for(var yy=0; yy<h; yy++){
+		for(var xx=0; xx<w; xx++){
+			var val = buf[yy][xx];
+			var grad = this._findGradient(val);
+			f.setData(xx, yy, grad.ch, grad.attr, false);
+		}
+	}
+	for(var i=0;i<this.smoke.length;i++){
+		var s2=this.smoke[i];
+		var sx=Math.round(s2.x);
+		var sy2=Math.round(s2.y);
+		if(sx>=0 && sx<w && sy2>=0 && sy2<h){
+			var ch = (s2.life>12)?'~':(s2.life>6?'.':' ');
+			var attr = (s2.life>6 ? LIGHTGRAY : DARKGRAY) | BG_BLACK;
+			f.setData(sx, sy2, ch, attr, false);
+		}
+	}
+	try { f.cycle(); } catch(e){}
+};
+FireSmoke.prototype.dispose = function(){ this.buffer=[]; this.smoke=[]; };
+
+// OceanRipple: expanding circular waves
+function OceanRipple(){
+	this.f=null; this.ripples=[]; this.tickCount=0; this.maxRipples=4;
+	this.palette=[LIGHTBLUE,CYAN,LIGHTCYAN,WHITE];
+}
+OceanRipple.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.ripples=[];
+	this.tickCount=0;
+	this.maxRipples = Math.max(2, parseInt(opts.ripple_count,10) || 4);
+	for(var i=0;i<this.maxRipples;i++) this._spawn();
+};
+OceanRipple.prototype._spawn = function(){
+	var f=this.f; if(!f) return;
+	this.ripples.push({
+		x: Math.random()*f.width,
+		y: Math.random()*f.height,
+		radius: 0,
+		speed: 0.6 + Math.random()*0.5,
+		max: Math.max(f.width, f.height) + 10
+	});
+};
+OceanRipple.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	this.tickCount++;
+	if(this.ripples.length < this.maxRipples && this.tickCount % 45 === 0) this._spawn();
+	for(var r=this.ripples.length-1;r>=0;r--){
+		var ripple=this.ripples[r];
+		ripple.radius += ripple.speed;
+		if(ripple.radius > ripple.max) this.ripples.splice(r,1);
+	}
+	for(var y=1;y<=f.height;y++){
+		for(var x=1;x<=f.width;x++){
+			var value = 0;
+			for(var j=0;j<this.ripples.length;j++){
+				var rp=this.ripples[j];
+				var dx = x - rp.x;
+				var dy = y - rp.y;
+				var dist = Math.sqrt(dx*dx + dy*dy) + 0.01;
+				var wave = Math.sin(dist*0.35 - rp.radius*0.5);
+				value += wave / (1 + dist*0.15);
+			}
+			var norm = (value + 1.2)/2.4; // approx 0..1
+			if(norm < 0) norm = 0; else if(norm>1) norm = 1;
+			var idx = Math.min(this.palette.length-1, Math.floor(norm * this.palette.length));
+			var ch = norm < 0.2 ? ' ' : norm < 0.4 ? '.' : norm < 0.6 ? '~' : norm < 0.8 ? '-' : '=';
+			f.setData(x-1, y-1, ch, (this.palette[idx] || LIGHTBLUE) | BG_BLACK, false);
+		}
+	}
+	try { f.cycle(); } catch(e){}
+};
+OceanRipple.prototype.dispose = function(){ this.ripples=[]; };
+
+// LissajousTrails: flowing harmonic curves
+function LissajousTrails(){
+	this.f=null; this.time=0; this.curves=[]; this.trail=[]; this.speed=0.15;
+}
+LissajousTrails.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.speed = (!isNaN(parseFloat(opts.lissajous_speed))) ? parseFloat(opts.lissajous_speed) : 0.12;
+	this.time = 0;
+	this.trail=[];
+	this.curves=[
+		{ a:3, b:2, phase:0, color: LIGHTMAGENTA },
+		{ a:4, b:5, phase:Math.PI/2, color: LIGHTCYAN },
+		{ a:5, b:4, phase:Math.PI/3, color: YELLOW }
+	];
+};
+LissajousTrails.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	this.time += this.speed;
+	var midX = (f.width-1)/2;
+	var midY = (f.height-1)/2;
+	var ampX = Math.max(1, f.width/2 - 2);
+	var ampY = Math.max(1, f.height/2 - 2);
+	for(var i=0;i<this.curves.length;i++){
+		var c=this.curves[i];
+		var x = midX + Math.sin(this.time*c.a + c.phase) * ampX;
+		var y = midY + Math.cos(this.time*c.b + c.phase) * ampY;
+		this.trail.push({ x:x, y:y, color:c.color, life:28 });
+	}
+	try { f.clear(); } catch(e){}
+	for(var t=this.trail.length-1; t>=0; t--){
+		var point=this.trail[t];
+		point.life -= 1.2;
+		if(point.life <= 0){ this.trail.splice(t,1); continue; }
+		var sx = Math.round(point.x);
+		var sy = Math.round(point.y);
+		if(sx < 0 || sy < 0 || sx >= f.width || sy >= f.height) continue;
+		var norm = point.life/28;
+		var ch = norm > 0.7 ? '@' : norm > 0.45 ? 'o' : norm > 0.2 ? '+' : '.';
+		var attr = (point.color || LIGHTMAGENTA) | BG_BLACK;
+		if(norm < 0.25) attr = (point.color === YELLOW ? LIGHTGRAY : point.color) | BG_BLACK;
+		f.setData(sx, sy, ch, attr, false);
+	}
+	try { f.cycle(); } catch(e){}
+};
+LissajousTrails.prototype.dispose = function(){ this.trail=[]; };
+
+// LightningStorm: jagged bolts with afterglow
+function LightningStorm(){
+	this.f=null; this.w=0; this.h=0;
+	this.fade=[]; this.charGrid=[]; this.bolts=[]; this.cooldown=0;
+}
+LightningStorm.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.w = frame.width;
+	this.h = frame.height;
+	this.cooldown = 0;
+	this.fade=[]; this.charGrid=[]; this.bolts=[];
+	for(var y=0;y<this.h;y++){
+		var fadeRow = []; var charRow=[];
+		for(var x=0;x<this.w;x++){ fadeRow.push(0); charRow.push(' '); }
+		this.fade.push(fadeRow); this.charGrid.push(charRow);
+	}
+};
+LightningStorm.prototype._spawnBolt = function(){
+	var path=[];
+	var x=Math.floor(Math.random()*this.w);
+	var y=0;
+	path.push({x:x,y:y});
+	while(y < this.h-1){
+		y += (Math.random()<0.25)?2:1;
+		if(y >= this.h) y = this.h-1;
+		x += (Math.floor(Math.random()*3)-1);
+		if(x<0) x=0; else if(x>=this.w) x=this.w-1;
+		path.push({x:x,y:y});
+	}
+	this.bolts.push({ path:path, life:6 });
+};
+LightningStorm.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	if(this.cooldown <= 0){
+		this._spawnBolt();
+		this.cooldown = 15 + Math.floor(Math.random()*25);
+	}else this.cooldown--;
+	for(var y=0;y<this.h;y++){
+		for(var x=0;x<this.w;x++){
+			var val = this.fade[y][x] - 6;
+			if(val < 0){ val = 0; if(this.charGrid[y][x] !== ' ') this.charGrid[y][x] = ' '; }
+			this.fade[y][x] = val;
+		}
+	}
+	for(var b=this.bolts.length-1;b>=0;b--){
+		var bolt=this.bolts[b];
+		bolt.life--;
+		for(var i=0;i<bolt.path.length;i++){
+			var seg=bolt.path[i];
+			var x=seg.x, y=seg.y;
+			if(x<0||y<0||x>=this.w||y>=this.h) continue;
+			var prev = (i>0)?bolt.path[i-1]:null;
+			var ch='|';
+			if(prev){
+				var dx = seg.x - prev.x;
+				if(dx > 0) ch = '/';
+				else if(dx < 0) ch = '\\';
+			}
+			this.charGrid[y][x] = ch;
+			this.fade[y][x] = 255;
+			if(y+1 < this.h) this.fade[y+1][x] = Math.max(this.fade[y+1][x], 120);
+			if(x>0) this.fade[y][x-1] = Math.max(this.fade[y][x-1], 80);
+			if(x+1 < this.w) this.fade[y][x+1] = Math.max(this.fade[y][x+1], 80);
+		}
+		if(bolt.life <= 0) this.bolts.splice(b,1);
+	}
+	for(var yy=0; yy<this.h; yy++){
+		for(var xx=0; xx<this.w; xx++){
+			var intensity = this.fade[yy][xx];
+			var ch = this.charGrid[yy][xx];
+			if(intensity <= 0){
+				f.setData(xx, yy, ' ', BG_BLACK|BLACK, false);
+				continue;
+			}
+			var attr = (intensity > 180) ? WHITE|BG_BLACK
+				: intensity > 120 ? LIGHTCYAN|BG_BLACK
+				: intensity > 60 ? CYAN|BG_BLACK
+				: LIGHTGRAY|BG_BLACK;
+			f.setData(xx, yy, ch, attr, false);
+		}
+	}
+	try { f.cycle(); } catch(e){}
+};
+LightningStorm.prototype.dispose = function(){ this.fade=[]; this.charGrid=[]; this.bolts=[]; };
+
+// RecursiveTunnel: infinite tunnel illusion
+function RecursiveTunnel(){
+	this.f=null; this.time=0; this.speed=0.25; this.scale=0.15;
+	this.palette=[LIGHTBLUE,CYAN,LIGHTMAGENTA,LIGHTGRAY,WHITE];
+}
+RecursiveTunnel.prototype.init = function(frame, opts){
+	this.f = frame; opts = opts || {};
+	this.speed = (!isNaN(parseFloat(opts.tunnel_speed))) ? parseFloat(opts.tunnel_speed) : 0.22;
+	this.scale = (!isNaN(parseFloat(opts.tunnel_scale))) ? parseFloat(opts.tunnel_scale) : 0.17;
+	this.time = 0;
+};
+RecursiveTunnel.prototype.tick = function(){
+	var f=this.f; if(!f) return;
+	this.time += this.speed;
+	var cx = (f.width-1)/2;
+	var cy = (f.height-1)/2;
+	for(var y=1;y<=f.height;y++){
+		for(var x=1;x<=f.width;x++){
+			var dx = x-1 - cx;
+			var dy = y-1 - cy;
+			var dist = Math.sqrt(dx*dx + dy*dy) * this.scale;
+			var angle = Math.atan2(dy, dx);
+			var band = Math.sin(dist - this.time) * 0.5 + 0.5;
+			var twist = Math.sin(angle*3 + this.time*0.7) * 0.5 + 0.5;
+			var mix = (band + twist) / 2;
+			if(mix < 0) mix = 0; else if(mix > 1) mix = 1;
+			var idx = Math.min(this.palette.length-1, Math.floor(mix * this.palette.length));
+			var ch = mix > 0.8 ? '#'
+				: mix > 0.6 ? '='
+				: mix > 0.4 ? '-'
+				: mix > 0.25 ? '+'
+				: mix > 0.1 ? '.' : ' ';
+			f.setData(x-1, y-1, ch, (this.palette[idx] || LIGHTBLUE) | BG_BLACK, false);
+		}
+	}
+	try { f.cycle(); } catch(e){}
+};
+RecursiveTunnel.prototype.dispose = function(){};
 
 // Animation Manager
 function AnimationManager(frame, opts){
@@ -472,7 +1335,15 @@ var moduleExports = {
 	Fireflies: Fireflies,
 	SineWave: SineWave,
 	CometTrails: CometTrails,
-	Plasma: Plasma
+	Plasma: Plasma,
+	Fireworks: Fireworks,
+	Aurora: Aurora,
+	FireSmoke: FireSmoke,
+	OceanRipple: OceanRipple,
+	LissajousTrails: LissajousTrails,
+	LightningStorm: LightningStorm,
+	RecursiveTunnel: RecursiveTunnel,
+	FigletMessage: FigletMessage
 };
 
 var _global = (typeof globalThis !== 'undefined') ? globalThis : (typeof js !== 'undefined' && js && js.global) ? js.global : undefined;
