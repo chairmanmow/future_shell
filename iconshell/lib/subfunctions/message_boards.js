@@ -275,6 +275,7 @@ MessageBoard.prototype._ensureFrames = function() {
     var h = pf ? pf.height : console.screen_rows;
     // Reserve one line for input/status
     this.outputFrame = new Frame(x, y, w, h - 1, BG_BLACK|LIGHTGRAY, pf);
+    this.setBackgroundFrame(this.outputFrame);
     this.inputFrame  = new Frame(x, y + h - 1, w, 1, BG_BLUE|WHITE, pf);
     this.outputFrame.open();
     this.inputFrame.open();
@@ -519,6 +520,7 @@ MessageBoard.prototype._init = function(reentry){
     this._threadSequenceCache = {};
     this._cachedSubCode = null;
     this._threadHeadersCache = {};
+    this._subMessageCounts = {};
     this._setReadBodyText('');
     this._readScroll = 0;
     this._readSubIconFrame = null;
@@ -653,19 +655,25 @@ MessageBoard.prototype._renderSubView = function(group) {
         iconBg: BG_BLUE,
         iconFg: WHITE
     });
-    if(!grp) grp = { sub_list: [] };
-    for (var si = 0; si < grp.sub_list.length; si++) {
-        var sub = grp.sub_list[si];
-        list.push({
-            type: 'sub',
-            label: sub.name.substr(0,12),
-            hotkey: (sub.name && sub.name.length? sub.name[0].toUpperCase(): null),
-            iconFile: this._resolveBoardIcon(sub.code || sub.name, 'sub'),
-            iconBg: BG_CYAN,
-            iconFg: BLACK,
-            subCode: sub.code
-        });
-    }
+	if(!grp) grp = { sub_list: [] };
+	for (var si = 0; si < grp.sub_list.length; si++) {
+		var sub = grp.sub_list[si];
+		var subName = (sub.name || sub.code || '').substr(0,12);
+		var totalMessages = this._getSubMessageCount(sub.code);
+		var labelInfo = this._formatSubLabel(subName, totalMessages);
+		list.push({
+			type: 'sub',
+			label: labelInfo.text,
+			hotkey: (sub.name && sub.name.length? sub.name[0].toUpperCase(): null),
+			iconFile: this._resolveBoardIcon(sub.code || sub.name, 'sub'),
+			iconBg: BG_CYAN,
+			iconFg: BLACK,
+			subCode: sub.code,
+			_labelBase: subName,
+			_labelSegments: labelInfo.segments,
+			_messageCount: totalMessages
+		});
+	}
     if(grp.sub_list && grp.sub_list.length && !this._lastActiveSubCode) this._lastActiveSubCode = grp.sub_list[0].code;
     this.items = list;
     this._computeNonSpecialOrdinals();
@@ -1723,21 +1731,29 @@ MessageBoard.prototype._paintIconGrid = function(){
     var visible = this.items.slice(this.scrollOffset, end);
     // Build and render each visible icon
     var idx=0;
-    for (var v=0; v<visible.length; v++) {
-        var globalIndex = this.scrollOffset + v;
-        var col = idx % metrics.cols; var row = Math.floor(idx / metrics.cols);
-        var x = (col * metrics.cellW) + 2; var y=(row * metrics.cellH)+1;
-        var iconFrame = new Frame(this.outputFrame.x + x -1, this.outputFrame.y + y -1, metrics.iconW, metrics.iconH, (visible[v].iconBg||0)|(visible[v].iconFg||0), this.outputFrame);
-        var labelFrame= new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, BG_BLACK|LIGHTGRAY, this.outputFrame);
-        var iconObj = new this._Icon(iconFrame,labelFrame,visible[v]);
-        iconObj.render();
-        this._iconCells.push({ icon: iconFrame, label: labelFrame });
-        // Selection highlight
-        if (globalIndex === this.selection) {
-            labelFrame.clear(BG_LIGHTGRAY|BLACK); labelFrame.home(); labelFrame.putmsg(this._center(visible[v].label.substr(0,metrics.iconW), metrics.iconW));
-        }
-        // Hotspot mapping: ESC for special first cell; numbering starts at 1 for others (1-9 then A-Z)
-        var item = visible[v];
+	for (var v=0; v<visible.length; v++) {
+		var globalIndex = this.scrollOffset + v;
+		var col = idx % metrics.cols; var row = Math.floor(idx / metrics.cols);
+		var x = (col * metrics.cellW) + 2; var y=(row * metrics.cellH)+1;
+		var iconFrame = new Frame(this.outputFrame.x + x -1, this.outputFrame.y + y -1, metrics.iconW, metrics.iconH, (visible[v].iconBg||0)|(visible[v].iconFg||0), this.outputFrame);
+		var labelFrame= new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, BG_BLACK|LIGHTGRAY, this.outputFrame);
+		var itemData = visible[v];
+		if(itemData.type === 'sub' && itemData.subCode){
+			var updated = this._getSubMessageCount(itemData.subCode);
+			itemData._messageCount = updated;
+			var baseName = itemData._labelBase || (itemData.label || '');
+			var refreshed = this._formatSubLabel(baseName, updated);
+			itemData.label = refreshed.text;
+			itemData._labelSegments = refreshed.segments;
+		}
+		var iconObj = new this._Icon(iconFrame,labelFrame,itemData);
+		iconObj.render();
+		this._iconCells.push({ icon: iconFrame, label: labelFrame, item: itemData, iconObj: iconObj });
+		try {
+			this._renderIconLabel(labelFrame, itemData, globalIndex === this.selection, metrics.iconW);
+		} catch(e){}
+		// Hotspot mapping: ESC for special first cell; numbering starts at 1 for others (1-9 then A-Z)
+		var item = itemData;
         var cmd = null;
         if (item.type === 'quit' || item.type === 'groups') {
             cmd = '\x1b'; // ESC
@@ -2278,6 +2294,96 @@ MessageBoard.prototype._handleSubKey = function(key){
 // We'll mirror the approach in whosonline.js: build a stable mapping of commands -> indices
 // per repaint, using digits 0-9 then A-Z (up to 36) and store in this._hotspotMap.
 // A separate method (e.g. processMouseKey) will intercept those keys in _handleKey before view logic.
+
+MessageBoard.prototype._renderIconLabel = function(frame, item, isSelected, widthOverride){
+    if(!frame) return;
+    var baseAttr = isSelected ? (BG_LIGHTGRAY|BLACK) : (BG_BLACK|LIGHTGRAY);
+    try { frame.clear(baseAttr); frame.home(); } catch(e){}
+    var width = widthOverride || frame.width || 0;
+    if(width <= 0) return;
+    var segments = (item && item._labelSegments && item._labelSegments.length) ? item._labelSegments : null;
+    var text = (item && item.label) ? item.label : '';
+    function repeatSpaces(count){ return (count > 0) ? new Array(count+1).join(' ') : ''; }
+    if(!segments){
+        if(text.length > width) text = text.substr(0, width);
+        var left = Math.max(0, Math.floor((width - text.length) / 2));
+        var written = 0;
+        var padLeft = repeatSpaces(left);
+        if(padLeft){ frame.attr = baseAttr; frame.putmsg(padLeft); written += padLeft.length; }
+        if(text){ frame.attr = baseAttr; frame.putmsg(text); written += text.length; }
+        if(written < width){ frame.attr = baseAttr; frame.putmsg(repeatSpaces(width - written)); }
+        return;
+    }
+    var truncated = [];
+    var visible = 0;
+    for(var i=0; i<segments.length; i++){
+        var seg = segments[i];
+        var segText = seg && seg.text ? String(seg.text) : '';
+        if(!segText.length && segText !== '0') continue;
+        var remaining = width - visible;
+        if(remaining <= 0) break;
+        if(segText.length > remaining) segText = segText.substr(0, remaining);
+        truncated.push({ text: segText, color: seg ? seg.color : null });
+        visible += segText.length;
+    }
+    if(!truncated.length){
+        frame.attr = baseAttr;
+        frame.putmsg(repeatSpaces(width));
+        return;
+    }
+    var leftPad = Math.max(0, Math.floor((width - visible) / 2));
+    var writtenTotal = 0;
+    var bg = baseAttr & 0xF0;
+    var pad = repeatSpaces(Math.min(leftPad, width));
+    if(pad){ frame.attr = baseAttr; frame.putmsg(pad); writtenTotal += pad.length; }
+    for(var j=0; j<truncated.length && writtenTotal < width; j++){
+        var segPart = truncated[j];
+        var attr = (segPart.color !== null && typeof segPart.color === 'number') ? (bg | segPart.color) : baseAttr;
+        frame.attr = attr;
+        frame.putmsg(segPart.text);
+        writtenTotal += segPart.text.length;
+    }
+    if(writtenTotal < width){
+        frame.attr = baseAttr;
+        frame.putmsg(repeatSpaces(width - writtenTotal));
+    }
+};
+
+MessageBoard.prototype._getSubMessageCount = function(code){
+    if(!code || typeof MsgBase !== 'function') return 0;
+    if(!this._subMessageCounts) this._subMessageCounts = {};
+    var entry = this._subMessageCounts[code];
+    var now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : (time() * 1000);
+    if(entry && (now - entry.ts) < 5000) return entry.total;
+    var total = 0;
+    var mb = new MsgBase(code);
+    if(mb.open()){
+        try {
+            total = Math.max(0, parseInt(mb.total_msgs, 10) || 0);
+        } catch(e){ total = 0; }
+        finally { mb.close(); }
+    }
+    this._subMessageCounts[code] = { total: total, ts: now };
+    return total;
+};
+
+MessageBoard.prototype._formatSubLabel = function(name, total){
+    name = name || '';
+    total = Math.max(0, parseInt(total, 10) || 0);
+    var countText = String(total);
+    var segments = [];
+    var text = '';
+    var cyan = (typeof CYAN !== 'undefined') ? CYAN : (typeof LIGHTCYAN !== 'undefined' ? LIGHTCYAN : WHITE);
+    segments.push({ text: countText, color: cyan });
+    text += countText;
+    if(name.length){
+        segments.push({ text: ' ', color: null });
+        text += ' ';
+        segments.push({ text: name, color: null });
+        text += name;
+    }
+    return { text: text, segments: segments };
+};
 
 // Fallback center helper (avoids dependency on global center())
 MessageBoard.prototype._center = function(txt, width){

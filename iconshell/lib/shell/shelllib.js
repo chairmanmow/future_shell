@@ -59,10 +59,10 @@ IconShell.prototype.init = function() {
     // === End instance state ===
     // Inactivity tracking for background effects
     this._lastActivityTs = Date.now();
-    // Configure inactivity threshold from ICSH_SETTINGS (minutes) if available.
-    var _mins = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && typeof ICSH_SETTINGS.inactivityMinutes === 'number') ? ICSH_SETTINGS.inactivityMinutes : 3;
-    if(_mins === -1) this.inactivityThresholdMs = -1; // disabled
-    else this.inactivityThresholdMs = Math.max(0, _mins) * 60000;
+    // Configure inactivity threshold from ICSH_SETTINGS (seconds) if available.
+    var _secs = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && typeof ICSH_SETTINGS.inactivitySeconds === 'number') ? ICSH_SETTINGS.inactivitySeconds : 180;
+    if(_secs === -1) this.inactivityThresholdMs = -1; // disabled
+    else this.inactivityThresholdMs = Math.max(0, _secs) * 1000;
     // Persistent chat backend (JSONChat)
     var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
     var host = bbs.sys_inetaddr || "127.0.0.1";
@@ -164,6 +164,7 @@ IconShell.prototype.main = function() {
                     }
                     if(this.activeSubprogram && typeof this.activeSubprogram.draw==='function') this.activeSubprogram.draw();
                     else if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+                    key = '';
                 }
             }
             if(key) this.processKeyboardInput(key);
@@ -401,7 +402,19 @@ IconShell.prototype._resolveScreensaverFrame = function(){
             if (frame && frame.is_open !== false) return frame;
         } catch(e) { dbug('screensaver backgroundFrame error: ' + e, 'screensaver'); }
     }
-    return this.view;
+    var viewFrame = this.view;
+    if (!viewFrame || (typeof viewFrame.is_open !== 'undefined' && !viewFrame.is_open)) {
+        try { this.recreateFramesIfNeeded(); } catch(e) { dbug('screensaver frame recreate error: ' + e, 'screensaver'); }
+        viewFrame = this.view;
+        if (!viewFrame || (typeof viewFrame.is_open !== 'undefined' && !viewFrame.is_open)) {
+            try { this.drawFolder(); } catch(e2) { dbug('screensaver frame draw error: ' + e2, 'screensaver'); }
+            viewFrame = this.view;
+        }
+    }
+    if (!viewFrame || (typeof viewFrame.is_open !== 'undefined' && !viewFrame.is_open)) {
+        return this.root && (typeof this.root.is_open === 'undefined' || this.root.is_open) ? this.root : null;
+    }
+    return viewFrame;
 };
 
 IconShell.prototype._refreshScreenSaverFrame = function(){

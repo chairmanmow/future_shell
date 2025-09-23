@@ -83,7 +83,7 @@ Subprogram.prototype.sendFramesToBottom = function(){
 
 Subprogram.prototype.pauseForReason = function(reason){};
 
-Subprogram.prototype.resumeForReason = function(){};
+Subprogram.prototype.resumeForReason = function(reason){};
 
 Subprogram.prototype.setParentFrame = function(f){ this.parentFrame = f; return this; };
 

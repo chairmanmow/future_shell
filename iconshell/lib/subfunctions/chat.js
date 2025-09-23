@@ -8,6 +8,7 @@ function Chat(jsonchat) {
     this.channel = "main";
     this.jsonchat = jsonchat; // persistent backend instance
     this.parentFrame = null;
+    this.chatOutputFrame = null;
     this.chatInputFrame = null;
     this.leftAvatarFrame = null;
     this.leftMsgFrame = null;
@@ -46,14 +47,14 @@ function Chat(jsonchat) {
     this.groupLineColor = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_GROUP_LINE) ? ICSH_VALS.CHAT_GROUP_LINE : MAGENTA;
 }
 
-// // Inherit from Subprogram
-// if (typeof extend === 'function') {
-//     extend(Chat, Subprogram);
-// } else {
-//     // Fallback simple inheritance if extend() not present
-//     Chat.prototype = Object.create(Subprogram.prototype);
-//     Chat.prototype.constructor = Chat;
-// }
+// Inherit from Subprogram
+if (typeof extend === 'function') {
+    extend(Chat, Subprogram);
+} else {
+    // Fallback simple inheritance if extend() not present
+    Chat.prototype = Object.create(Subprogram.prototype);
+    Chat.prototype.constructor = Chat;
+}
 
 Chat.prototype.enter = function(done){
     this.done = done;
@@ -95,6 +96,25 @@ Chat.prototype.attachShellTimer = function(timer) {
     }
 };
 
+Chat.prototype.pauseForReason = function(reason) {
+    log("Pausing chat for reason: " + reason);
+    if(reason === 'screensaver_on' && this.__bg_frame && typeof this.__bg_frame.bottom === 'function'){
+        try { this.__bg_frame.top(); this.__bg_frame.cycle(); } catch(e){}
+    }
+};
+
+Chat.prototype.resumeForReason = function(reason){
+    log("Resuming chat for reason: " + reason);
+    if(reason === 'screensaver_off'){
+        // if(this.__bg_frame && typeof this.__bg_frame.top === 'function'){
+        //     try { this.__bg_frame.top(); } catch(e){}
+        // }
+        this.initFrames();
+        this.updateInputFrame();
+        this._needsRedraw = true;
+        this.draw();
+    }
+};
 Chat.prototype.detachShellTimer = function() {
     this._stopCrumbCycle();
     this.timer = null;
@@ -228,6 +248,10 @@ Chat.prototype.cleanup = function(){
         this.chatSpacerFrame.close();
         this.chatSpacerFrame = null;
     }
+    if (this.chatOutputFrame) {
+        this.chatOutputFrame.close();
+        this.chatOutputFrame = null;
+    }
     if (this.chatInputFrame) {
         this.chatInputFrame.close();
         this.chatInputFrame = null;
@@ -251,9 +275,32 @@ Chat.prototype.initFrames = function() {
 	var w = this.parentFrame.width;
 	var h = this.parentFrame.height;
 	// Chat output area (above input)
-    var outputH = h - 3;
+    var outputH = Math.max(1, h - 3);
+    if (!this.chatOutputFrame) {
+        this.chatOutputFrame = new Frame(1, 1, w, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+        this.chatOutputFrame.transparent = true;
+        this.chatOutputFrame.open();
+        this.setBackgroundFrame(this.chatOutputFrame || this.parentFrame);
+    } else {
+        var resized = false;
+        if (typeof this.chatOutputFrame.resize === 'function') {
+            try {
+                this.chatOutputFrame.resize(1, 1, w, outputH);
+                resized = true;
+            } catch(e){}
+        }
+        if (!resized && (this.chatOutputFrame.width !== w || this.chatOutputFrame.height !== outputH)) {
+            try { this.chatOutputFrame.close(); } catch(e){}
+            this.chatOutputFrame = new Frame(1, 1, w, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+            this.chatOutputFrame.transparent = true;
+            this.chatOutputFrame.open();
+            this.setBackgroundFrame(this.chatOutputFrame || this.parentFrame);
+        }
+        if (this.chatOutputFrame && this.chatOutputFrame.transparent !== true) this.chatOutputFrame.transparent = true;
+    }
+    var outputWidth = this.chatOutputFrame.width || w;
     var avatarWidth = this.avatarWidth || 10;
-    if ((avatarWidth * 2) >= (w - 4)) avatarWidth = Math.max(2, Math.floor(w / 4));
+    if ((avatarWidth * 2) >= (outputWidth - 4)) avatarWidth = Math.max(2, Math.floor(outputWidth / 4));
     if (avatarWidth < 2) avatarWidth = 2;
     this.avatarWidth = avatarWidth;
     var gapRows = outputH > 1 ? 1 : 0;
@@ -265,24 +312,29 @@ Chat.prototype.initFrames = function() {
         messageHeight = outputH;
     }
 
-    var messageAreaWidth = Math.max(2, w - (avatarWidth * 2));
+    var messageAreaWidth = Math.max(2, outputWidth - (avatarWidth * 2));
     var leftMsgWidth = Math.max(2, Math.floor(messageAreaWidth / 2));
     var rightMsgWidth = Math.max(2, messageAreaWidth - leftMsgWidth);
     var leftAvatarX = 1;
-    var rightAvatarX = w - avatarWidth + 1;
+    var rightAvatarX = outputWidth - avatarWidth + 1;
     var leftMsgX = leftAvatarX + avatarWidth;
     var rightMsgX = rightAvatarX - rightMsgWidth;
     // Column frames: avatar/message pairs on each side with optional spacer row
-    this.leftAvatarFrame = new Frame(leftAvatarX, 1, avatarWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-    this.leftMsgFrame = new Frame(leftMsgX, 1, leftMsgWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-    this.rightMsgFrame = new Frame(rightMsgX, 1, rightMsgWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-    this.rightAvatarFrame = new Frame(rightAvatarX, 1, avatarWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+    this.leftAvatarFrame = new Frame(leftAvatarX, 1, avatarWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+    this.leftAvatarFrame.transparent = true;
+    this.leftMsgFrame = new Frame(leftMsgX, 1, leftMsgWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+    this.leftMsgFrame.transparent = true;
+    this.rightMsgFrame = new Frame(rightMsgX, 1, rightMsgWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+    this.rightMsgFrame.transparent = true;
+    this.rightAvatarFrame = new Frame(rightAvatarX, 1, avatarWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+    this.rightAvatarFrame.transparent = true;
     this.leftAvatarFrame.open();
     this.leftMsgFrame.open();
     this.rightMsgFrame.open();
     this.rightAvatarFrame.open();
     if (gapRows > 0) {
-        this.chatSpacerFrame = new Frame(1, spacerY, w, gapRows, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
+        this.chatSpacerFrame = new Frame(1, spacerY, outputWidth, gapRows, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+        this.chatSpacerFrame.transparent = true;
         this.chatSpacerFrame.open();
         this.chatSpacerFrame.clear();
     } else {
@@ -712,8 +764,7 @@ Chat.prototype._renderGroupHeader = function(primary, secondary, row, parts, sid
     var timestamp = parts.timestamp || '';
     var tsColor = this._timestampColor || this.groupLineColor;
 
-    primary.gotoxy(1, row);
-    primary.clearline();
+    this._clearFrameLine(primary, row);
     primary.gotoxy(1, row);
 
     var segments = [];
@@ -758,8 +809,7 @@ Chat.prototype._renderGroupHeader = function(primary, secondary, row, parts, sid
     }
 
     if (!preserveSecondary && secondary) {
-        secondary.gotoxy(1, row);
-        secondary.clearline();
+        this._clearFrameLine(secondary, row);
     }
 };
 
@@ -775,8 +825,7 @@ Chat.prototype._writeLineToFrames = function(primary, secondary, row, text, isHe
     var width = primary.width;
     if (typeof isFirstLine === 'undefined') isFirstLine = true;
 
-    primary.gotoxy(1, row);
-    primary.clearline();
+    this._clearFrameLine(primary, row);
     primary.gotoxy(1, row);
 
     var indicatorAttr = this._messageIndicatorColor;
@@ -808,8 +857,19 @@ Chat.prototype._writeLineToFrames = function(primary, secondary, row, text, isHe
         primary.putmsg(' ' + displayText);
     }
 
-    secondary.gotoxy(1, row);
-    secondary.clearline();
+    this._clearFrameLine(secondary, row);
+};
+
+Chat.prototype._clearFrameLine = function(frame, row){
+    if(!frame || row < 1) return;
+    var width = frame.width || 0;
+    if(width <= 0) return;
+    var originalAttr = frame.attr;
+    var parentAttr = (frame.parent && typeof frame.parent.attr === 'number') ? frame.parent.attr : originalAttr;
+    frame.attr = parentAttr;
+    frame.gotoxy(1, row);
+    frame.putmsg(Array(width + 1).join(' '));
+    frame.attr = originalAttr;
 };
 
 Chat.prototype._refreshCrumbMessages = function() {

@@ -32,7 +32,6 @@ Users.prototype.updateAllUsers = function(){
     var users = this.getUsers();
     var online = this.getOnlineUsers();
     this.users = this._hydrateOnlineUsers(users, online);
-    log('Users: total='+this.users.length+' online='+JSON.stringify(this.users));
 }
 
 Users.prototype.getUsers = function(){
@@ -105,6 +104,8 @@ Users.prototype._ensureFrames = function(){
         var h = Math.max(1, this.parentFrame.height - 1);
         this.listFrame = new Frame(1,1,this.parentFrame.width,h,ICSH_ATTR('USERS_LIST'),this.parentFrame); this.listFrame.open();
         this.registerFrame(this.listFrame);
+        this.listFrame.bottom();
+        this.setBackgroundFrame(this.listFrame);
     }
     if(!this.statusFrame){
         this.statusFrame = new Frame(1,this.parentFrame.height,this.parentFrame.width,1,ICSH_ATTR('USERS_STATUS'),this.parentFrame); this.statusFrame.open();
@@ -424,7 +425,6 @@ Users.prototype._getAvatar = function(u){
     if(!u) return null;
     if(this._avatarCache[u.number]) return this._avatarCache[u.number];
     var data = this._fetchAvatarData(u.number, u.alias) || [];
-    log("Avatar data for user #"+u.number+" "+u.alias+": "+JSON.stringify(data));
     this._avatarCache[u.number] = data;
     return data;
 };
@@ -470,6 +470,7 @@ Users.prototype._blitAvatarToFrame = function(frame, binData, w, h, dstX, dstY){
             try{ frame.setData(dstX + x - 1, dstY + y - 1, ch, attr, false); }catch(se){}
         }
     }
+    frame.top();
 };
 
 // Export

@@ -801,12 +801,57 @@ FigletMessage.prototype._measureContent = function(){
 		if(ln.length > maxLen) maxLen = ln.length;
 	}
 	this.contentHeight = Math.max(1, lines.length);
-	var limit = this.f ? Math.max(1, this.f.width - 4) : 40;
+	var limit = this._maxInnerWidth();
 	this.contentWidth = Math.max(1, Math.min(limit, maxLen || 10));
 };
 FigletMessage.prototype._renderNew = function(preserve){
 	var message = this._pickMessage();
-	var fontName = this._pickFont();
+	var maxWidth = this._maxInnerWidth();
+	var maxHeight = this._maxInnerHeight();
+	var tried = {};
+	var attemptLimit = Math.max(1, Math.min((this.fontPool && this.fontPool.length) || 1, 8));
+	var bestLines = null;
+	var bestHeight = Infinity;
+	var attempts = 0;
+	while(attempts < attemptLimit){
+		var fontName = this._pickFont();
+		if(!fontName) fontName = this.tdf.DEFAULT_FONT || 'brndamgx';
+		if(tried[fontName]) continue;
+		tried[fontName] = true;
+		attempts++;
+		var fontLines = this._renderLinesForFont(message, fontName);
+		if(!fontLines || !fontLines.length) fontLines = [message];
+		var wrapped = this._wrapFigletLines(fontLines, maxWidth);
+		if(!wrapped.length) wrapped = [message];
+		var height = wrapped.length;
+		if(height <= maxHeight){
+			bestLines = wrapped;
+			bestHeight = height;
+			break;
+		}
+		if(height < bestHeight){
+			bestLines = wrapped;
+			bestHeight = height;
+		}
+	}
+	if(!bestLines || bestHeight > maxHeight){
+		bestLines = this._wrapPlainMessage(message, maxWidth, maxHeight);
+	}
+	if(!bestLines.length) bestLines = [message];
+	this.lines = bestLines;
+	this._selectColor();
+	this._measureContent();
+	this._createFrames(preserve === true);
+};
+FigletMessage.prototype._maxInnerWidth = function(){
+	if(!this.f) return 40;
+	return Math.max(1, this.f.width - 2);
+};
+FigletMessage.prototype._maxInnerHeight = function(){
+	if(!this.f) return 10;
+	return Math.max(1, this.f.height - 2);
+};
+FigletMessage.prototype._renderLinesForFont = function(message, fontName){
 	var fontObj = fontName;
 	try {
 		fontObj = this.tdf.loadfont(fontName);
@@ -814,24 +859,72 @@ FigletMessage.prototype._renderNew = function(preserve){
 		try { log(LOG_WARNING, 'figlet loadfont failed for '+fontName+': '+e); } catch(_){}
 		fontObj = fontName;
 	}
-	var output;
 	try {
-		this.tdf.opt.width = this.f.width;
-		output = this.tdf.output(message, fontObj);
+		this.tdf.opt.width = this._maxInnerWidth();
+		var output = this.tdf.output(message, fontObj);
+		var lines = this._sanitizeLines(output);
+		return lines.length ? lines : [message];
 	} catch(e){
 		try { log(LOG_WARNING, 'figlet render failed ('+fontName+'): '+e); } catch(_){}
-		this.lines = [message];
-		this._selectColor();
-		this._measureContent();
-		this._createFrames(preserve === true);
-		return;
+		return [message];
 	}
-	var lines = this._sanitizeLines(output);
-	if(!lines.length) lines = [message];
-	this.lines = lines;
-	this._selectColor();
-	this._measureContent();
-	this._createFrames(preserve === true);
+};
+FigletMessage.prototype._wrapFigletLines = function(lines, maxWidth){
+	if(!lines || !lines.length || maxWidth < 1) return [];
+	var cleaned = [];
+	var maxLen = 0;
+	for(var i=0;i<lines.length;i++){
+		var trimmed = lines[i].replace(/\s+$/,'');
+		cleaned.push(trimmed);
+		if(trimmed.length > maxLen) maxLen = trimmed.length;
+	}
+	if(maxLen <= maxWidth) return cleaned;
+	var chunks = [];
+	var height = cleaned.length;
+	for(var start=0; start<maxLen; start+=maxWidth){
+		for(var row=0; row<height; row++){
+			var segment = cleaned[row].substr(start, maxWidth);
+			chunks.push(segment.replace(/\s+$/,''));
+		}
+	}
+	while(chunks.length && chunks[chunks.length-1].trim()==='') chunks.pop();
+	return chunks;
+};
+FigletMessage.prototype._wrapPlainMessage = function(text, maxWidth, maxHeight){
+	var width = Math.max(1, maxWidth || 1);
+	var heightLimit = Math.max(1, maxHeight || 1);
+	var words = String(text || '').split(/\s+/);
+	var lines = [];
+	var line = '';
+	for(var i=0;i<words.length;i++){
+		var word = words[i];
+		if(!word) continue;
+		if(word.length >= width){
+			if(line){
+				lines.push(line);
+				if(lines.length >= heightLimit) return lines.slice(0, heightLimit);
+				line = '';
+			}
+			for(var start=0; start<word.length && lines.length < heightLimit; start+=width){
+				lines.push(word.substr(start, width));
+			}
+			if(lines.length >= heightLimit) return lines.slice(0, heightLimit);
+			continue;
+		}
+		var candidate = line ? (line + ' ' + word) : word;
+		if(candidate.length > width){
+			if(line){
+				lines.push(line);
+				if(lines.length >= heightLimit) return lines.slice(0, heightLimit);
+			}
+			line = word;
+		} else {
+			line = candidate;
+		}
+	}
+	if(line && lines.length < heightLimit) lines.push(line);
+	if(!lines.length) lines.push(String(text || '').substr(0, width));
+	return lines.slice(0, heightLimit);
 };
 FigletMessage.prototype._selectColor = function(){
 	if(!this.colorsEnabled || !this.colorPalette.length){

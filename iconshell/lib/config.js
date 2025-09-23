@@ -384,7 +384,7 @@ var _DYNAMIC_ICSH_CONFIG = buildDynamicConfig();
 
 // Global shell settings (e.g., inactivity -> matrix rain) loaded from guishell.ini if present.
 var ICSH_SETTINGS = (function(){
-	var out = { inactivityMinutes: 3 }; // default 3 minutes
+	var out = { inactivitySeconds: 180, inactivityMinutes: 3 }; // default 3 minutes
 	function _parseBool(val){
 		if(val === undefined || val === null) return undefined;
 		var s = String(val).trim().toLowerCase();
@@ -408,15 +408,29 @@ var ICSH_SETTINGS = (function(){
 		var iniRaw = readIniFile(system.mods_dir + 'guishell.ini');
 		if(iniRaw){
 			var ini = parseIni(iniRaw);
-			// Allow either [Shell] or [Idle] section, key: inactivity_minutes
-			var val = null;
-			if(ini.Shell && ini.Shell.inactivity_minutes !== undefined) val = ini.Shell.inactivity_minutes;
-			else if(ini.Idle && ini.Idle.inactivity_minutes !== undefined) val = ini.Idle.inactivity_minutes;
-			else if(ini.GuiShell && ini.GuiShell.inactivity_minutes !== undefined) val = ini.GuiShell.inactivity_minutes; // backwards compat / existing section
-			if(val !== null){
-				var mins = parseInt(val,10);
-				if(!isNaN(mins)) out.inactivityMinutes = mins; // can be -1 to disable
+			// Allow either [Shell]/[Idle]/[GuiShell] sections with inactivity_seconds or inactivity_minutes (legacy)
+			var secVal = null;
+			if(ini.Shell && ini.Shell.inactivity_seconds !== undefined) secVal = ini.Shell.inactivity_seconds;
+			else if(ini.Idle && ini.Idle.inactivity_seconds !== undefined) secVal = ini.Idle.inactivity_seconds;
+			else if(ini.GuiShell && ini.GuiShell.inactivity_seconds !== undefined) secVal = ini.GuiShell.inactivity_seconds;
+			if(secVal !== null){
+				var secs = parseInt(secVal, 10);
+				if(!isNaN(secs)){
+					out.inactivitySeconds = secs;
+				}
 			}
+			else {
+				var minVal = null;
+				if(ini.Shell && ini.Shell.inactivity_minutes !== undefined) minVal = ini.Shell.inactivity_minutes;
+				else if(ini.Idle && ini.Idle.inactivity_minutes !== undefined) minVal = ini.Idle.inactivity_minutes;
+				else if(ini.GuiShell && ini.GuiShell.inactivity_minutes !== undefined) minVal = ini.GuiShell.inactivity_minutes; // backwards compat / existing section
+				if(minVal !== null){
+					var mins = parseInt(minVal,10);
+					if(!isNaN(mins)) out.inactivitySeconds = mins < 0 ? -1 : mins * 60;
+				}
+			}
+			if(out.inactivitySeconds === -1) out.inactivityMinutes = -1;
+			else out.inactivityMinutes = Math.round(out.inactivitySeconds / 60);
 			if(ini.Screensaver){
 				var ss = ini.Screensaver;
 				var cfg = {};

@@ -99,9 +99,11 @@ function Mail(opts) {
 			self.draw();
 		};
 	}
+	this.unreadCount = 0;
+	this.totalMailCount = 0;
 	this.menuOptions = [
 		{ baseLabel: 'Exit', iconFile:'back', action: function(){ self.exit(); } },
-		{ baseLabel: 'Read Mail', iconFile:'messages', dynamic:true,  action: makeAction(function(){ bbs.read_mail(); }, 'Reading mail...') },
+		{ baseLabel: 'Inbox', iconFile:'messages', dynamic:true,  action: makeAction(function(){ bbs.read_mail(); }, 'Reading mail...') },
 		// Native interactive compose (custom pre-screen, no confirmation desired)
 		{ baseLabel: 'Compose Email', iconFile:'compose', confirm:false, action: function(){ self.composeInteractiveEmail(); } },
 		{ baseLabel: 'Scan For You', iconFile:'mailbox', action: makeAction(function(){ self._scanMessagesAddressedToUser(); }, 'Scanning for messages to you...') },
@@ -542,14 +544,76 @@ Mail.prototype.invokeConfirmed = function(){
 // Removed suspend/resume logic; using shell.runExternal wrapper
 
 Mail.prototype.renderOptionLabel = function(opt, idx){
-	var label = opt.baseLabel || opt.label || ('Option '+(idx+1));
-	if(opt.dynamic && /Read Mail/i.test(label)) label += ' ('+this.unreadCount+')';
-	return label;
+	var info = this._buildOptionLabelInfo(opt, idx);
+	if(opt){
+		opt._labelSegments = info.segments;
+	}
+	return info.text;
+};
+
+Mail.prototype._buildOptionLabelInfo = function(opt, idx){
+	opt = opt || {};
+	var baseLabel = opt.baseLabel || opt.label || ('Option '+(idx+1));
+	var unread = Math.max(0, parseInt(this.unreadCount, 10) || 0);
+	var total = Math.max(0, parseInt(this.totalMailCount, 10) || 0);
+	if(total < unread) total = unread;
+	var segments = null;
+	var text = baseLabel;
+	if(opt.dynamic && /Inbox/i.test(baseLabel)){
+		segments = [];
+		text = '';
+		if(unread > 0){
+			var unreadText = String(unread);
+			segments.push({ text: unreadText, color: typeof LIGHTGREEN !== 'undefined' ? LIGHTGREEN : GREEN });
+			text += unreadText;
+			segments.push({ text: ' ', color: null });
+			text += ' ';
+		}
+		segments.push({ text: baseLabel, color: null });
+		text += baseLabel;
+		segments.push({ text: ' ', color: null });
+		text += ' ';
+		var totalText = String(total);
+		segments.push({ text: totalText, color: typeof YELLOW !== 'undefined' ? YELLOW : WHITE });
+		text += totalText;
+	}
+	return { text: text, segments: segments };
 };
 
 Mail.prototype.updateUnreadCount = function(){
-	try { this.unreadCount = (typeof bbs.mail_waiting !== 'undefined') ? bbs.mail_waiting : (user && user.mail_waiting) || 0; }
-	catch(e){ this.unreadCount=0; }
+	var unread = 0;
+	var read = 0;
+	var total = 0;
+	var stats = (typeof user !== 'undefined' && user && user.stats) ? user.stats : null;
+	if(stats){
+		if(typeof stats.unread_mail_waiting === 'number') unread = stats.unread_mail_waiting;
+		if(typeof stats.read_mail_waiting === 'number') read = stats.read_mail_waiting;
+		if(typeof stats.mail_waiting === 'number') total = stats.mail_waiting;
+	}
+	if(typeof bbs !== 'undefined'){
+		try {
+			if(!total){
+				if(typeof bbs.mail_waiting === 'number') total = bbs.mail_waiting;
+				else if(typeof bbs.mail_waiting === 'function') total = bbs.mail_waiting();
+			}
+			if(!unread){
+				if(typeof bbs.unread_mail_waiting === 'number') unread = bbs.unread_mail_waiting;
+				else if(typeof bbs.unread_mail_waiting === 'function') unread = bbs.unread_mail_waiting();
+			}
+			if(!read){
+				if(typeof bbs.read_mail_waiting === 'number') read = bbs.read_mail_waiting;
+				else if(typeof bbs.read_mail_waiting === 'function') read = bbs.read_mail_waiting();
+			}
+		} catch(e){}
+	}
+	unread = Math.max(0, parseInt(unread, 10) || 0);
+	read = Math.max(0, parseInt(read, 10) || 0);
+	total = Math.max(0, parseInt(total, 10) || 0);
+	if(!total) total = unread + read;
+	if(!unread && total && read) unread = Math.max(0, total - read);
+	if(total < unread) total = unread;
+	this.unreadCount = unread;
+	this.totalMailCount = total;
 };
 
 
@@ -575,8 +639,10 @@ Mail.prototype.drawIconGrid = function(o){
 			var y = (row * cellH) + 1; // leave header row
 			if(y + ICON_H + labelH > o.height) break;
 			var opt = this.menuOptions[i];
+			var labelText = this.renderOptionLabel(opt,i);
+			var segments = opt && opt._labelSegments ? opt._labelSegments.slice() : null;
 			// Provide a label property for Icon class (doesn't mutate baseLabel permanently)
-			var item = { label: this.renderOptionLabel(opt,i), iconFile: opt.iconFile, iconBg: opt.iconBg, iconFg: opt.iconFg };
+			var item = { label: labelText, iconFile: opt.iconFile, iconBg: opt.iconBg, iconFg: opt.iconFg, _labelSegments: segments };
 			var iconFrame = new Frame(o.x + x -1, o.y + y -1, ICON_W, ICON_H, BG_BLACK|LIGHTGRAY, o.parent);
 			var labelFrame = new Frame(o.x + x -1, o.y + y -1 + ICON_H, ICON_W, labelH, BG_BLACK|LIGHTGRAY, o.parent);
 			var iconObj = new Icon(iconFrame, labelFrame, item);
@@ -589,19 +655,71 @@ Mail.prototype.drawIconGrid = function(o){
 	for(var j=0; j<this.iconCells.length; j++){
 		var cell = this.iconCells[j];
 		var opt = this.menuOptions[j];
-		cell.item.label = this.renderOptionLabel(opt,j);
+		var info = this._buildOptionLabelInfo(opt,j);
+		cell.item.label = info.text;
+		cell.item._labelSegments = info.segments ? info.segments.slice() : null;
 		cell.iconObj.render(); // re-render to refresh label (small overhead acceptable here)
-		// highlight selection on label frame
 		try {
-			cell.label.clear(j===this.selectedIndex ? (BG_BLUE|WHITE) : (BG_BLACK|LIGHTGRAY));
-			cell.label.home();
-			var name = cell.item.label || '';
-			var start = Math.max(0, Math.floor((cell.icon.width - name.length) / 2));
-			var pad = repeatChar(' ', start);
-			cell.label.putmsg(pad + name.substr(0, cell.icon.width));
-		}catch(e){}
+			this._drawMailLabel(cell.label, cell.item, j===this.selectedIndex);
+		} catch(e){}
 	}
 	return { heightUsed: (Math.ceil(this.iconCells.length / cols) * cellH) + 3 };
+};
+
+Mail.prototype._drawMailLabel = function(frame, item, isSelected){
+	if(!frame || !item) return;
+	var baseAttr = isSelected ? (BG_BLUE|WHITE) : (BG_BLACK|LIGHTGRAY);
+	try { frame.clear(baseAttr); frame.home(); } catch(e){}
+	var width = frame.width || 0;
+	if(width <= 0) return;
+	var segments = item._labelSegments && item._labelSegments.length ? item._labelSegments : null;
+	var text = (item.label || '');
+	function repeatSpaces(count){ return (count>0) ? new Array(count+1).join(' ') : ''; }
+	if(!segments){
+		if(text.length > width) text = text.substr(0, width);
+		var left = Math.max(0, Math.floor((width - text.length) / 2));
+		var padLeft = repeatSpaces(left);
+		var written = 0;
+		if(padLeft){ frame.attr = baseAttr; frame.putmsg(padLeft); written += padLeft.length; }
+		if(text){ frame.attr = baseAttr; frame.putmsg(text); written += text.length; }
+		if(written < width){ frame.attr = baseAttr; frame.putmsg(repeatSpaces(width - written)); }
+		return;
+	}
+	var truncated = [];
+	var visible = 0;
+	for(var s=0; s<segments.length; s++){
+		var seg = segments[s];
+		var segText = seg && seg.text ? String(seg.text) : '';
+		if(!segText.length && segText !== '0') continue;
+		var remaining = width - visible;
+		if(remaining <= 0) break;
+		if(segText.length > remaining) segText = segText.substr(0, remaining);
+		truncated.push({ text: segText, color: seg ? seg.color : null });
+		visible += segText.length;
+	}
+	if(!truncated.length){
+		frame.attr = baseAttr;
+		frame.putmsg(repeatSpaces(width));
+		return;
+	}
+	var leftPad = Math.max(0, Math.floor((width - visible) / 2));
+	var writtenTotal = 0;
+	var bg = baseAttr & 0xF0;
+	var pad = repeatSpaces(Math.min(leftPad, width));
+	if(pad){ frame.attr = baseAttr; frame.putmsg(pad); writtenTotal += pad.length; }
+	for(var t=0; t<truncated.length && writtenTotal < width; t++){
+		var segment = truncated[t];
+		var segText2 = segment.text;
+		if(!segText2.length && segText2 !== '0') continue;
+		var attr = (segment.color !== null && typeof segment.color === 'number') ? (bg | segment.color) : baseAttr;
+		frame.attr = attr;
+		frame.putmsg(segText2);
+		writtenTotal += segText2.length;
+	}
+	if(writtenTotal < width){
+		frame.attr = baseAttr;
+		frame.putmsg(repeatSpaces(width - writtenTotal));
+	}
 };
 
 Mail.prototype._addMouseHotspots = function(){

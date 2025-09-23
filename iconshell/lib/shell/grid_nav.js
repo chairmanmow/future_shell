@@ -202,9 +202,10 @@ IconShell.prototype.drawFolder = function() {
         });
     }
     this.assignViewHotkeys(items);
-    var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 2;
+    var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 1;
+    var topMargin = 1;
     var cols = Math.max(1, Math.floor(this.view.width / cellW));
-    var rows = Math.max(1, Math.floor(this.view.height / cellH));
+    var rows = Math.max(1, Math.floor(Math.max(0, this.view.height - topMargin) / cellH));
     var maxIcons = cols * rows;
     this._clampSelection(items);
     this._adjustScroll(items, cols, maxIcons);
@@ -471,17 +472,28 @@ IconShell.prototype._calculateGridDimensions = function(parentFrame) {
     var iconH = ICSH_CONSTANTS.ICON_H;
     var labelH = 1;
     var cellW = iconW + 2;
-    var cellH = iconH + labelH + 2;
+    var cellH = iconH + labelH + 1; // single-row vertical gap between icon rows
+    var topMargin = 1;
+    var usableHeight = Math.max(0, parentFrame.height - topMargin);
     var cols = Math.max(1, Math.floor(parentFrame.width / cellW));
-    var maxRows = Math.max(1, Math.floor(parentFrame.height / cellH));
-    return { iconW: iconW, iconH: iconH, labelH: labelH, cellW: cellW, cellH: cellH, cols: cols, maxRows: maxRows };
+    var maxRows = Math.max(1, Math.floor(usableHeight / cellH));
+    return {
+        iconW: iconW,
+        iconH: iconH,
+        labelH: labelH,
+        cellW: cellW,
+        cellH: cellH,
+        cols: cols,
+        maxRows: maxRows,
+        topMargin: topMargin
+    };
 };
 
 IconShell.prototype._createIconCell = function(i, dims, items, parentFrame, Icon) {
     var col = i % dims.cols;
     var row = Math.floor(i / dims.cols);
     var x = (col * dims.cellW) + 2;
-    var y = (row * dims.cellH) + 1;
+    var y = (row * dims.cellH) + 1 + (dims.topMargin || 0);
     // If this is a placeholder (padding cell), don't create visible frames.
     // Preserve a cell object so selection math & hotspots (which skip placeholders) still work.
     if (items[i] && items[i].isPlaceholder) {

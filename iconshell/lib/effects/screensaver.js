@@ -236,7 +236,7 @@ ShellScreenSaver.prototype._startAnimation = function(name, force){
     if(!force && this.current && this.current.name === name) return true;
     this._stopCurrent();
     var frame = this.getFrame ? this.getFrame() : null;
-    if(!frame){
+    if(!frame || (typeof frame.is_open !== 'undefined' && !frame.is_open)){
         this.current = null;
         return false;
     }
@@ -277,7 +277,9 @@ ShellScreenSaver.prototype._startAnimation = function(name, force){
             return false;
         }
     }
-    if(!success){
+    if(success){
+        this.current.frame = frame;
+    } else {
         def.failed = true;
         this.current = null;
         try { log(LOG_WARNING, 'screensaver animation '+name+' failed to initialise'); } catch(_){ }
@@ -320,8 +322,35 @@ ShellScreenSaver.prototype._shouldSwitch = function(){
     return (nowMs() - this._lastSwitchMs) >= this.switchIntervalMs;
 };
 
+ShellScreenSaver.prototype._frameIsValid = function(frame){
+    if(!frame) return false;
+    if(typeof frame.is_open !== 'undefined' && !frame.is_open) return false;
+    return true;
+};
+
+ShellScreenSaver.prototype._ensureActiveFrame = function(){
+    if(!this.current) return true;
+    var resolved = this.getFrame ? this.getFrame() : null;
+    if(!this._frameIsValid(resolved)){
+        this._stopCurrent();
+        return false;
+    }
+    var currentFrame = this.current.frame;
+    if(currentFrame === resolved && this._frameIsValid(currentFrame)) return true;
+    var name = this.current ? this.current.name : null;
+    if(!name){
+        this._stopCurrent();
+        return false;
+    }
+    this._startAnimation(name, true);
+    return !!this.current;
+};
+
 ShellScreenSaver.prototype._tick = function(){
     if(!this.active){
+        return;
+    }
+    if(this.current && !this._ensureActiveFrame()){
         return;
     }
     if(!this.current){
