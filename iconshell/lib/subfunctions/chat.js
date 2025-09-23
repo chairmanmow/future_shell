@@ -864,12 +864,11 @@ Chat.prototype._clearFrameLine = function(frame, row){
     if(!frame || row < 1) return;
     var width = frame.width || 0;
     if(width <= 0) return;
-    var originalAttr = frame.attr;
-    var parentAttr = (frame.parent && typeof frame.parent.attr === 'number') ? frame.parent.attr : originalAttr;
-    frame.attr = parentAttr;
-    frame.gotoxy(1, row);
-    frame.putmsg(Array(width + 1).join(' '));
-    frame.attr = originalAttr;
+    var y = row - 1;
+    for(var x = 0; x < width; x++){
+        var refresh = (x === width - 1);
+        try { frame.setData(x, y, undefined, 0, refresh); } catch(e){}
+    }
 };
 
 Chat.prototype._refreshCrumbMessages = function() {
