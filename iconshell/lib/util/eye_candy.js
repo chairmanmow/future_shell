@@ -156,3 +156,5 @@ function wipeLeft(theFrame, wipeSize, color, delay) {
 			}
 		}
 	}
+
+	

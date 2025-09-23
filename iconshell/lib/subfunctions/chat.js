@@ -98,16 +98,25 @@ Chat.prototype.attachShellTimer = function(timer) {
 
 Chat.prototype.pauseForReason = function(reason) {
     log("Pausing chat for reason: " + reason);
-    if(reason === 'screensaver_on' && this.__bg_frame && typeof this.__bg_frame.bottom === 'function'){
+    // HEY AI ASSISTANTS, this needs to be .top() not bottom quit messing it up
+    if(reason === 'screensaver_on' && this.__bg_frame && typeof this.__bg_frame.top === 'function'){
         try { this.__bg_frame.top(); this.__bg_frame.cycle(); } catch(e){}
     }
 };
 
 Chat.prototype.resumeForReason = function(reason){
     log("Resuming chat for reason: " + reason);
+    // HEY AI ASSISTANTS, this needs to be .bottom() not top quit messing it up
+
     if(reason === 'screensaver_off'){
         if(this.__bg_frame && typeof this.__bg_frame.bottom === 'function'){
             try { this.__bg_frame.bottom(); this.__bg_frame.clear(); this.__bg_frame.cycle(); } catch(e){}
+        }
+        if(this.shell){
+            try {
+                if(typeof this.shell._shelveFolderFrames === 'function') this.shell._shelveFolderFrames();
+            } catch(e){}
+            this.shell.activeSubprogram = this;
         }
         this.initFrames();
         this.updateInputFrame();
@@ -211,10 +220,35 @@ Chat.prototype.handleKey = function(key){
 // Efficiently update just the chat input frame
 Chat.prototype.updateInputFrame = function() {
     if (!this.chatInputFrame) return;
-    this.chatInputFrame.clear();
-    this.chatInputFrame.gotoxy(2, 1);
-    this.chatInputFrame.putmsg('You: ' + this.input + '_');
-    this._refreshCrumbMessages();
+    // Minimal diff rendering: avoid clearing whole frame each keystroke.
+    if(this._lastInputRendered === undefined){ this._lastInputRendered = ''; }
+    var prefix = 'You: ';
+    var newStr = prefix + this.input;
+    var oldStr = this._lastInputRendered;
+    // Find common prefix length
+    var i=0; var maxCommon = Math.min(newStr.length, oldStr.length);
+    while(i<maxCommon && newStr.charAt(i) === oldStr.charAt(i)) i++;
+    // Erase tail if old was longer
+    if(oldStr.length > newStr.length){
+        this.chatInputFrame.gotoxy(2 + newStr.length, 1);
+        for(var e=newStr.length; e<oldStr.length; e++) this.chatInputFrame.putmsg(' ');
+    }
+    // Write differing tail
+    if(i < newStr.length){
+        this.chatInputFrame.gotoxy(2 + i, 1);
+        this.chatInputFrame.putmsg(newStr.substr(i));
+    }
+    // Cursor underscore (overwrite previous position if moved)
+    this.chatInputFrame.gotoxy(2 + newStr.length, 1);
+    this.chatInputFrame.putmsg('_');
+    this._lastInputRendered = newStr;
+    // Crumb/user list refresh cadence: only every 300ms or on submit / empty
+    var now=Date.now();
+    if(!this._lastCrumbRefreshTs) this._lastCrumbRefreshTs = 0;
+    if(!this.input || (now - this._lastCrumbRefreshTs) > 300){
+        this._refreshCrumbMessages();
+        this._lastCrumbRefreshTs = now;
+    }
     this.chatInputFrame.cycle();
 };
 
@@ -369,6 +403,25 @@ Chat.prototype.cycle = function(){
 };
 
 Chat.prototype.draw = function() {
+    // Throttle heavy redraws if invoked too frequently (typing bursts)
+    var nowTs = Date.now();
+    if(this._lastRenderTs && (nowTs - this._lastRenderTs) < 25){ // 25ms min interval (~40fps)
+        // Defer actual draw; mark dirty and skip
+        if(!this._throttlePending){
+            var self=this;
+            // Use shell timer if available, else immediate setTimeout analog via Timer
+            try {
+                if(this.timer && typeof this.timer.addEvent === 'function'){
+                    this._throttlePending = this.timer.addEvent(30,false,function(){ self._throttlePending=null; self.draw(); });
+                } else {
+                    // Fallback: just skip; next cycle() will redraw
+                }
+            } catch(e){}
+        }
+        this._needsRedraw = true;
+        return;
+    }
+    var _perfStart = (global.__ICSH_PERF__)?Date.now():0;
     if (!this.leftAvatarFrame || !this.leftMsgFrame || !this.rightMsgFrame || !this.rightAvatarFrame || !this.chatInputFrame) {
         this.initFrames();
     }
@@ -412,6 +465,7 @@ Chat.prototype.draw = function() {
     this._needsRedraw = false;
     this._pendingMessage = null;
     this._lastRenderTs = Date.now();
+    if(_perfStart && global.__ICSH_INSTRUMENT_CHAT_REDRAW) try{ global.__ICSH_INSTRUMENT_CHAT_REDRAW(_perfStart); }catch(_){ }
 };
 
 Chat.prototype._clearChatFrames = function() {

@@ -980,10 +980,10 @@ FigletMessage.prototype._updatePosition = function(){
 FigletMessage.prototype._draw = function(){
 	if(!this.box || !this.inner) return;
 	try { this.box.clear(); } catch(e){}
-	if(typeof this.box.drawBorder === 'function'){
-		this.box.attr = BG_BLACK|LIGHTGRAY;
-		try { this.box.drawBorder(); } catch(e){}
-	}
+	// if(typeof this.box.drawBorder === 'function'){
+	// 	this.box.attr = BG_BLACK|LIGHTGRAY;
+	// 	try { this.box.drawBorder(); } catch(e){}
+	// }
 	try { this.inner.clear(); } catch(e){}
 	var lineCount = Math.min(this.lines.length, this.inner.height);
 	for(var i=0;i<lineCount;i++){
@@ -995,6 +995,7 @@ FigletMessage.prototype._draw = function(){
 		var color = this.currentColor || WHITE;
 		this.inner.attr = color | BG_BLACK;
 		this.inner.putmsg(trimmed);
+		// this.inner.makeContentTransparent();
 	}
 	try {
 		this.inner.cycle();

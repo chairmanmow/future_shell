@@ -7,6 +7,7 @@ var DEFAULT_TOAST_TIMEOUT = 30000; // 30 seconds
 function Toast(options) {
     if (!options || typeof options !== 'object') options = {};
     this._avatarData = null;
+    this.title = options.title || false;
     this._avatarLib = load({}, 'avatar_lib.js');
     log('Creating Toast ' + JSON.stringify(options.avatar) + !!this._avatarLib);
     if(options.avatar && this._avatarLib){
@@ -23,7 +24,6 @@ function Toast(options) {
     var message = options.message || "";
     var timeout = (typeof options.timeout === 'number') ? options.timeout : DEFAULT_TOAST_TIMEOUT;
     var onDone = options.onDone;
-
     var width = Math.min(MAX_TOAST_WIDTH, Math.max(8, message.length + 4));
     if(this.avatarData){
         width = width + 6; // avatar width
@@ -62,13 +62,17 @@ function Toast(options) {
     this.parentFrame = options.parentFrame || undefined;
     this.toastFrame = new Frame(x, y, width, height, ICSH_VALS.TOAST_FRAME.BG | ICSH_VALS.TOAST_FRAME.FG, this.parentFrame);
     var msgX = this.avatarData ? 6 : 0;
-    this.msgFrame = new Frame((2* msgX) + this.toastFrame.x, this.toastFrame.y, this.toastFrame.width - msgX , this.toastFrame.height, ICSH_ATTR('TOAST_MSG'), this.toastFrame);
+    this.msgContainer = new Frame((2* msgX) + this.toastFrame.x, this.toastFrame.y, this.toastFrame.width - msgX , this.toastFrame.height, ICSH_ATTR('TOAST_MSG'), this.toastFrame);
+    this.msgFrame = new Frame(this.msgContainer.x + 1, this.msgContainer.y + 1, this.msgContainer.width - 2 , this.msgContainer.height -2, ICSH_ATTR('TOAST_MSG'), this.msgContainer);
     this.toastFrame.transparent = true;
+    this.msgContainer.drawBorder(BG_BLUE,!!this.title ? {x:1, y:1,attr:WHITE|BG_GREEN, text:this.title} : null);
+    this.msgFrame.centralize(this.msgContainer)
     if(this.avatarData){
         this.avatarFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 10, Math.min(6, this.toastFrame.height), ICSH_ATTR('TOAST_AVATAR'), this.toastFrame);
         this.insertAvatarData();
     }
-    this.msgFrame.putmsg(message);
+    this.msgFrame.centralize(this.msgContainer);
+    this.msgFrame.centerWrap(message);
     this.toastFrame.draw();
     this.toastFrame.open();
 

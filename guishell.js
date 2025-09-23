@@ -8,6 +8,8 @@ load("sbbsdefs.js"); // LOG_* and K_* constants
 // Load shell modules (define global IconShell() and BasicShell())
 load("iconshell/iconshell.js");
 load("iconshell/basicshell.js");
+// Optional performance instrumentation (safe if missing)
+try { load('iconshell/lib/perf.js'); } catch(e) {}
 
 // Load guishell.ini (INI-style configuration)
 var guishellIni;

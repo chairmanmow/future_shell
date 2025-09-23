@@ -80,6 +80,7 @@ FileArea.prototype.ensureFrames = function(){
         var h = this.parentFrame.height-2;
         if(h<1) h=1;
         this.list = new Frame(this.parentFrame.x, this.parentFrame.y+1,this.parentFrame.width,h,ICSH_ATTR('FILE_LIST'),this.parentFrame); this.list.open();
+        this.setBackgroundFrame(this.list);
     }
 };
 

@@ -24,6 +24,8 @@ Icon.prototype.render = function() {
         this._renderFallbackBg(hasBg, hasFg);
     }
     this._renderLabel(iconW);
+    this.iconFrame.makeContentTransparent();
+    this.iconFrame.transparent = true;
     this.iconFrame.cycle();
 };
 

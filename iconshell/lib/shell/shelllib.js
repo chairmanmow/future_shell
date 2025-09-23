@@ -1,6 +1,8 @@
 
 load("event-timer.js");
 try { load('iconshell/lib/effects/screensaver.js'); } catch(e) {}
+// Performance instrumentation (optional)
+try { load('iconshell/lib/perf.js'); } catch(e) {}
 
 // IconShell prototype extensions for member logic
 // Run time logic
@@ -55,7 +57,7 @@ IconShell.prototype.init = function() {
     // Screensaver hotspot state
     this._screensaverDismissCmd = this._reserveHotspotCmd('\u0007');
     this._screensaverHotspotActive = false;
-    this._mailHotspotCmd = this._reserveHotspotCmd('z');
+    this._mailHotspotCmd = this._reserveHotspotCmd('\u0006');
     // === End instance state ===
     // Inactivity tracking for background effects
     this._lastActivityTs = Date.now();
@@ -121,6 +123,20 @@ IconShell.prototype.init = function() {
 IconShell.prototype.main = function() {
     try {
         while (!js.terminated) {
+            // ---- Early key capture (do not process yet) ----
+            var earlyKeys = [];
+            var k_early;
+            while((k_early = console.inkey(K_NOECHO|K_NOSPIN, 0))){
+                earlyKeys.push(k_early);
+                if(earlyKeys.length > 64) break; // safety cap
+            }
+            if(!earlyKeys.length){
+                // Use a shorter wait (8ms) to reduce latency in active subprograms; fall back to 20ms when idle
+                var waitMs = (this.activeSubprogram && this.activeSubprogram.running) ? 8 : 20;
+                var oneEarly = console.inkey(K_NOECHO|K_NOSPIN, waitMs);
+                if(oneEarly) earlyKeys.push(oneEarly);
+            }
+            if(global.__ICSH_PERF__) try{ global.__ICSH_PERF__.tick(); }catch(_){ }
             this.recreateFramesIfNeeded();
             // Always cycle chat backend for notifications
             if (this.jsonchat) {
@@ -132,7 +148,8 @@ IconShell.prototype.main = function() {
             } else {
                 this._checkConsoleResize();
             }
-            if(this._screenSaver) this._screenSaver.pump();
+            // Only pump screensaver while active (previously pumped every loop even when idle)
+            if(this._screenSaver && this._screenSaver.isActive()) this._screenSaver.pump();
             if (this.activeSubprogram && typeof this.activeSubprogram.cycle === 'function') {
                 this.activeSubprogram.cycle();
             }
@@ -141,33 +158,50 @@ IconShell.prototype.main = function() {
                 var p = this._pendingSubLaunch; delete this._pendingSubLaunch;
                 this.launchSubprogram(p.name, p.instance);
             }
-            var key = console.inkey(K_NOECHO|K_NOSPIN, 100);
-            // Normalize CRLF: if CR received, peek for immediate LF next loop; treat as single ENTER
-            if (key === '\r') {
-                this._lastWasCR = true;
-            } else if (this._lastWasCR && key === '\n') {
-                // Swallow the LF partner
-                this._lastWasCR = false;
-                dbug('Swallowed LF following CR', 'keylog');
-                continue;
-            } else {
-                this._lastWasCR = false;
-            }
-            if (typeof key === 'string' && key.length > 0) {
-                dbug("Key:" + JSON.stringify(key), "keylog");
-                // User activity resets inactivity timer and stops rain if active
-                this._lastActivityTs = Date.now();
-
-                if(this._stopScreenSaver()){
-                    if(this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function'){
-                        this.activeSubprogram.resumeForReason('screensaver_off');
-                    }
-                    if(this.activeSubprogram && typeof this.activeSubprogram.draw==='function') this.activeSubprogram.draw();
-                    else if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
-                    key = '';
+            // Process previously captured keys preserving original processing order
+            var keys = earlyKeys;
+            if(keys.length && global.__ICSH_PERF__){
+                var perf = global.__ICSH_PERF__;
+                var nowTs = Date.now();
+                if(perf.lastKeyTs){
+                    var gap = nowTs - perf.lastKeyTs;
+                    if(gap > perf.maxKeyGap) perf.maxKeyGap = gap;
                 }
+                perf.lastKeyTs = nowTs;
+                perf.keyEvents += keys.length;
+                if(keys.length > 50) perf.keyBurstDrops++; // heuristic: very large burst likely indicates backlog risk
             }
-            if(key) this.processKeyboardInput(key);
+            while(keys.length){
+                var key = keys.shift();
+                // Normalize CR/LF into single ENTER event
+                if (key === '\r') {
+                    this._lastWasCR = true;
+                } else if (this._lastWasCR && key === '\n') {
+                    this._lastWasCR = false; // swallow LF partner
+                    dbug('Swallowed LF following CR', 'keylog');
+                    continue;
+                } else {
+                    this._lastWasCR = false;
+                }
+                if (typeof key === 'string' && key.length > 0) {
+                    if(key === CTRL_D && global.__ICSH_PERF__){
+                        global.__ICSH_PERF__.dump();
+                        continue;
+                    }
+                    dbug("Key:" + JSON.stringify(key), "keylog");
+                    // Activity resets inactivity timer & stops saver
+                    this._lastActivityTs = Date.now();
+                    if(this._stopScreenSaver()){
+                        if(this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function'){
+                            this.activeSubprogram.resumeForReason('screensaver_off');
+                        }
+                        if(this.activeSubprogram && typeof this.activeSubprogram.draw==='function') this.activeSubprogram.draw();
+                        else if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+                        key = '';
+                    }
+                }
+                if(key) this.processKeyboardInput(key);
+            }
             // Inactivity trigger (disabled if inactivityThresholdMs === -1)
             if(this._screenSaver && !this._screenSaver.isActive() && this.inactivityThresholdMs !== -1){
                 if(Date.now() - this._lastActivityTs > this.inactivityThresholdMs){
@@ -247,7 +281,8 @@ IconShell.prototype._processChatUpdate = function(packet) {
             if (packet.data && packet.data.str) {
                 this.showToast({
                     message: packet.data.nick.name + ': ' + packet.data.str,
-                    avatar:{username:packet.data.nick.name, netaddr:packet.data.nick.host}
+                    avatar:{username:packet.data.nick.name, netaddr:packet.data.nick.host},
+                    title: packet.data.nick.name
                 });
             }
             }
@@ -260,13 +295,15 @@ IconShell.prototype._processChatUpdate = function(packet) {
     if (packet && packet.oper && packet.oper.toUpperCase() === "SUBSCRIBE") {
         this.showToast({
                 message: packet.data.nick + ' from ' + packet.data.system + " is here.",
-                avatar:{username:packet.data.nick, netaddr:packet.data.system}
+                avatar:{username:packet.data.nick, netaddr:packet.data.system},
+                title: packet.data.nick
         });
     }
         if (packet && packet.oper && packet.oper.toUpperCase() === "UNSUBSCRIBE") {
         this.showToast({
             message: packet.data.nick + ' from ' + packet.data.system + " has left.",
-            avatar:{username:packet.data.nick, netaddr:packet.data.system}
+            avatar:{username:packet.data.nick, netaddr:packet.data.system},
+            title: packet.data.nick
         });
     }
 
