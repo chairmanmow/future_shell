@@ -106,9 +106,9 @@ Chat.prototype.pauseForReason = function(reason) {
 Chat.prototype.resumeForReason = function(reason){
     log("Resuming chat for reason: " + reason);
     if(reason === 'screensaver_off'){
-        // if(this.__bg_frame && typeof this.__bg_frame.top === 'function'){
-        //     try { this.__bg_frame.top(); } catch(e){}
-        // }
+        if(this.__bg_frame && typeof this.__bg_frame.bottom === 'function'){
+            try { this.__bg_frame.bottom(); this.__bg_frame.clear(); this.__bg_frame.cycle(); } catch(e){}
+        }
         this.initFrames();
         this.updateInputFrame();
         this._needsRedraw = true;
@@ -765,47 +765,25 @@ Chat.prototype._renderGroupHeader = function(primary, secondary, row, parts, sid
     var tsColor = this._timestampColor || this.groupLineColor;
 
     this._clearFrameLine(primary, row);
-    primary.gotoxy(1, row);
-
-    var segments = [];
-    if (side === 'left') {
-        if (name) segments.push({ text: name, attr: this.groupLineColor });
-        if (timestamp && name) segments.push({ text: ' ', attr: undefined });
-        if (timestamp) segments.push({ text: timestamp, attr: tsColor });
-    } else {
-        if (timestamp) segments.push({ text: timestamp, attr: tsColor });
-        if (timestamp && name) segments.push({ text: ' ', attr: undefined });
-        if (name) segments.push({ text: name, attr: this.groupLineColor });
-    }
-    if (segments.length === 0) return;
 
     var totalLen = 0;
-    for (var i = 0; i < segments.length; i++) {
-        totalLen += segments[i].text.length;
-    }
+    if (name) totalLen += name.length;
+    if (timestamp) totalLen += timestamp.length;
+    if (timestamp && name) totalLen += 1;
 
-    var remaining = width;
-    if (side === 'right') {
-        var pad = Math.max(0, width - totalLen);
-        if (pad > 0) {
-            primary.putmsg(Array(pad + 1).join(' '));
-            remaining -= pad;
-        }
-    }
+    var currentCol = 1;
+    if (side === 'right') currentCol = Math.max(1, width - totalLen + 1);
 
-    for (var s = 0; s < segments.length && remaining > 0; s++) {
-        var segText = segments[s].text;
-        if (segText.length > remaining) {
-            if (side === 'right') {
-                segText = segText.substr(segText.length - remaining);
-            } else {
-                segText = segText.substr(0, remaining);
-            }
+    if (side === 'left') {
+        if (name) currentCol = this._writeChars(primary, row, currentCol, name, this.groupLineColor);
+        if (timestamp) {
+            currentCol++;
+            if (currentCol <= width) this._writeChars(primary, row, currentCol, timestamp, tsColor);
         }
-        if (segText.length > 0) {
-            primary.putmsg(segText, segments[s].attr);
-            remaining -= segText.length;
-        }
+    } else {
+        if (timestamp) currentCol = this._writeChars(primary, row, currentCol, timestamp, tsColor);
+        if (timestamp && name) currentCol++;
+        if (name && currentCol <= width) this._writeChars(primary, row, currentCol, name, this.groupLineColor);
     }
 
     if (!preserveSecondary && secondary) {
@@ -825,39 +803,48 @@ Chat.prototype._writeLineToFrames = function(primary, secondary, row, text, isHe
     var width = primary.width;
     if (typeof isFirstLine === 'undefined') isFirstLine = true;
 
-    this._clearFrameLine(primary, row);
-    primary.gotoxy(1, row);
-
     var indicatorAttr = this._messageIndicatorColor;
     var wrapAttr = this._wrapIndicatorColor || indicatorAttr;
+    this._clearFrameLine(primary, row);
     if (side === 'right') {
         var trimmed = displayText;
         var maxContent = Math.max(0, width - 2);
         if (trimmed.length > maxContent) trimmed = trimmed.substr(trimmed.length - maxContent);
-        var totalLen = trimmed.length + 2;
-        var pad = Math.max(0, width - totalLen);
-        if (pad > 0) primary.putmsg(Array(pad + 1).join(' '));
-        if (trimmed.length > 0) primary.putmsg(trimmed);
-        primary.putmsg(' ');
         var attr = isFirstLine ? indicatorAttr : wrapAttr;
-        if (attr !== undefined && attr !== null) {
-            primary.putmsg('<', attr);
-        } else {
-            primary.putmsg('<');
+        this._writeChars(primary, row, width, '<', attr);
+        var textEnd = width - 2;
+        if (trimmed.length > 0 && textEnd >= 1) {
+            var startCol = Math.max(1, textEnd - trimmed.length + 1);
+            this._writeChars(primary, row, startCol, trimmed);
         }
     } else {
         var available = Math.max(1, width - 2);
         if (displayText.length > available) displayText = displayText.substr(0, available);
         var attr = isFirstLine ? indicatorAttr : wrapAttr;
-        if (attr !== undefined && attr !== null) {
-            primary.putmsg('>', attr);
-        } else {
-            primary.putmsg('>');
+        this._writeChars(primary, row, 1, '>', attr);
+        var textStart = width >= 3 ? 3 : Math.min(width, 2);
+        if (displayText.length > 0 && textStart <= width) {
+            this._writeChars(primary, row, textStart, displayText);
         }
-        primary.putmsg(' ' + displayText);
     }
 
     this._clearFrameLine(secondary, row);
+};
+
+Chat.prototype._writeChars = function(frame, row, column, text, attr){
+    if(!frame || row < 1) return column || 1;
+    text = text || '';
+    if(!text.length) return column || 1;
+    var width = frame.width || 0;
+    if(width <= 0) return column || 1;
+    var y = row - 1;
+    var x = Math.max(1, column);
+    var useAttr = (attr !== undefined && attr !== null) ? attr : frame.attr;
+    for(var i = 0; i < text.length && x <= width; i++, x++){
+        var ch = text.charAt(i);
+        try { frame.setData(x - 1, y, ch, useAttr, false); } catch(e){}
+    }
+    return x;
 };
 
 Chat.prototype._clearFrameLine = function(frame, row){
