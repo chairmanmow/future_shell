@@ -43,7 +43,7 @@ var BUILTIN_ACTIONS = {
 		try { if(typeof SysopCommand !== 'function') load('iconshell/lib/subfunctions/sysop_commands.js'); } catch(e) { dbug('subprogram','Failed loading sysop_commands.js '+e); return; }
 		if(typeof SysopCommand !== 'function') { dbug('subprogram','SysopCommand class missing after load'); return; }
 		if(!this.sysopCommand) this.sysopCommand = new SysopCommand({ parentFrame: this.subFrame, shell: this });
-		else { this.sysopCommand.parentFrame = this.subFrame; this.sysopCommand.shell = this; }
+		else { this.sysopCommand.parentFrame = this.root; this.sysopCommand.shell = this; }
 		this.queueSubprogramLaunch('sysop-commands', this.sysopCommand);
 	},
 
@@ -52,7 +52,7 @@ var BUILTIN_ACTIONS = {
 		try { if(typeof IrcSection !== 'function') load('iconshell/lib/subfunctions/irc.js'); } catch(e) { dbug('subprogram','Failed loading irc.js '+e); return; }
 		if(typeof IrcSection !== 'function') { dbug('subprogram','IrcSection class missing after load'); return; }
 		if(!this.ircChatSub) this.ircChatSub = new IrcSection({ parentFrame: this.subFrame, shell: this });
-		else { this.ircChatSub.parentFrame = this.subFrame; this.ircChatSub.shell = this; }
+		else { this.ircChatSub.parentFrame = this.root; this.ircChatSub.shell = this; }
 		this.queueSubprogramLaunch('irc-chat', this.ircChatSub);
 	},
 	msg_scan_config: function(){ if (typeof bbs.cfg_msg_scan==='function') {this.runExternal(function(){bbs.cfg_msg_scan()}) }  },
@@ -64,7 +64,7 @@ var BUILTIN_ACTIONS = {
 		if(typeof MessageBoard !== 'function') { dbug('subprogram','MessageBoard class missing after load'); return; }
 		if(!this.msgBoardSub) this.msgBoardSub = new MessageBoard({ parentFrame: this.subFrame, shell: this, timer: this.timer });
 		else {
-			this.msgBoardSub.parentFrame = this.subFrame;
+			this.msgBoardSub.parentFrame = this.root;
 			this.msgBoardSub.shell = this;
 			if(typeof this.msgBoardSub.attachShellTimer === 'function') this.msgBoardSub.attachShellTimer(this.timer);
 		}
@@ -124,21 +124,21 @@ var BUILTIN_ACTIONS = {
 		try { if(typeof Mail !== 'function') load('iconshell/lib/subfunctions/mail.js'); } catch(e) { dbug('subprogram','Failed loading mail.js '+e); return; }
 		if(typeof Mail !== 'function') { dbug('subprogram','Mail class missing after load'); return; }
 		if(!this.mailSub) this.mailSub = new Mail({ parentFrame: this.subFrame, shell: this });
-		else { this.mailSub.parentFrame = this.subFrame; this.mailSub.shell = this; }
+		else { this.mailSub.parentFrame = this.root; this.mailSub.shell = this; }
 		this.queueSubprogramLaunch('mail', this.mailSub);
 	},
 	sysinfo: function(){
 		try { if(typeof SystemInfo !== 'function') load('iconshell/lib/subfunctions/system_info.js'); } catch(e) { dbug('subprogram','Failed loading system_info.js '+e); return; }
 		if(typeof SystemInfo !== 'function') { dbug('subprogram','SystemInfo class missing after load'); return; }
 		if(!this.systemInfoSub) this.systemInfoSub = new SystemInfo({ parentFrame: this.subFrame, shell: this });
-		else { this.systemInfoSub.parentFrame = this.subFrame; this.systemInfoSub.shell = this; }
+		else { this.systemInfoSub.parentFrame = this.root; this.systemInfoSub.shell = this; }
 		this.queueSubprogramLaunch('system-info', this.systemInfoSub);
 	},
 	who_list: function(){
 		try { if(typeof WhoOnline !== 'function') load('iconshell/lib/subfunctions/whosonline.js'); } catch(e) { dbug('subprogram','Failed loading whosonline.js '+e); return; }
 		if(typeof WhoOnline !== 'function') { dbug('subprogram','WhoOnline class missing after load'); return; }
 		if(!this.whoOnlineSub) this.whoOnlineSub = new WhoOnline({ parentFrame: this.subFrame, shell: this });
-		else { this.whoOnlineSub.parentFrame = this.subFrame; this.whoOnlineSub.shell = this; }
+		else { this.whoOnlineSub.parentFrame = this.root; this.whoOnlineSub.shell = this; }
 		this.queueSubprogramLaunch('who-online', this.whoOnlineSub);
 	},
 };

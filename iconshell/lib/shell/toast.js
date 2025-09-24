@@ -9,9 +9,7 @@ function Toast(options) {
     this._avatarData = null;
     this.title = options.title || false;
     this._avatarLib = load({}, 'avatar_lib.js');
-    log('Creating Toast ' + JSON.stringify(options.avatar) + !!this._avatarLib);
     if(options.avatar && this._avatarLib){
-        log('Got avatar options: '+JSON.stringify(options.avatar));
         if(options.avatar.netaddr === system.name){
             var uNum = system.matchuser(options.avatar.username); 
             this.avatarData = this._avatarLib.read(uNum);
@@ -19,7 +17,6 @@ function Toast(options) {
         } else if(options.avatar.username && options.avatar.netaddr){
             this.avatarData = this._avatarLib.read_netuser(options.avatar.username, options.avatar.netaddr);
         }
-        log('Avatar data read: '+ JSON.stringify(this.avatarData));
     }
     var message = options.message || "";
     var timeout = (typeof options.timeout === 'number') ? options.timeout : DEFAULT_TOAST_TIMEOUT;
@@ -57,7 +54,6 @@ function Toast(options) {
     }
     x = clamp(x,1, Math.max(1, scrW - width + 1));
     y = clamp(y,1, Math.max(1, scrH - height + 1));
-    log('Toast position '+pos+' => '+x+','+y+' in '+scrW+'x'+scrH);
     this.avatarFrame = null;
     this.parentFrame = options.parentFrame || undefined;
     this.toastFrame = new Frame(x, y, width, height, ICSH_VALS.TOAST_FRAME.BG | ICSH_VALS.TOAST_FRAME.FG, this.parentFrame);

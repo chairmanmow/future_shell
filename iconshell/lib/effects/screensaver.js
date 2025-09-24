@@ -83,7 +83,6 @@ ShellScreenSaver.prototype.configure = function(cfg){
         if(Object.prototype.hasOwnProperty.call(this.registry,key)) this.registry[key].failed = false;
     }
     this._resetTimerInterval();
-    try { log(LOG_INFO, 'screensaver configure animations='+this.sequence.join(',')+' random='+this.random+' switchMs='+this.switchIntervalMs); } catch(_){ }
 };
 
 ShellScreenSaver.prototype.attachTimer = function(timer){
@@ -115,7 +114,6 @@ ShellScreenSaver.prototype._resetTimerInterval = function(){
 ShellScreenSaver.prototype._registerBuiltins = function(){
     this.register('matrix_rain', { type: 'matrix' });
     if(typeof CanvasAnimations === 'object'){
-        try { log(LOG_INFO, 'screensaver CanvasAnimations keys=' + Object.keys(CanvasAnimations).join(',')); } catch(_){ }
         if(typeof CanvasAnimations.TvStatic === 'function')
             this.register('tv_static', { type: 'class', ctor: CanvasAnimations.TvStatic });
         if(typeof CanvasAnimations.Life === 'function')
@@ -155,7 +153,6 @@ ShellScreenSaver.prototype.register = function(name, def){
     if(!name || !def) return;
     def.failed = false;
     this.registry[name] = def;
-    try { log(LOG_INFO, 'screensaver registered anim '+name); } catch(_){ }
 };
 
 ShellScreenSaver.prototype._availableNames = function(){
@@ -201,7 +198,6 @@ ShellScreenSaver.prototype.activate = function(name){
         if(this._startAnimation(targetName)){
             this.active = true;
             this._lastSwitchMs = nowMs();
-            try { log(LOG_INFO, 'screensaver activated '+targetName); } catch(_){ }
             return true;
         }
         attempts++;
@@ -286,7 +282,6 @@ ShellScreenSaver.prototype._startAnimation = function(name, force){
         return false;
     }
     def.failed = false;
-    try { log(LOG_INFO, 'screensaver animation '+name+' initialised'); } catch(_){ }
     this._lastSwitchMs = nowMs();
     return true;
 };

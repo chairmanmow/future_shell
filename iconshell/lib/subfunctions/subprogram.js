@@ -4,12 +4,15 @@ function Subprogram(opts) {
     opts = opts || {};
     this.name = opts.name || 'subprogram';
     this.parentFrame = opts.parentFrame || null;
+    this._ownsParentFrame = !this.parentFrame;
+    this.hostFrame = null;
     this.running = false;
     this._done = null;
     // Optional reference to the parent shell (IconShell) so subprograms can access shared services
     this.shell = opts.shell; 
     this._myFrames = [];
     this.timer = opts.timer || (this.shell && this.shell.timer) || null;
+    this.blockScreenSaver = false;
 }
 
 Subprogram.prototype.enter = function(done) {
@@ -18,7 +21,9 @@ Subprogram.prototype.enter = function(done) {
     if(!this.parentFrame) {
         this.parentFrame = new Frame(1,1,console.screen_columns,console.screen_rows, ICSH_ATTR('FRAME_STANDARD'));
         this.parentFrame.open();
+        this._ownsParentFrame = true;
     }
+    this._ensureHostFrame();
     this.draw();
     if(this._myFrames.length === 0)
         this.registerDefaultFrames();
@@ -40,11 +45,27 @@ Subprogram.prototype.handleKey = function(key) {
 Subprogram.prototype.draw = function(){};
 Subprogram.prototype.refresh = function(){ this.draw(); };
 Subprogram.prototype.cleanup = function(){
-    if (this.parentFrame) { this.parentFrame.close(); this.parentFrame = null; }
     if(this._cleanup && typeof this._cleanup === 'function') {
         this._cleanup();
     }
+    if(this.hostFrame){
+        var oldHost = this.hostFrame;
+        try { oldHost.close(); } catch(e) {}
+        var idx = this._myFrames.indexOf(oldHost);
+        if(idx !== -1) this._myFrames.splice(idx, 1);
+        this.hostFrame = null;
+    }
+    this.setBackgroundFrame(null);
+    if (this.parentFrame) {
+        if(this._ownsParentFrame){
+            try { this.parentFrame.close(); } catch(e) {}
+            this.parentFrame = null;
+        } else {
+            try { this.parentFrame.cycle(); } catch(e) {}
+        }
+    }
     this.detachShellTimer();
+    this._myFrames = [];
 };
 
 Subprogram.prototype.registerFrame = function(frame){
@@ -85,7 +106,11 @@ Subprogram.prototype.pauseForReason = function(reason){};
 
 Subprogram.prototype.resumeForReason = function(reason){};
 
-Subprogram.prototype.setParentFrame = function(f){ this.parentFrame = f; return this; };
+Subprogram.prototype.setParentFrame = function(f){
+    this.parentFrame = f;
+    this._ownsParentFrame = !this.parentFrame;
+    return this;
+};
 
 Subprogram.prototype.attachShellTimer = function(timer){
     this.timer = timer || null;
@@ -102,6 +127,29 @@ Subprogram.prototype.setBackgroundFrame = function(frame) {
 
 Subprogram.prototype.backgroundFrame = function() { 
     return this.__bg_frame || false;
+};
+
+Subprogram.prototype._ensureHostFrame = function(){
+    if(this.hostFrame && this.hostFrame.is_open) return this.hostFrame;
+    if(!this.parentFrame) return null;
+    var pf = this.parentFrame;
+    var width = Math.max(1, pf.width || console.screen_columns || 80);
+    var height = Math.max(1, pf.height || console.screen_rows || 24);
+    var attr;
+    if (typeof pf.attr === 'number') attr = pf.attr;
+    else if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.VIEW && typeof ICSH_VALS.VIEW.BG === 'number' && typeof ICSH_VALS.VIEW.FG === 'number') attr = (ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG);
+    else if (typeof BG_BLACK !== 'undefined' && typeof LIGHTGRAY !== 'undefined') attr = BG_BLACK | LIGHTGRAY;
+    else attr = 0;
+    try {
+        this.hostFrame = new Frame(1, 1, width, height, attr, pf);
+        this.hostFrame.open();
+        this.setBackgroundFrame(this.hostFrame);
+        if(this._myFrames.indexOf(this.hostFrame) === -1) this._myFrames.push(this.hostFrame);
+    } catch(e) {
+        log('Subprogram '+(this.name||'unknown')+' failed to create hostFrame: '+e);
+        this.hostFrame = null;
+    }
+    return this.hostFrame;
 };
 
 // Unified toast helper available to every subprogram.

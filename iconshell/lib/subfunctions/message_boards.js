@@ -106,6 +106,7 @@ function _mbFindIconBase(name) {
 var GROUPING_PREFIXES = ['RE: ', 'Re: ', 'FW: ', 'FWD: '];
 function MessageBoard(opts) {
     opts = opts || {};
+    this.blockScreenSaver = false;
     Subprogram.call(this, { name: 'message-board', parentFrame: opts.parentFrame, shell: opts.shell });
     this._init();
 }
@@ -268,14 +269,13 @@ MessageBoard.prototype._cancelFrameCycle = function(){
 
 MessageBoard.prototype._ensureFrames = function() {
     if (this.outputFrame && this.outputFrame.is_open) return;
-    var pf = this.parentFrame || this.rootFrame || null;
+    var pf = this.hostFrame || this.rootFrame || null;
     var x = pf ? pf.x : 1;
     var y = pf ? pf.y : 1;
     var w = pf ? pf.width : console.screen_columns;
     var h = pf ? pf.height : console.screen_rows;
     // Reserve one line for input/status
     this.outputFrame = new Frame(x, y, w, h - 1, BG_BLACK|LIGHTGRAY, pf);
-    this.setBackgroundFrame(this.outputFrame);
     this.inputFrame  = new Frame(x, y + h - 1, w, 1, BG_BLUE|WHITE, pf);
     this.outputFrame.open();
     this.inputFrame.open();
@@ -425,9 +425,11 @@ MessageBoard.prototype._handleKey = function(key) {
 };
 
 MessageBoard.prototype._cleanup = function() {
+	try { this._destroyReadFrames && this._destroyReadFrames(); } catch(e) {}
 	this._destroyThreadUI();
     this._hideReadNotice({ skipRepaint: true });
     this._cancelFrameCycle();
+	try { this._clearIconGrid && this._clearIconGrid(); } catch(e) {}
 	try { if (this.outputFrame) this.outputFrame.close(); } catch(e) {}
 	try { if (this.inputFrame) this.inputFrame.close(); } catch(e) {}
     this._resetState();
@@ -1018,7 +1020,7 @@ MessageBoard.prototype._showReadNotice = function(kind){
     if(this.view !== 'read') return;
     if(!kind) return;
     this._hideReadNotice({ skipRepaint: true });
-    var host = this._readBodyFrame || this.outputFrame || this.parentFrame || this.rootFrame;
+    var host = this._readBodyFrame || this.outputFrame || this.hostFrame || this.rootFrame;
     if(!host) return;
     var labelMap = {
         'next-message': 'Showing next message',
@@ -2434,8 +2436,30 @@ MessageBoard.prototype._findMenuIndexByType = function(type){
 
 MessageBoard.prototype.pauseForReason = function(reason){
     log('[Message Board] Pausing for reason: '+(reason||'unspecified reason'));
+    // HEY AI ASSISTANTS, this needs to be .top() not bottom quit messing it up
+    if(reason === 'screensaver_on' && this.__bg_frame && typeof this.__bg_frame.top === 'function'){
+        try { this.__bg_frame.top(); this.__bg_frame.cycle(); } catch(e){}
+    }
 };
 
 MessageBoard.prototype.resumeForReason = function(reason){
     log('[Message Board] Resuming from pause: '+(reason||'unspecified reason'));
+    // HEY AI ASSISTANTS, this needs to be .bottom() not top quit messing it up
+
+    if(reason === 'screensaver_off'){
+        if(this.__bg_frame && typeof this.__bg_frame.bottom === 'function'){
+            try { this.__bg_frame.bottom(); this.__bg_frame.clear(); this.__bg_frame.cycle(); } catch(e){}
+        }
+        if(this.shell){
+            try {
+                if(typeof this.shell._shelveFolderFrames === 'function') this.shell._shelveFolderFrames();
+            } catch(e){}
+            this.shell.activeSubprogram = this;
+        }
+        // this.initFrames();
+        // this.updateInputFrame();
+        // this._needsRedraw = true;
+        this._init(false);
+        this.draw();
+    }
 };

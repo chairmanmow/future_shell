@@ -27,6 +27,9 @@ IconShell.prototype.init = function() {
     }
     // Current selection index (absolute, not relative to scroll)
     this.selection = 0;
+    this._saverActive = false;
+    this._pendingFolderRedraw = false;
+    this._saverEpoch = 0;
     // Current icon grid (object with .cells, .cols, .rows)
     this.grid = null;
     // Current scroll offset (index of first visible item)
@@ -148,6 +151,11 @@ IconShell.prototype.main = function() {
             } else {
                 this._checkConsoleResize();
             }
+            if(this._saverActive){
+                // Skip subprogram cycling while saver active to prevent UI frames surfacing
+            } else if (this.activeSubprogram && typeof this.activeSubprogram.cycle === 'function') {
+                this.activeSubprogram.cycle();
+            }
             // Only pump screensaver while active (previously pumped every loop even when idle)
             if(this._screenSaver && this._screenSaver.isActive()) this._screenSaver.pump();
             if (this.activeSubprogram && typeof this.activeSubprogram.cycle === 'function') {
@@ -203,7 +211,9 @@ IconShell.prototype.main = function() {
                 if(key) this.processKeyboardInput(key);
             }
             // Inactivity trigger (disabled if inactivityThresholdMs === -1)
-            if(this._screenSaver && !this._screenSaver.isActive() && this.inactivityThresholdMs !== -1){
+            var sub = this.activeSubprogram;
+            var blockSaver = sub && (sub.blockScreensaver === true || sub.blockScreenSaver === true);
+            if(this._screenSaver && !this._screenSaver.isActive() && this.inactivityThresholdMs !== -1 && !blockSaver){
                 if(Date.now() - this._lastActivityTs > this.inactivityThresholdMs){
                     if(this.activeSubprogram && typeof this.activeSubprogram.pauseForReason === 'function'){
                         this.activeSubprogram.pauseForReason('screensaver_on');
@@ -215,6 +225,16 @@ IconShell.prototype.main = function() {
             if (this.toasts && this.toasts.length > 0) {
                 for (var i = 0; i < this.toasts.length; i++) {
                     if (typeof this.toasts[i].cycle === 'function') this.toasts[i].cycle();
+                }
+            }
+                        if(!this._saverActive && this._pendingFolderRedraw){
+                this._pendingFolderRedraw = false;
+                if(this.activeSubprogram && this.activeSubprogram.running){
+                    if(typeof this.activeSubprogram.draw === 'function'){
+                        try{ this.activeSubprogram.draw(); }catch(e){ dbug('post-saver subprogram draw error: '+e,'ambient'); }
+                    }
+                } else {
+                    try{ this.drawFolder(true); }catch(e2){ dbug('post-saver folder redraw error: '+e2,'ambient'); }
                 }
             }
             yield(true);
@@ -607,6 +627,8 @@ IconShell.prototype.detectMouseSupport = function() {
 IconShell.prototype._startScreenSaver = function(){
     if(!this._screenSaver) return false;
     if(this._screenSaver.isActive()) return false;
+    var sub = this.activeSubprogram;
+    if(sub && (sub.blockScreensaver === true || sub.blockScreenSaver === true)) return false;
     return this._screenSaver.activate();
 };
 
@@ -658,3 +680,51 @@ IconShell.prototype.showToast = function(params) {
     this.toasts.push(toast);
     return toast;
 };
+
+
+// ADD (or adjust) ambient manager instantiation to pass shell reference (if done elsewhere, keep single instance)
+IconShell.prototype._initAmbient = function(){
+    if(this._ambientConfig){
+        try{
+            var ambOpts = {
+                random: this._ambientConfig.random,
+                switch_interval: this._ambientConfig.switch_interval,
+                fps: this._ambientConfig.fps,
+                clear_on_switch: this._ambientConfig.clear_on_switch,
+                animationOptions: this._ambientConfig.animationOptions,
+                shell: this
+            };
+            // Expect ambientFrame prepared elsewhere; fallback to view.
+            ambOpts.frame = this.ambientFrame || this.view;
+            this._ambient = new ShellAmbientManager(ambOpts.frame, ambOpts);
+            // (Registration of specific animations remains where you had it.)
+        }catch(e){
+            dbug('ambient init error: '+e,'ambient');
+        }
+    }
+};
+
+// HOOK: start/stop callbacks (called by ambient manager)
+IconShell.prototype._onAmbientStart = function(){
+    this._saverActive = true;
+    this._saverEpoch++;
+    this._pendingFolderRedraw = true; // mark that when saver ends we redraw cleanly
+};
+
+IconShell.prototype._onAmbientStop = function(){
+    this._saverActive = false;
+    this._saverEpoch++;
+    this._pendingFolderRedraw = true;
+};
+
+// WRAP drawFolder to suppress during saver unless forced
+if(!IconShell.prototype._drawFolderOrig){
+    IconShell.prototype._drawFolderOrig = IconShell.prototype.drawFolder;
+    IconShell.prototype.drawFolder = function(force){
+        if(this._saverActive && !force){
+            this._pendingFolderRedraw = true;
+            return;
+        }
+        return this._drawFolderOrig.apply(this, arguments);
+    };
+}
