@@ -749,6 +749,7 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 		{ label: "Games", type: "folder", iconFile: "games", get children(){ return getItemsForXtrnSection(1);} },
 		{ label: "Apps", type: "folder", iconFile: "apps", get children(){ return getItemsForXtrnSection(0);} },
 		{ label: "Messages", type: "item", iconFile:"messages", action: makeExecXtrnAction("ECREADER") },
+		{ label: "Mail", type: "item", iconFile:"mail", dynamic:true, action: BUILTIN_ACTIONS.mail },
 		{ label: "Files", type: "item", iconFile:"folder", action: makeExecXtrnAction("ANSIVIEW") },
 		{ label: "Who", type: "folder", iconFile:"whosonline", get children(){
 			try {

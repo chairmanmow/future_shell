@@ -529,8 +529,8 @@ MessageBoard.prototype._init = function(reentry){
     this._readSubIconHotspotKey = '@';
     // Build comprehensive hotspot character set (single-key tokens only)
     this._buildHotspotCharSet();
-    // Thread limits bound by hotspot capacity but capped at 500 for performance
-    this.threadHeaderLimit = Math.min(500, this._hotspotChars.length);
+    // Default to no artificial cap; hotspot mapping handles visible rows only
+    this.threadHeaderLimit = 0;
     if(reentry) this._releaseHotspots();
 };
 
@@ -1808,9 +1808,9 @@ MessageBoard.prototype._clearIconGrid = function(){
 
 // ---- Threads View ----
 MessageBoard.prototype._loadThreadHeaders = function(limit){
-    // If caller specifies limit use min with our configured threadHeaderLimit
-    limit = limit || this.threadHeaderLimit || 500;
-    limit = Math.min(limit, this.threadHeaderLimit || limit);
+    // If caller specifies limit, respect it; otherwise load full message list
+    limit = limit || this.threadHeaderLimit;
+    if(limit && limit > 0) limit = Math.min(limit, this.threadHeaderLimit);
     this.threadHeaders = [];
     var code = this.cursub || (this.items[this.selection] && this.items[this.selection].subCode) || bbs.cursub_code;
     if(!code) return;
@@ -1832,8 +1832,12 @@ MessageBoard.prototype._loadThreadHeaders = function(limit){
             }
             return;
         }
-        var start = Math.max(1, total - limit + 1);
-        for(var n=start; n<=total; n++) {
+        var start = 1;
+        var endNum = total;
+        if(limit && limit > 0){
+            start = Math.max(1, total - limit + 1);
+        }
+        for(var n=start; n<=endNum; n++) {
             var hdr = mb.get_msg_header(false, n, true);
             if(!hdr) continue;
             this._storeFullHeader(hdr);
@@ -1874,6 +1878,10 @@ MessageBoard.prototype._paintThreadList = function(){
     f.gotoxy(1,1);
     f.putmsg('Messages in ' + (this.cursub||'') + ' ('+this.threadHeaders.length+')');
     var row=0;
+    var self = this;
+    this._releaseHotspots();
+    var hotspotChars = this._hotspotChars || [];
+    var usedHotspots = 0;
     for(var i=this.threadScrollOffset; i<end; i++) {
         var hdr = this.threadHeaders[i];
         var lineY = 2 + row; if(lineY>f.height) break;
@@ -1889,6 +1897,13 @@ MessageBoard.prototype._paintThreadList = function(){
         if(text.length < f.width) text += Array(f.width - text.length + 1).join(' ');
         if(sel) text='\x01n\x01h'+text; else text='\x01n'+text;
         f.putmsg(text.substr(0,f.width));
+        if(usedHotspots < hotspotChars.length){
+            var cmd = hotspotChars[usedHotspots++];
+            this._hotspotMap[cmd] = i;
+            if(typeof console.add_hotspot === 'function'){
+                try { console.add_hotspot(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1); } catch(e){}
+            }
+        }
         row++;
     }
     this._writeStatus('THREADS: Enter=Read  P=Post  S=Search  Backspace=Subs  '+(this.threadSelection+1)+'/'+this.threadHeaders.length);

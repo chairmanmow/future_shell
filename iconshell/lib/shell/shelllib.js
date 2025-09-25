@@ -60,7 +60,6 @@ IconShell.prototype.init = function() {
     // Screensaver hotspot state
     this._screensaverDismissCmd = this._reserveHotspotCmd('\u0007');
     this._screensaverHotspotActive = false;
-    this._mailHotspotCmd = this._reserveHotspotCmd('\u0006');
     // === End instance state ===
     // Inactivity tracking for background effects
     this._lastActivityTs = Date.now();
@@ -255,9 +254,9 @@ IconShell.prototype.main = function() {
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function(ch) {
     dbug('Shell processing keyboard input:' + JSON.stringify(ch), 'keylog');
-    if (ch === this._mailHotspotCmd) {
-        this._handleMailHotspot();
-        return true;
+    if (this.activeSubprogram && this.activeSubprogram.running === false) {
+        dbug('Releasing inactive subprogram before handling key', 'subprogram');
+        this.exitSubprogram();
     }
     // Ignore filler hotspot command (used to swallow empty grid area clicks)
     if (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined' && ch === ICSH_HOTSPOT_FILL_CMD) return true;
@@ -327,31 +326,6 @@ IconShell.prototype._processChatUpdate = function(packet) {
         });
     }
 
-};
-
-IconShell.prototype._handleMailHotspot = function() {
-    try {
-        if (typeof BUILTIN_ACTIONS !== 'undefined' && BUILTIN_ACTIONS && typeof BUILTIN_ACTIONS.mail === 'function') {
-            BUILTIN_ACTIONS.mail.call(this);
-            return;
-        }
-    } catch (e) {
-        dbug('mail hotspot builtin error: ' + e, 'mail');
-    }
-    try {
-        if (typeof Mail !== 'function') load('iconshell/lib/subfunctions/mail.js');
-    } catch (loadErr) {
-        dbug('mail hotspot load error: ' + loadErr, 'mail');
-        return;
-    }
-    if (typeof Mail === 'function' && typeof this.queueSubprogramLaunch === 'function') {
-        if (!this.mailSub) this.mailSub = new Mail({ parentFrame: this.subFrame, shell: this });
-        else {
-            this.mailSub.parentFrame = this.subFrame;
-            this.mailSub.shell = this;
-        }
-        this.queueSubprogramLaunch('mail', this.mailSub);
-    }
 };
 
 IconShell.prototype._getConsoleDimensions = function() {

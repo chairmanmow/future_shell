@@ -202,6 +202,7 @@ IconShell.prototype.drawFolder = function() {
         });
     }
     this.assignViewHotkeys(items);
+    this._decorateMailIcons(items);
     var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 1;
     var topMargin = 1;
     var cols = Math.max(1, Math.floor(this.view.width / cellW));
@@ -296,23 +297,13 @@ IconShell.prototype._drawBreadcrumb = function(names, selectedNum, total) {
     crumbText += '$';
     if (selectedLabel) crumbText += selectedLabel;
 
-    var mailInfo = this._formatMailStatus();
-    var mailBlock = mailInfo.text;
-    var width = this.crumb.width;
-    var mailStart = Math.max(1, width - mailBlock.length + 1);
-    var maxCrumbLen = Math.max(0, mailStart - 2);
-    if (crumbText.length > maxCrumbLen) {
-        if (maxCrumbLen > 3) crumbText = crumbText.substring(0, maxCrumbLen - 3) + '...';
-        else crumbText = crumbText.substring(0, maxCrumbLen);
+    if (crumbText.length > this.crumb.width) {
+        if (this.crumb.width > 3) crumbText = crumbText.substring(0, this.crumb.width - 3) + '...';
+        else crumbText = crumbText.substring(0, this.crumb.width);
     }
     if (crumbText) {
         this.crumb.gotoxy(1, 1);
         this.crumb.putmsg(crumbText);
-    }
-    if (mailBlock && mailBlock.length && mailStart <= width) {
-        this.crumb.gotoxy(mailStart, 1);
-        this.crumb.putmsg(mailBlock);
-        this._installMailHotspot(mailStart, mailStart + mailBlock.length - 1);
     }
     this.crumb.cycle();
 };
@@ -326,7 +317,7 @@ IconShell.prototype._getSelectedItemLabel = function() {
     return cell.item.label || '';
 };
 
-IconShell.prototype._formatMailStatus = function() {
+IconShell.prototype._getMailCounts = function() {
     var unread = 0;
     var read = 0;
     var total = 0;
@@ -352,20 +343,52 @@ IconShell.prototype._formatMailStatus = function() {
     if (!total) total = unread + read;
     if (!unread && total && read) unread = Math.max(0, total - read);
     if (total < unread) total = unread;
-    var text = '[' + unread + '] MAIL (' + total + ')';
-    return { text: text, unread: unread, total: total };
+    return { unread: unread, total: total };
 };
 
-IconShell.prototype._installMailHotspot = function(startColumn, endColumn) {
-    if (!this._mailHotspotCmd || typeof console.add_hotspot !== 'function' || !this.crumb) return;
-    if (startColumn <= 0 || endColumn < startColumn) return;
-    var absStart = this.crumb.x + startColumn - 1;
-    var absEnd = this.crumb.x + endColumn - 1;
-    var y = this.crumb.y - 1;
-    try { 
-        console.add_hotspot(this._mailHotspotCmd, false, absStart, absEnd, y);
-     } catch (e) {
-        log("[mail hotspot] error: " + e);
+IconShell.prototype._buildMailLabelInfo = function(baseLabel, counts) {
+    baseLabel = baseLabel || 'Mail';
+    counts = counts || {};
+    var unread = Math.max(0, parseInt(counts.unread, 10) || 0);
+    var total = Math.max(0, parseInt(counts.total, 10) || 0);
+    if (total < unread) total = unread;
+    var segments = [];
+    var text = '';
+    if (unread > 0) {
+        var unreadText = String(unread);
+        segments.push({ text: unreadText, color: (typeof LIGHTGREEN !== 'undefined') ? LIGHTGREEN : GREEN });
+        segments.push({ text: ' ', color: null });
+        text += unreadText + ' ';
+    }
+    segments.push({ text: baseLabel, color: null });
+    text += baseLabel;
+    segments.push({ text: ' ', color: null });
+    text += ' ';
+    var totalText = String(total);
+    segments.push({ text: totalText, color: (typeof YELLOW !== 'undefined') ? YELLOW : WHITE });
+    text += totalText;
+    return { text: text, segments: segments };
+};
+
+IconShell.prototype._isMailIconItem = function(item) {
+    if (!item) return false;
+    if (typeof BUILTIN_ACTIONS !== 'undefined' && item.action === BUILTIN_ACTIONS.mail) return true;
+    var iconFile = item.iconFile ? String(item.iconFile).toLowerCase() : '';
+    if (iconFile.indexOf('mail') !== -1) return true;
+    var label = (item._mailBaseLabel || item.label || '').toLowerCase();
+    return label.indexOf('mail') !== -1;
+};
+
+IconShell.prototype._decorateMailIcons = function(items) {
+    if (!items || !items.length) return;
+    var counts = this._getMailCounts();
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        if (!this._isMailIconItem(item)) continue;
+        if (!item._mailBaseLabel) item._mailBaseLabel = item.label || 'Mail';
+        var info = this._buildMailLabelInfo(item._mailBaseLabel, counts);
+        item.label = info.text;
+        item._labelSegments = info.segments;
     }
 };
 
@@ -530,14 +553,51 @@ IconShell.prototype.paintIcon = function (cell, selected, invert) {
         cell.icon.clear(item.iconBg | item.iconFg);
     }
 
-	// Highlight label if selected
+    // Highlight label if selected
     var labelAttr = selected
         ? (ICSH_VALS.SELECTED.BG | ICSH_VALS.SELECTED.FG)
         : (ICSH_VALS.LABEL.BG | ICSH_VALS.LABEL.FG);
-	cell.label.clear(labelAttr);
-	cell.label.home();
-	var name = item.label || "";
-	var start = Math.max(0, Math.floor((cell.icon.width - name.length) / 2));
-	var pad = repeatChar(" ", start);
-	cell.label.putmsg(pad + name.substr(0, cell.icon.width));
+    cell.label.clear(labelAttr);
+    cell.label.home();
+    var segments = item._labelSegments && item._labelSegments.length ? item._labelSegments : null;
+    var width = cell.label.width || cell.icon.width;
+    if (segments) {
+        var truncated = [];
+        var visible = 0;
+        for (var s = 0; s < segments.length; s++) {
+            var seg = segments[s];
+            var segText = seg && typeof seg.text !== 'undefined' ? String(seg.text) : '';
+            if (!segText.length && segText !== '0') continue;
+            var remaining = width - visible;
+            if (remaining <= 0) break;
+            if (segText.length > remaining) segText = segText.substr(0, remaining);
+            truncated.push({ text: segText, color: seg ? seg.color : null });
+            visible += segText.length;
+        }
+        var leftPad = Math.max(0, Math.floor((width - visible) / 2));
+        var written = 0;
+        var bg = labelAttr & 0xF0;
+        if (leftPad) {
+            cell.label.attr = labelAttr;
+            cell.label.putmsg(new Array(leftPad + 1).join(' '));
+            written += leftPad;
+        }
+        for (var t = 0; t < truncated.length && written < width; t++) {
+            var segInfo = truncated[t];
+            if (!segInfo.text.length && segInfo.text !== '0') continue;
+            var attr = (segInfo.color !== null && typeof segInfo.color === 'number') ? (bg | segInfo.color) : labelAttr;
+            cell.label.attr = attr;
+            cell.label.putmsg(segInfo.text);
+            written += segInfo.text.length;
+        }
+        if (written < width) {
+            cell.label.attr = labelAttr;
+            cell.label.putmsg(new Array(width - written + 1).join(' '));
+        }
+        return;
+    }
+    var name = item.label || "";
+    var start = Math.max(0, Math.floor((width - name.length) / 2));
+    var pad = start > 0 ? new Array(start + 1).join(' ') : '';
+    cell.label.putmsg((pad + name).substr(0, width));
 }

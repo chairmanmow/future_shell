@@ -412,17 +412,18 @@ Mail.prototype._toastSent = function(dest){
 // (Subprogram.enter will set the callback, open a frame if needed, and call draw())
 
 Mail.prototype._ensureFrames = function() {
-	if (!this.parentFrame) return;
+	var host = this.hostFrame || this.parentFrame;
+	if (!host) return;
 	if (!this.outputFrame) {
-		var h = Math.max(1, this.parentFrame.height - 1);
-		this.outputFrame = new Frame(1, 1, this.parentFrame.width, h, BG_BLACK|LIGHTGRAY, this.parentFrame);
+		var h = Math.max(1, host.height - 1);
+		this.outputFrame = new Frame(host.x, host.y, host.width, h, BG_BLACK|LIGHTGRAY, host);
 		this.outputFrame.open();
 		this.setBackgroundFrame(this.outputFrame);
 	}
 	if (!this.inputFrame) {
-		var host = this.parentFrame.parent || this.parentFrame;
-		var y = host.y + host.height - 1;
-		this.inputFrame = new Frame(1, y, this.parentFrame.width, 1, BG_BLUE|WHITE, host);
+		var inputY = host.y + host.height - 1;
+		var parentForInput = host.parent || host;
+		this.inputFrame = new Frame(host.x, inputY, host.width, 1, BG_BLUE|WHITE, parentForInput);
 		this.inputFrame.open();
 	}
 };
@@ -495,38 +496,47 @@ Mail.prototype.handleKey = function(k) {
 		return;
 	}
 	switch(k){
+		case 'KEY_UP':
 		case '\x1B[A':
 		case '\x1E':
 		case KEY_UP:
-			if(this.mode==='icon' && this.selectedIndex>0){ this.selectedIndex--; this.ensureIconVisible(); this.draw(); }
-			return;
+			this._moveMenuSelection(0, -1); return;
+		case 'KEY_DOWN':
 		case '\x1B[B':
 		case '\x0A':
 		case KEY_DOWN:
-			if(this.mode==='icon' && this.selectedIndex<this.menuOptions.length-1){ this.selectedIndex++; this.ensureIconVisible(); this.draw(); }
-			return;
+			this._moveMenuSelection(0, 1); return;
+		case 'KEY_LEFT':
 		case '\x1B[D':
 		case KEY_LEFT:
-			if(this.mode==='icon' && this.selectedIndex>0){ this.selectedIndex--; this.ensureIconVisible(); this.draw(); }
-			return;
+			this._moveMenuSelection(-1, 0); return;
+		case 'KEY_RIGHT':
 		case '\x1B[C':
 		case KEY_RIGHT:
-			if(this.mode==='icon' && this.selectedIndex<this.menuOptions.length-1){ this.selectedIndex++; this.ensureIconVisible(); this.draw(); }
-			return;
-		case KEY_HOME:
-			this.selectedIndex=0; this.draw(); return;
-		case KEY_END:
-			this.selectedIndex=this.menuOptions.length-1; this.draw(); return;
-		case KEY_PGUP:
-			this.scrollOffset += 3; if(this.scrollOffset>this.scrollback.length) this.scrollOffset=this.scrollback.length; this.draw(); return;
-		case KEY_PGDN:
-			this.scrollOffset -= 3; if(this.scrollOffset<0) this.scrollOffset=0; this.draw(); return;
-		case '\r': case '\n':
+			this._moveMenuSelection(1, 0); return;
+		case '\r':
+		case '\n':
+		case 'KEY_ENTER':
 			this.invokeSelected(); return;
 		default:
 			if(k.length===1 && k>='1' && k<='9'){
 				var idx=parseInt(k,10)-1; if(idx<this.menuOptions.length){ this.selectedIndex=idx; this.draw(); this.invokeSelected(); return; }
 			}
+	}
+};
+
+Mail.prototype._moveMenuSelection = function(dx, dy){
+	if(this.mode !== 'icon' || !this.menuOptions || !this.menuOptions.length) return;
+	var cols = this._iconCols || this.menuOptions.length;
+	if(cols < 1) cols = this.menuOptions.length;
+	var idx = this.selectedIndex;
+	if(dx === 1) idx = Math.min(this.menuOptions.length - 1, idx + 1);
+	else if(dx === -1) idx = Math.max(0, idx - 1);
+	else if(dy === 1) idx = Math.min(this.menuOptions.length - 1, idx + cols);
+	else if(dy === -1) idx = Math.max(0, idx - cols);
+	if(idx !== this.selectedIndex){
+		this.selectedIndex = idx;
+		this.draw();
 	}
 };
 
@@ -621,6 +631,7 @@ Mail.prototype.drawIconGrid = function(o){
 	var ICON_W = (typeof ICSH_CONSTANTS!=='undefined'?ICSH_CONSTANTS.ICON_W:12);
 	var ICON_H = (typeof ICSH_CONSTANTS!=='undefined'?ICSH_CONSTANTS.ICON_H:6);
 	var labelH = 1;
+	this.updateUnreadCount();
 	var cellW = ICON_W + 2; // padding similar to main shell
 	var cellH = ICON_H + labelH + 1; // top/bottom padding
 	var cols = Math.max(1, Math.floor((o.width - 2) / cellW));
@@ -756,25 +767,26 @@ Mail.prototype._destroyIconCells = function(){
 
 function pad(str,len,ch){ if(ch===undefined) ch=' '; if(str.length>len) return str.substr(0,len); while(str.length<len) str+=ch; return str; }
 
-Mail.prototype.cleanup = function() {
+Mail.prototype._cleanup = function() {
 	this._destroyPromptFrames();
 	this._destroyIconCells();
 	this._resetState();
-	try { 
-		if (typeof console.clear_hotspots === 'function') console.clear_hotspots(); 
+	try {
+		if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
 	} catch(e){}
 	if(this.outputFrame) {
-		this.outputFrame.clear();
-		this.outputFrame.close(); 
+		try { this.outputFrame.clear(); } catch(_e){}
+		try { this.outputFrame.close(); } catch(_e2){}
 		this.outputFrame = null;
 	}
 	if(this.inputFrame) {
-		this.inputFrame.clear();
-		this.inputFrame.close(); 
+		try { this.inputFrame.clear(); } catch(_e3){}
+		try { this.inputFrame.close(); } catch(_e4){}
 		this.inputFrame = null;
 	}
-	if(this.parentFrame) this.parentFrame.cycle();
-	Subprogram.prototype.cleanup.call(this);
+	if(this.parentFrame) {
+		try { this.parentFrame.cycle(); } catch(_e5){}
+	}
 };
 
 Mail.prototype._resetState = function() {
@@ -791,11 +803,19 @@ Mail.prototype._resetState = function() {
 
 Mail.prototype.exit = function(){
 	log('exiting mail');
-	// Clear hotspots registered by this subprogram before delegating
-	if (typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch(e){} }
-	// Subprogram.exit() will invoke the done callback passed to enter()
-	this.cleanup();
+	if (typeof console.clear_hotspots === 'function') {
+		try { console.clear_hotspots(); } catch(e){}
+	}
+	var shell = this.shell;
 	Subprogram.prototype.exit.call(this);
+	if(shell){
+		if(shell._pendingSubLaunch && shell._pendingSubLaunch.instance === this){
+			shell._pendingSubLaunch = null;
+		}
+		if(shell.activeSubprogram === this){
+			shell.exitSubprogram();
+		}
+	}
 };
 
 // Export constructor globally
