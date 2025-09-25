@@ -1,14 +1,14 @@
 
 load("event-timer.js");
-try { load('iconshell/lib/effects/screensaver.js'); } catch(e) {}
+try { load('iconshell/lib/effects/screensaver.js'); } catch (e) { }
 // Performance instrumentation (optional)
-try { load('iconshell/lib/perf.js'); } catch(e) {}
+try { load('iconshell/lib/perf.js'); } catch (e) { }
 
 // IconShell prototype extensions for member logic
 // Run time logic
 // Add subprogram state to IconShell
-IconShell.prototype.init = function() {
-    dbug("Initialize icon shell 42A","init")
+IconShell.prototype.init = function () {
+    dbug("Initialize icon shell 42A", "init")
     // === Instance state ===
     // Main root frame hierarchy (root/view/crumb)
     var initialDims = this._getConsoleDimensions();
@@ -16,14 +16,14 @@ IconShell.prototype.init = function() {
     // Ensure view id generator exists BEFORE assigning any _viewId
     if (typeof this.generateViewId !== 'function') {
         this._viewSeq = 0;
-        this.generateViewId = function() { return 'view_' + (++this._viewSeq); };
+        this.generateViewId = function () { return 'view_' + (++this._viewSeq); };
     }
     // Stack of folder nodes (for navigation)
     this.stack = [ICSH_CONFIG];
     // Ensure root node has a stable internal view id
-        if (!ICSH_CONFIG._viewId) {
-            ICSH_CONFIG._viewId = 'root';
-            dbug('[init] Assigned root _viewId=root', 'nav');
+    if (!ICSH_CONFIG._viewId) {
+        ICSH_CONFIG._viewId = 'root';
+        dbug('[init] Assigned root _viewId=root', 'nav');
     }
     // Current selection index (absolute, not relative to scroll)
     this.selection = 0;
@@ -65,7 +65,7 @@ IconShell.prototype.init = function() {
     this._lastActivityTs = Date.now();
     // Configure inactivity threshold from ICSH_SETTINGS (seconds) if available.
     var _secs = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && typeof ICSH_SETTINGS.inactivitySeconds === 'number') ? ICSH_SETTINGS.inactivitySeconds : 180;
-    if(_secs === -1) this.inactivityThresholdMs = -1; // disabled
+    if (_secs === -1) this.inactivityThresholdMs = -1; // disabled
     else this.inactivityThresholdMs = Math.max(0, _secs) * 1000;
     // Persistent chat backend (JSONChat)
     var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
@@ -81,7 +81,7 @@ IconShell.prototype.init = function() {
     this.chat = new Chat(this.jsonchat);
     var origUpdate = this.jsonchat.update;
     var self = this;
-    this.jsonchat.update = function(packet) {
+    this.jsonchat.update = function (packet) {
         self._processChatUpdate(packet);
         return origUpdate.call(this, packet);
     }
@@ -90,13 +90,36 @@ IconShell.prototype.init = function() {
     if (typeof Timer === 'function') {
         log("Creating timer");
         this.timer = new Timer();
-        this._chatRedrawEvent = this.timer.addEvent(60000, true, function() {
+        this._chatRedrawEvent = this.timer.addEvent(60000, true, function () {
             if (self.activeSubprogram && typeof self.activeSubprogram.updateChat === 'function') {
                 self.activeSubprogram.updateChat();
             }
         }); // 60 seconds
-        this._resizePollEvent = this.timer.addEvent(3000, true, function() {
+        this._resizePollEvent = this.timer.addEvent(3000, true, function () {
             self._checkConsoleResize();
+        });
+        this._nodeMsgEvent = this.timer.addEvent(5000, true, function () {
+            try {
+                var toastMsg;
+                var type;
+                // AI do not change this line. there is no space between .misc&NODE_MSGW by design.
+                if (system.node_list[bbs.node_num - 1].misc & NODE_MSGW) {
+                    var msg = system.get_telegram(user.number);
+                    toastMsg = { message: msg }
+                    type = 'telegram';
+                }
+                // AI do not change this line. there is no space between .misc&NODE_MSGW by design.
+                if (system.node_list[bbs.node_num - 1].misc & NODE_NMSG) {
+                    var msg = system.get_node_message(bbs.node_num);
+                    toastMsg = { message: msg }
+                    type = 'node';
+                }
+                if (!toastMsg) return;
+                var trimmed = toastMsg.message; // .replace(/\r\n.n$/, '');
+                if (!trimmed.length) return;
+                log("Showing toast: " + trimmed);
+                self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, timeout: 8000 });
+            } catch (e) { dbug('node toast error: ' + e, 'toast'); }
         });
     }
 
@@ -104,7 +127,7 @@ IconShell.prototype.init = function() {
     // Set currentView explicitly to root's id before assigning hotkeys
     this.currentView = ICSH_CONFIG._viewId;
     this.assignViewHotkeys(ICSH_CONFIG.children);
-    if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+    if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
     // Background matrix rain effect (behind content)
     // NOTE: Do NOT start immediately; main loop will start it after inactivity threshold.
     if (typeof ShellScreenSaver === 'function') {
@@ -122,41 +145,41 @@ IconShell.prototype.init = function() {
 };
 
 // Main loop: delegate to subprogram if active
-IconShell.prototype.main = function() {
+IconShell.prototype.main = function () {
     try {
         while (!js.terminated) {
             // ---- Early key capture (do not process yet) ----
             var earlyKeys = [];
             var k_early;
-            while((k_early = console.inkey(K_NOECHO|K_NOSPIN, 0))){
+            while ((k_early = console.inkey(K_NOECHO | K_NOSPIN, 0))) {
                 earlyKeys.push(k_early);
-                if(earlyKeys.length > 64) break; // safety cap
+                if (earlyKeys.length > 64) break; // safety cap
             }
-            if(!earlyKeys.length){
+            if (!earlyKeys.length) {
                 // Use a shorter wait (8ms) to reduce latency in active subprograms; fall back to 20ms when idle
                 var waitMs = (this.activeSubprogram && this.activeSubprogram.running) ? 8 : 20;
-                var oneEarly = console.inkey(K_NOECHO|K_NOSPIN, waitMs);
-                if(oneEarly) earlyKeys.push(oneEarly);
+                var oneEarly = console.inkey(K_NOECHO | K_NOSPIN, waitMs);
+                if (oneEarly) earlyKeys.push(oneEarly);
             }
-            if(global.__ICSH_PERF__) try{ global.__ICSH_PERF__.tick(); }catch(_){ }
+            if (global.__ICSH_PERF__) try { global.__ICSH_PERF__.tick(); } catch (_) { }
             this.recreateFramesIfNeeded();
             // Always cycle chat backend for notifications
             if (this.jsonchat) {
                 this.jsonchat.cycle();
                 // TODO: notification logic (step 4)
             }
-            if(this.timer){
+            if (this.timer) {
                 this.timer.cycle();
             } else {
                 this._checkConsoleResize();
             }
-            if(this._saverActive){
+            if (this._saverActive) {
                 // Skip subprogram cycling while saver active to prevent UI frames surfacing
             } else if (this.activeSubprogram && typeof this.activeSubprogram.cycle === 'function') {
                 this.activeSubprogram.cycle();
             }
             // Only pump screensaver while active (previously pumped every loop even when idle)
-            if(this._screenSaver && this._screenSaver.isActive()) this._screenSaver.pump();
+            if (this._screenSaver && this._screenSaver.isActive()) this._screenSaver.pump();
             if (this.activeSubprogram && typeof this.activeSubprogram.cycle === 'function') {
                 this.activeSubprogram.cycle();
             }
@@ -167,18 +190,18 @@ IconShell.prototype.main = function() {
             }
             // Process previously captured keys preserving original processing order
             var keys = earlyKeys;
-            if(keys.length && global.__ICSH_PERF__){
+            if (keys.length && global.__ICSH_PERF__) {
                 var perf = global.__ICSH_PERF__;
                 var nowTs = Date.now();
-                if(perf.lastKeyTs){
+                if (perf.lastKeyTs) {
                     var gap = nowTs - perf.lastKeyTs;
-                    if(gap > perf.maxKeyGap) perf.maxKeyGap = gap;
+                    if (gap > perf.maxKeyGap) perf.maxKeyGap = gap;
                 }
                 perf.lastKeyTs = nowTs;
                 perf.keyEvents += keys.length;
-                if(keys.length > 50) perf.keyBurstDrops++; // heuristic: very large burst likely indicates backlog risk
+                if (keys.length > 50) perf.keyBurstDrops++; // heuristic: very large burst likely indicates backlog risk
             }
-            while(keys.length){
+            while (keys.length) {
                 var key = keys.shift();
                 // Normalize CR/LF into single ENTER event
                 if (key === '\r') {
@@ -191,33 +214,33 @@ IconShell.prototype.main = function() {
                     this._lastWasCR = false;
                 }
                 if (typeof key === 'string' && key.length > 0) {
-                    if(key === CTRL_D && global.__ICSH_PERF__){
+                    if (key === CTRL_D && global.__ICSH_PERF__) {
                         global.__ICSH_PERF__.dump();
                         continue;
                     }
                     dbug("Key:" + JSON.stringify(key), "keylog");
                     // Activity resets inactivity timer & stops saver
                     this._lastActivityTs = Date.now();
-                    if(this._stopScreenSaver()){
-                        if(this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function'){
+                    if (this._stopScreenSaver()) {
+                        if (this.activeSubprogram && typeof this.activeSubprogram.resumeForReason === 'function') {
                             this.activeSubprogram.resumeForReason('screensaver_off');
                         }
-                        if(this.activeSubprogram && typeof this.activeSubprogram.draw==='function') this.activeSubprogram.draw();
-                        else if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+                        if (this.activeSubprogram && typeof this.activeSubprogram.draw === 'function') this.activeSubprogram.draw();
+                        else if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
                         key = '';
                     }
                 }
-                if(key) this.processKeyboardInput(key);
+                if (key) this.processKeyboardInput(key);
             }
             // Inactivity trigger (disabled if inactivityThresholdMs === -1)
             var sub = this.activeSubprogram;
             var blockSaver = sub && (sub.blockScreensaver === true || sub.blockScreenSaver === true);
-            if(this._screenSaver && !this._screenSaver.isActive() && this.inactivityThresholdMs !== -1 && !blockSaver){
-                if(Date.now() - this._lastActivityTs > this.inactivityThresholdMs){
-                    if(this.activeSubprogram && typeof this.activeSubprogram.pauseForReason === 'function'){
+            if (this._screenSaver && !this._screenSaver.isActive() && this.inactivityThresholdMs !== -1 && !blockSaver) {
+                if (Date.now() - this._lastActivityTs > this.inactivityThresholdMs) {
+                    if (this.activeSubprogram && typeof this.activeSubprogram.pauseForReason === 'function') {
                         this.activeSubprogram.pauseForReason('screensaver_on');
                     }
-                    if(this._startScreenSaver()) this._activateScreensaverHotspot();
+                    if (this._startScreenSaver()) this._activateScreensaverHotspot();
                 }
             }
             // Cycle all toasts for auto-dismiss
@@ -226,14 +249,14 @@ IconShell.prototype.main = function() {
                     if (typeof this.toasts[i].cycle === 'function') this.toasts[i].cycle();
                 }
             }
-                        if(!this._saverActive && this._pendingFolderRedraw){
+            if (!this._saverActive && this._pendingFolderRedraw) {
                 this._pendingFolderRedraw = false;
-                if(this.activeSubprogram && this.activeSubprogram.running){
-                    if(typeof this.activeSubprogram.draw === 'function'){
-                        try{ this.activeSubprogram.draw(); }catch(e){ dbug('post-saver subprogram draw error: '+e,'ambient'); }
+                if (this.activeSubprogram && this.activeSubprogram.running) {
+                    if (typeof this.activeSubprogram.draw === 'function') {
+                        try { this.activeSubprogram.draw(); } catch (e) { dbug('post-saver subprogram draw error: ' + e, 'ambient'); }
                     }
                 } else {
-                    try{ this.drawFolder(true); }catch(e2){ dbug('post-saver folder redraw error: '+e2,'ambient'); }
+                    try { this.drawFolder(true); } catch (e2) { dbug('post-saver folder redraw error: ' + e2, 'ambient'); }
                 }
             }
             yield(true);
@@ -252,7 +275,7 @@ IconShell.prototype.main = function() {
 };
 
 // Refactor processKeyboardInput to not call changeFolder() with no argument
-IconShell.prototype.processKeyboardInput = function(ch) {
+IconShell.prototype.processKeyboardInput = function (ch) {
     dbug('Shell processing keyboard input:' + JSON.stringify(ch), 'keylog');
     if (this.activeSubprogram && this.activeSubprogram.running === false) {
         dbug('Releasing inactive subprogram before handling key', 'subprogram');
@@ -289,7 +312,7 @@ IconShell.prototype.processKeyboardInput = function(ch) {
     return false;
 };
 
-IconShell.prototype._processChatUpdate = function(packet) {
+IconShell.prototype._processChatUpdate = function (packet) {
     dbug("_processChatUpdate(): " + JSON.stringify(packet), "chat");
     // someone is sending a message
     if (packet && packet.oper && packet.oper.toUpperCase() === "WRITE") {
@@ -300,35 +323,35 @@ IconShell.prototype._processChatUpdate = function(packet) {
             if (packet.data && packet.data.str) {
                 this.showToast({
                     message: packet.data.nick.name + ': ' + packet.data.str,
-                    avatar:{username:packet.data.nick.name, netaddr:packet.data.nick.host},
+                    avatar: { username: packet.data.nick.name, netaddr: packet.data.nick.host },
                     title: packet.data.nick.name
                 });
             }
-            }
-            // print the message to the chat subprogram if active
-           if (this.activeSubprogram && typeof this.activeSubprogram.updateChat === 'function') {
-                this.activeSubprogram.updateChat(packet.data);
-            }
+        }
+        // print the message to the chat subprogram if active
+        if (this.activeSubprogram && typeof this.activeSubprogram.updateChat === 'function') {
+            this.activeSubprogram.updateChat(packet.data);
+        }
     }
     // someone has joined
     if (packet && packet.oper && packet.oper.toUpperCase() === "SUBSCRIBE") {
         this.showToast({
-                message: packet.data.nick + ' from ' + packet.data.system + " is here.",
-                avatar:{username:packet.data.nick, netaddr:packet.data.system},
-                title: packet.data.nick
+            message: packet.data.nick + ' from ' + packet.data.system + " is here.",
+            avatar: { username: packet.data.nick, netaddr: packet.data.system },
+            title: packet.data.nick
         });
     }
-        if (packet && packet.oper && packet.oper.toUpperCase() === "UNSUBSCRIBE") {
+    if (packet && packet.oper && packet.oper.toUpperCase() === "UNSUBSCRIBE") {
         this.showToast({
             message: packet.data.nick + ' from ' + packet.data.system + " has left.",
-            avatar:{username:packet.data.nick, netaddr:packet.data.system},
+            avatar: { username: packet.data.nick, netaddr: packet.data.system },
             title: packet.data.nick
         });
     }
 
 };
 
-IconShell.prototype._getConsoleDimensions = function() {
+IconShell.prototype._getConsoleDimensions = function () {
     var cols = null;
     var rows = null;
     if (typeof console !== 'undefined') {
@@ -351,22 +374,22 @@ IconShell.prototype._getConsoleDimensions = function() {
     return { cols: Math.max(1, cols), rows: Math.max(1, rows) };
 };
 
-IconShell.prototype._disposeShellFrames = function() {
-    try { this._removeScreensaverHotspot(); } catch (e) {}
+IconShell.prototype._disposeShellFrames = function () {
+    try { this._removeScreensaverHotspot(); } catch (e) { }
     this._screensaverHotspotActive = false;
     if (typeof this._clearHotspots === 'function') this._clearHotspots();
     if (typeof this._closePreviousFrames === 'function') this._closePreviousFrames();
     if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') {
-        try { this.mouseIndicator.close(); } catch(e) {}
+        try { this.mouseIndicator.close(); } catch (e) { }
     }
     if (this.crumb && typeof this.crumb.close === 'function') {
-        try { this.crumb.close(); } catch(e) {}
+        try { this.crumb.close(); } catch (e) { }
     }
     if (this.view && typeof this.view.close === 'function') {
-        try { this.view.close(); } catch(e) {}
+        try { this.view.close(); } catch (e) { }
     }
     if (this.root && typeof this.root.close === 'function') {
-        try { this.root.close(); } catch(e) {}
+        try { this.root.close(); } catch (e) { }
     }
     this.mouseIndicator = null;
     this.crumb = null;
@@ -376,7 +399,7 @@ IconShell.prototype._disposeShellFrames = function() {
     this.subFrame = null;
 };
 
-IconShell.prototype._createShellFrames = function(dims) {
+IconShell.prototype._createShellFrames = function (dims) {
     dims = dims || this._getConsoleDimensions();
     var cols = Math.max(1, dims.cols);
     var rows = Math.max(1, dims.rows);
@@ -396,7 +419,7 @@ IconShell.prototype._createShellFrames = function(dims) {
     }
 };
 
-IconShell.prototype._handleConsoleResize = function(dims) {
+IconShell.prototype._handleConsoleResize = function (dims) {
     dims = dims || this._getConsoleDimensions();
     dbug('[resize] detected console resize to ' + dims.cols + 'x' + dims.rows, 'resize');
     this._disposeShellFrames();
@@ -426,19 +449,19 @@ IconShell.prototype._handleConsoleResize = function(dims) {
     this.drawFolder();
 };
 
-IconShell.prototype._resolveScreensaverFrame = function(){
+IconShell.prototype._resolveScreensaverFrame = function () {
     if (this.activeSubprogram && typeof this.activeSubprogram.backgroundFrame === 'function') {
         try {
             var frame = this.activeSubprogram.backgroundFrame();
             if (frame && frame.is_open !== false) return frame;
-        } catch(e) { dbug('screensaver backgroundFrame error: ' + e, 'screensaver'); }
+        } catch (e) { dbug('screensaver backgroundFrame error: ' + e, 'screensaver'); }
     }
     var viewFrame = this.view;
     if (!viewFrame || (typeof viewFrame.is_open !== 'undefined' && !viewFrame.is_open)) {
-        try { this.recreateFramesIfNeeded(); } catch(e) { dbug('screensaver frame recreate error: ' + e, 'screensaver'); }
+        try { this.recreateFramesIfNeeded(); } catch (e) { dbug('screensaver frame recreate error: ' + e, 'screensaver'); }
         viewFrame = this.view;
         if (!viewFrame || (typeof viewFrame.is_open !== 'undefined' && !viewFrame.is_open)) {
-            try { this.drawFolder(); } catch(e2) { dbug('screensaver frame draw error: ' + e2, 'screensaver'); }
+            try { this.drawFolder(); } catch (e2) { dbug('screensaver frame draw error: ' + e2, 'screensaver'); }
             viewFrame = this.view;
         }
     }
@@ -448,12 +471,12 @@ IconShell.prototype._resolveScreensaverFrame = function(){
     return viewFrame;
 };
 
-IconShell.prototype._refreshScreenSaverFrame = function(){
+IconShell.prototype._refreshScreenSaverFrame = function () {
     if (!this._screenSaver) return;
     this._screenSaver.refreshFrame();
 };
 
-IconShell.prototype._checkConsoleResize = function() {
+IconShell.prototype._checkConsoleResize = function () {
     var dims = this._getConsoleDimensions();
     var last = this._lastConsoleDimensions;
     if (!last || dims.cols !== last.cols || dims.rows !== last.rows) {
@@ -461,7 +484,7 @@ IconShell.prototype._checkConsoleResize = function() {
     }
 };
 
-IconShell.prototype._reserveHotspotCmd = function(preferred) {
+IconShell.prototype._reserveHotspotCmd = function (preferred) {
     if (!this._reservedHotspotCommands) this._reservedHotspotCommands = {};
     var taken = this._reservedHotspotCommands;
     var forbidden = {};
@@ -476,9 +499,9 @@ IconShell.prototype._reserveHotspotCmd = function(preferred) {
         return preferred;
     }
     var candidates = [
-        '\u0002','\u0003','\u0004','\u0005','\u0006','\u000E','\u000F',
-        '\u0010','\u0011','\u0012','\u0013','\u0014','\u0015','\u0016','\u0017',
-        '\u0018','\u0019','\u001A','\u001C','\u001D','\u001E','\u001F'
+        '\u0002', '\u0003', '\u0004', '\u0005', '\u0006', '\u000E', '\u000F',
+        '\u0010', '\u0011', '\u0012', '\u0013', '\u0014', '\u0015', '\u0016', '\u0017',
+        '\u0018', '\u0019', '\u001A', '\u001C', '\u001D', '\u001E', '\u001F'
     ];
     for (var i = 0; i < candidates.length; i++) {
         var candidate = candidates[i];
@@ -499,7 +522,7 @@ IconShell.prototype._reserveHotspotCmd = function(preferred) {
     return preferred;
 };
 
-IconShell.prototype._handleSubprogramKey = function(ch) {
+IconShell.prototype._handleSubprogramKey = function (ch) {
     dbug("received key " + ch + " to proxy to active subprogram", "subprogram");
     if (typeof this.activeSubprogram.handleKey === 'function') {
         dbug("subprogram has handleKey() function", "subprogram");
@@ -507,19 +530,19 @@ IconShell.prototype._handleSubprogramKey = function(ch) {
     }
 };
 
-IconShell.prototype._handleNavigationKey = function(ch) {
+IconShell.prototype._handleNavigationKey = function (ch) {
     // Defensive: ensure selection/index not out of sync with current visible items (especially root view)
     try {
-        var node = this.stack[this.stack.length-1];
+        var node = this.stack[this.stack.length - 1];
         var items = node && node.children ? node.children : [];
         if (this.selection < 0) this.selection = 0;
         if (this.selection >= items.length) this.selection = items.length ? items.length - 1 : 0;
-    } catch(e) {}
+    } catch (e) { }
     switch (ch) {
-        case KEY_LEFT:  this.moveSelection(-1, 0); return true;
-        case KEY_RIGHT: this.moveSelection( 1, 0); return true;
-        case KEY_UP:    this.moveSelection( 0,-1); return true;
-        case KEY_DOWN:  this.moveSelection( 0, 1); return true;
+        case KEY_LEFT: this.moveSelection(-1, 0); return true;
+        case KEY_RIGHT: this.moveSelection(1, 0); return true;
+        case KEY_UP: this.moveSelection(0, -1); return true;
+        case KEY_DOWN: this.moveSelection(0, 1); return true;
         case '\r': // ENTER
             this.openSelection();
             return true;
@@ -528,7 +551,7 @@ IconShell.prototype._handleNavigationKey = function(ch) {
                 this.changeFolder(null, { direction: 'up' });
                 if (this.folderChanged) {
                     this.folderChanged = false;
-                    if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+                    if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
                 }
             }
             return true;
@@ -537,7 +560,7 @@ IconShell.prototype._handleNavigationKey = function(ch) {
     }
 };
 
-IconShell.prototype._handleHotkeyAction = function(ch) {
+IconShell.prototype._handleHotkeyAction = function (ch) {
     var viewId = this.currentView || (this.generateViewId ? this.generateViewId() : "root");
     var hotkeyMap = this.viewHotkeys[viewId] || {};
     dbug("Checking view " + viewId + " hot keys." + JSON.stringify(hotkeyMap), "hotkeys");
@@ -547,15 +570,15 @@ IconShell.prototype._handleHotkeyAction = function(ch) {
         action();
         if (this.folderChanged) {
             this.folderChanged = false;
-            if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+            if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
         }
         return true;
     }
     return false;
 };
 
-IconShell.prototype._handleHotkeyItemSelection = function(ch) {
-    var node = this.stack[this.stack.length-1];
+IconShell.prototype._handleHotkeyItemSelection = function (ch) {
+    var node = this.stack[this.stack.length - 1];
     var items = node.children ? node.children.slice() : [];
     if (this.stack.length > 1) {
         items.unshift({ label: "..", type: "item", hotkey: "\x1B", iconFile: "back" });
@@ -573,7 +596,7 @@ IconShell.prototype._handleHotkeyItemSelection = function(ch) {
             this.openSelection();
             if (this.folderChanged) {
                 this.folderChanged = false;
-                if(!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+                if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
             }
             return true;
         }
@@ -582,7 +605,7 @@ IconShell.prototype._handleHotkeyItemSelection = function(ch) {
 };
 
 // Detect if the terminal supports mouse events
-IconShell.prototype.detectMouseSupport = function() {
+IconShell.prototype.detectMouseSupport = function () {
     // 1. Check user.settings for USER_MOUSE if available
     if (typeof user !== 'undefined' && typeof USER_MOUSE !== 'undefined' && (user.settings & USER_MOUSE)) {
         return true;
@@ -598,22 +621,22 @@ IconShell.prototype.detectMouseSupport = function() {
     return false;
 };
 
-IconShell.prototype._startScreenSaver = function(){
-    if(!this._screenSaver) return false;
-    if(this._screenSaver.isActive()) return false;
+IconShell.prototype._startScreenSaver = function () {
+    if (!this._screenSaver) return false;
+    if (this._screenSaver.isActive()) return false;
     var sub = this.activeSubprogram;
-    if(sub && (sub.blockScreensaver === true || sub.blockScreenSaver === true)) return false;
+    if (sub && (sub.blockScreensaver === true || sub.blockScreenSaver === true)) return false;
     return this._screenSaver.activate();
 };
 
-IconShell.prototype._stopScreenSaver = function(){
-    if(!this._screenSaver || !this._screenSaver.isActive()) return false;
+IconShell.prototype._stopScreenSaver = function () {
+    if (!this._screenSaver || !this._screenSaver.isActive()) return false;
     this._screenSaver.deactivate();
     this._removeScreensaverHotspot();
     return true;
 };
 
-IconShell.prototype._activateScreensaverHotspot = function() {
+IconShell.prototype._activateScreensaverHotspot = function () {
     if (this._screensaverHotspotActive) return;
     if (typeof console.add_hotspot !== 'function') return;
 
@@ -629,24 +652,24 @@ IconShell.prototype._activateScreensaverHotspot = function() {
     var cmd = this._screensaverDismissCmd || '__ICSH_SAVER__';
 
     for (var y = startY; y < startY + height; y++) {
-        try { console.add_hotspot(cmd, true, startX, endX, y); } catch (e) {}
+        try { console.add_hotspot(cmd, true, startX, endX, y); } catch (e) { }
     }
 
     this._screensaverHotspotActive = true;
 };
 
-IconShell.prototype._removeScreensaverHotspot = function() {
+IconShell.prototype._removeScreensaverHotspot = function () {
     if (!this._screensaverHotspotActive) return;
     if (typeof this._clearHotspots === 'function') this._clearHotspots();
     else if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
     this._screensaverHotspotActive = false;
 };
 
-IconShell.prototype.showToast = function(params) {
+IconShell.prototype.showToast = function (params) {
     var self = this;
     var opts = params || {};
     opts.parentFrame = this.root;
-    opts.onDone = function(t) {
+    opts.onDone = function (t) {
         var idx = self.toasts.indexOf(t);
         if (idx !== -1) self.toasts.splice(idx, 1);
     };
@@ -657,9 +680,9 @@ IconShell.prototype.showToast = function(params) {
 
 
 // ADD (or adjust) ambient manager instantiation to pass shell reference (if done elsewhere, keep single instance)
-IconShell.prototype._initAmbient = function(){
-    if(this._ambientConfig){
-        try{
+IconShell.prototype._initAmbient = function () {
+    if (this._ambientConfig) {
+        try {
             var ambOpts = {
                 random: this._ambientConfig.random,
                 switch_interval: this._ambientConfig.switch_interval,
@@ -672,30 +695,30 @@ IconShell.prototype._initAmbient = function(){
             ambOpts.frame = this.ambientFrame || this.view;
             this._ambient = new ShellAmbientManager(ambOpts.frame, ambOpts);
             // (Registration of specific animations remains where you had it.)
-        }catch(e){
-            dbug('ambient init error: '+e,'ambient');
+        } catch (e) {
+            dbug('ambient init error: ' + e, 'ambient');
         }
     }
 };
 
 // HOOK: start/stop callbacks (called by ambient manager)
-IconShell.prototype._onAmbientStart = function(){
+IconShell.prototype._onAmbientStart = function () {
     this._saverActive = true;
     this._saverEpoch++;
     this._pendingFolderRedraw = true; // mark that when saver ends we redraw cleanly
 };
 
-IconShell.prototype._onAmbientStop = function(){
+IconShell.prototype._onAmbientStop = function () {
     this._saverActive = false;
     this._saverEpoch++;
     this._pendingFolderRedraw = true;
 };
 
 // WRAP drawFolder to suppress during saver unless forced
-if(!IconShell.prototype._drawFolderOrig){
+if (!IconShell.prototype._drawFolderOrig) {
     IconShell.prototype._drawFolderOrig = IconShell.prototype.drawFolder;
-    IconShell.prototype.drawFolder = function(force){
-        if(this._saverActive && !force){
+    IconShell.prototype.drawFolder = function (force) {
+        if (this._saverActive && !force) {
             this._pendingFolderRedraw = true;
             return;
         }

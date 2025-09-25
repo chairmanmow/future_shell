@@ -471,6 +471,7 @@ MessageBoard.prototype._resetState = function() {
     this._readScroll = 0;
     this._readBodyText = '';
     this._readBodyLineCache = null;
+    this._readBodyLineCacheWidth = 0;
     this._frameCycleEvent = null;
     this._readNoticeFrame = null;
     this._readNoticeEvent = null;
@@ -802,13 +803,148 @@ MessageBoard.prototype._renderReadView = function(msg) {
 MessageBoard.prototype._setReadBodyText = function(text){
     this._readBodyText = text || '';
     this._readBodyLineCache = null;
+    this._readBodyLineCacheWidth = 0;
 };
 
 MessageBoard.prototype._getReadLines = function(){
-    if(this._readBodyLineCache) return this._readBodyLineCache;
+    var frame = this._readBodyFrame || this.outputFrame || null;
+    var wrapWidth = 80;
+    if(frame && typeof frame.width === 'number' && frame.width > 0){
+        wrapWidth = Math.min(80, Math.max(10, frame.width));
+    }
+    if(this._readBodyLineCache && this._readBodyLineCacheWidth === wrapWidth) return this._readBodyLineCache;
     var raw = this._readBodyText || '';
-    this._readBodyLineCache = raw.length ? raw.split(/\r?\n/) : [];
+    var baseLines = raw.length ? raw.split(/\r?\n/) : [];
+    var wrapped = [];
+    for(var i=0;i<baseLines.length;i++){
+        var line = baseLines[i];
+        if(!line || !line.length){
+            wrapped.push('');
+            continue;
+        }
+        if(typeof word_wrap === 'function'){
+            try {
+                var wrappedStr = word_wrap(line, wrapWidth, null, false);
+                if(typeof wrappedStr === 'string' && wrappedStr.length){
+                    var parts = wrappedStr.replace(/\r/g,'').split('\n');
+                    for(var p=0;p<parts.length;p++){
+                        if(parts[p] === '' && p === parts.length-1) continue;
+                        wrapped.push(parts[p]);
+                    }
+                    continue;
+                }
+            } catch(e){}
+        }
+        if(line.length > wrapWidth){
+            var chunked = line.match(new RegExp('.{1,' + wrapWidth + '}', 'g'));
+            if(chunked && chunked.length){
+                for(var c=0;c<chunked.length;c++) wrapped.push(chunked[c]);
+                continue;
+            }
+        }
+        wrapped.push(line);
+    }
+    this._readBodyLineCache = wrapped;
+    this._readBodyLineCacheWidth = wrapWidth;
     return this._readBodyLineCache;
+};
+
+MessageBoard.prototype._ensureQuoteColorPalette = function(){
+    if(this._quoteColorPalette && this._quoteColorPalette.length) return this._quoteColorPalette;
+    var palette = [];
+    var candidates = [
+        (typeof BLUE === 'number' ? BLUE : undefined),
+        (typeof GREEN === 'number' ? GREEN : undefined),
+        (typeof CYAN === 'number' ? CYAN : undefined),
+        (typeof RED === 'number' ? RED : undefined),
+        (typeof MAGENTA === 'number' ? MAGENTA : undefined),
+        (typeof BROWN === 'number' ? BROWN : undefined),
+        (typeof LIGHTBLUE === 'number' ? LIGHTBLUE : undefined),
+        (typeof LIGHTGREEN === 'number' ? LIGHTGREEN : undefined),
+        (typeof LIGHTCYAN === 'number' ? LIGHTCYAN : undefined),
+        (typeof LIGHTRED === 'number' ? LIGHTRED : undefined),
+        (typeof LIGHTMAGENTA === 'number' ? LIGHTMAGENTA : undefined),
+        (typeof YELLOW === 'number' ? YELLOW : undefined),
+        (typeof WHITE === 'number' ? WHITE : undefined)
+    ];
+    for(var i=0;i<candidates.length;i++){
+        var c = candidates[i];
+        if(typeof c !== 'number') continue;
+        if(typeof BLACK === 'number' && c === BLACK) continue;
+        if(typeof DARKGRAY === 'number' && c === DARKGRAY) continue;
+        if(palette.indexOf(c) === -1) palette.push(c);
+    }
+    if(!palette.length && typeof WHITE === 'number') palette.push(WHITE);
+    this._quoteColorPalette = palette;
+    return palette;
+};
+
+MessageBoard.prototype._quoteColorAttrFor = function(token, salt, baseAttr){
+    var palette = this._ensureQuoteColorPalette();
+    if(!palette.length) return (typeof WHITE === 'number' ? WHITE : 7) | (typeof BG_BLACK === 'number' ? BG_BLACK : 0);
+    var str = (token || '').toUpperCase();
+    var hash = 0;
+    for(var i=0;i<str.length;i++){ hash = ((hash << 5) - hash) + str.charCodeAt(i); hash |= 0; }
+    hash += salt || 0;
+    var idx = Math.abs(hash) % palette.length;
+    var color = palette[idx];
+    if(typeof color !== 'number') color = (typeof WHITE === 'number') ? WHITE : 7;
+    var attr = color & 0x0F;
+    var base = (typeof baseAttr === 'number') ? baseAttr : 0;
+    attr |= (base & 0x70);
+    attr |= (base & 0x80);
+    return attr;
+};
+
+MessageBoard.prototype._writeReadLineWithQuoteColors = function(frame, text){
+    if(!frame){ return; }
+    if(typeof text !== 'string' || !text.length){ frame.putmsg(text || ''); return; }
+    var pattern = /(\s|^)([A-Za-z]{2})(>)(\s)/g;
+    var lastIndex = 0;
+    var currentAttr = frame.attr;
+    var self = this;
+    function writeDefault(segment){
+        if(!segment) return;
+        frame.attr = currentAttr;
+        frame.putmsg(segment);
+        currentAttr = frame.attr;
+    }
+    function writeHighlight(segment, attr){
+        if(!segment) return;
+        var restore = currentAttr;
+        frame.attr = attr;
+        frame.putmsg(segment);
+        frame.attr = restore;
+        currentAttr = restore;
+    }
+    var match;
+    while((match = pattern.exec(text)) !== null){
+        var start = match.index;
+        if(start > lastIndex){
+            writeDefault(text.substring(lastIndex, start));
+        }
+        var leading = match[1];
+        var user = match[2];
+        var caret = match[3];
+        var trailing = match[4];
+        if(leading && leading !== '^'){
+            writeDefault(leading);
+        }
+        var token = (user || '').toUpperCase();
+        var baseAttr = currentAttr;
+        var userAttr = self._quoteColorAttrFor(token, 0, baseAttr);
+        writeHighlight(user, userAttr);
+        var caretAttr = self._quoteColorAttrFor(token, 17, baseAttr);
+        writeHighlight(caret, caretAttr);
+        if(trailing){
+            writeDefault(trailing);
+        }
+        lastIndex = pattern.lastIndex;
+    }
+    if(lastIndex < text.length){
+        writeDefault(text.substring(lastIndex));
+    }
+    frame.attr = currentAttr;
 };
 
 MessageBoard.prototype._readMessageBody = function(msgbase, header){
@@ -864,7 +1000,7 @@ MessageBoard.prototype._paintRead = function(){
         if(line.length>f.width) line=line.substr(0,f.width);
         try {
             f.gotoxy(1,lineY);
-            f.putmsg(line);
+            this._writeReadLineWithQuoteColors(f, line);
         } catch(e){
             var err = (e && e.message) ? e.message : e;
             dbug('MessageBoard: paintRead putmsg error ' + err, 'messageboard');
