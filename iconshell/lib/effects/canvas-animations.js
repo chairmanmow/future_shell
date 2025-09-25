@@ -699,6 +699,57 @@ RecursiveTunnel.prototype.dispose = function(){};
 
 // FigletMessage: render text using FIGlet/tdfonts
 
+var FIGLET_SHADE_CODES = [176, 177, 178];
+function _figletBuildColorPalette(){
+    var candidates = [
+        (typeof BLUE !== 'undefined' ? BLUE : undefined),
+        (typeof GREEN !== 'undefined' ? GREEN : undefined),
+        (typeof CYAN !== 'undefined' ? CYAN : undefined),
+        (typeof RED !== 'undefined' ? RED : undefined),
+        (typeof MAGENTA !== 'undefined' ? MAGENTA : undefined),
+        (typeof BROWN !== 'undefined' ? BROWN : undefined),
+        (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : undefined),
+        (typeof LIGHTBLUE !== 'undefined' ? LIGHTBLUE : undefined),
+        (typeof LIGHTGREEN !== 'undefined' ? LIGHTGREEN : undefined),
+        (typeof LIGHTCYAN !== 'undefined' ? LIGHTCYAN : undefined),
+        (typeof LIGHTRED !== 'undefined' ? LIGHTRED : undefined),
+        (typeof LIGHTMAGENTA !== 'undefined' ? LIGHTMAGENTA : undefined),
+        (typeof YELLOW !== 'undefined' ? YELLOW : undefined),
+        (typeof WHITE !== 'undefined' ? WHITE : undefined)
+    ];
+    var palette = [];
+    for(var i=0;i<candidates.length;i++)
+    {
+        var c = candidates[i];
+        if(typeof c !== 'number') continue;
+        if(typeof BLACK === 'number' && c === BLACK) continue;
+        if(typeof DARKGRAY === 'number' && c === DARKGRAY) continue;
+        if(typeof LIGHTGRAY === 'number' && c === LIGHTGRAY) continue;
+        if(palette.indexOf(c) === -1) palette.push(c);
+    }
+    if(!palette.length && typeof WHITE === 'number') palette.push(WHITE);
+    return palette;
+}
+function _figletBuildBackgroundPalette(){
+    var candidates = [
+        (typeof BG_BLUE !== 'undefined' ? BG_BLUE : undefined),
+        (typeof BG_GREEN !== 'undefined' ? BG_GREEN : undefined),
+        (typeof BG_CYAN !== 'undefined' ? BG_CYAN : undefined),
+        (typeof BG_RED !== 'undefined' ? BG_RED : undefined),
+        (typeof BG_MAGENTA !== 'undefined' ? BG_MAGENTA : undefined),
+        (typeof BG_BROWN !== 'undefined' ? BG_BROWN : undefined)
+    ];
+    var palette = [];
+    for(var i=0;i<candidates.length;i++)
+    {
+        var bg = candidates[i];
+        if(typeof bg !== 'number') continue;
+        if(palette.indexOf(bg) === -1) palette.push(bg);
+    }
+    if(!palette.length && typeof BG_BLUE === 'number') palette.push(BG_BLUE);
+    return palette;
+}
+
 function FigletMessage(){
 	this.f = null;
 	this.tdf = null;
@@ -709,7 +760,8 @@ function FigletMessage(){
 	this.tickCounter = 0;
 	this.box = null;
 	this.inner = null;
-	this.colorPalette = [LIGHTRED, YELLOW, LIGHTMAGENTA, LIGHTCYAN, WHITE];
+	this.colorPalette = _figletBuildColorPalette();
+	this._shadeBackgrounds = _figletBuildBackgroundPalette();
 	this.colorsEnabled = true;
 	this.moveEnabled = true;
 	this.dx = 0.45;
@@ -719,7 +771,9 @@ function FigletMessage(){
 	this.contentWidth = 10;
 	this.contentHeight = 1;
 	this.currentColorIndex = -1;
-	this.currentColor = WHITE;
+	this.currentColor = (typeof WHITE === 'number') ? WHITE : 7;
+	this._colorQueue = [];
+	this.borderEnabled = false;
 }
 FigletMessage.prototype.init = function(frame, opts){
 	this.f = frame;
@@ -737,6 +791,8 @@ FigletMessage.prototype.init = function(frame, opts){
 	this.fontPool = this._parseFonts(opts);
 	this.colorsEnabled = opts.figlet_colors !== false;
 	this.moveEnabled = opts.figlet_move !== false;
+	if(opts.figlet_border === true || opts.figlet_border === 'true') this.borderEnabled = true;
+	else if(opts.figlet_border === false || opts.figlet_border === 'false') this.borderEnabled = false;
 	var customDx = parseFloat(opts.figlet_dx);
 	var customDy = parseFloat(opts.figlet_dy);
 	if(!isNaN(customDx)) this.dx = customDx || 0;
@@ -927,13 +983,91 @@ FigletMessage.prototype._wrapPlainMessage = function(text, maxWidth, maxHeight){
 	return lines.slice(0, heightLimit);
 };
 FigletMessage.prototype._selectColor = function(){
-	if(!this.colorsEnabled || !this.colorPalette.length){
-		this.currentColor = WHITE;
+	if(!this.colorsEnabled){
+		this.currentColor = (typeof WHITE === 'number') ? WHITE : 7;
+		this.currentColorIndex = -1;
+		this._colorQueue = [];
 		return;
 	}
-	this.currentColorIndex = (this.currentColorIndex + 1) % this.colorPalette.length;
-	this.currentColor = this.colorPalette[this.currentColorIndex] || WHITE;
+	var palette = (this.colorPalette && this.colorPalette.length) ? this.colorPalette : _figletBuildColorPalette();
+	if(!palette.length){
+		this.currentColor = (typeof WHITE === 'number') ? WHITE : 7;
+		this.currentColorIndex = -1;
+		this._colorQueue = [];
+		return;
+	}
+	if(!this._colorQueue || !this._colorQueue.length){
+		this._colorQueue = palette.slice();
+		for(var i=this._colorQueue.length-1;i>0;i--){
+			var j = Math.floor(Math.random()*(i+1));
+			var tmp = this._colorQueue[i];
+			this._colorQueue[i] = this._colorQueue[j];
+			this._colorQueue[j] = tmp;
+		}
+	}
+	var nextColor = this._colorQueue.shift();
+	if(typeof nextColor !== 'number') nextColor = palette[0];
+	this.currentColor = (typeof nextColor === 'number') ? nextColor : ((typeof WHITE === 'number') ? WHITE : 7);
+	this.currentColorIndex = palette.indexOf(this.currentColor);
+	if(this.currentColorIndex < 0 && palette.length){
+		this.currentColorIndex = 0;
+		this.currentColor = palette[0];
+	}
 };
+FigletMessage.prototype._pickShadeBackground = function(fg){
+    var pool = (this._shadeBackgrounds && this._shadeBackgrounds.length) ? this._shadeBackgrounds : _figletBuildBackgroundPalette();
+    if(!pool.length) return 0;
+    var baseFg = fg & 0x07;
+    var filtered = [];
+    for(var i=0;i<pool.length;i++){
+        var bg = pool[i];
+        var baseBg = (bg >> 4) & 0x0F;
+        if(baseBg !== baseFg) filtered.push(bg);
+    }
+    var candidates = filtered.length ? filtered : pool;
+    var idx = Math.floor(Math.random() * candidates.length);
+    if(idx >= candidates.length) idx = candidates.length - 1;
+    return candidates[idx];
+};
+
+FigletMessage.prototype._getCharAttr = function(ch){
+    var fg = this.colorsEnabled ? (this.currentColor || ((typeof WHITE === 'number') ? WHITE : 7)) : ((typeof WHITE === 'number') ? WHITE : 7);
+    var attr = fg;
+    if(this.colorsEnabled && ch && ch.charCodeAt){
+        var code = ch.charCodeAt(0);
+        if(FIGLET_SHADE_CODES.indexOf(code) !== -1){
+            var bg = this._pickShadeBackground(fg);
+            if(typeof bg === 'number' && bg !== 0){
+                attr = fg | bg;
+            }
+        }
+    }
+    return attr;
+};
+
+FigletMessage.prototype._isTransparentChar = function(ch, attr){
+	if(!ch || ch === ' ') return true;
+	if(typeof attr !== 'number') return false;
+	var fgNibble = attr & 0x0F;
+	var bgNibble = (attr >> 4) & 0x0F;
+	var blackNibble = (typeof BLACK === 'number') ? (BLACK & 0x0F) : 0;
+	var bgBlackNibble = (typeof BG_BLACK === 'number') ? ((BG_BLACK >> 4) & 0x0F) : blackNibble;
+	if(fgNibble === blackNibble && bgNibble === bgBlackNibble) return true;
+	return false;
+};
+
+FigletMessage.prototype._clearFrame = function(frame){
+    if(!frame) return;
+    var w = frame.width || 0;
+    var h = frame.height || 0;
+    for(var y=0; y<h; y++){
+        for(var x=0; x<w; x++){
+            var refresh = (x === w-1 && y === h-1);
+            try { frame.setData(x, y, undefined, 0, refresh); } catch(e){}
+        }
+    }
+};
+
 FigletMessage.prototype._createFrames = function(preservePosition){
 	var prevX = this.posX;
 	var prevY = this.posY;
@@ -948,7 +1082,7 @@ FigletMessage.prototype._createFrames = function(preservePosition){
 	var boxWidth = Math.min(this.f.width, Math.max(4, innerWidth + 2));
 	this.box = new Frame(1, 1, boxWidth, boxHeight, BG_BLACK|LIGHTGRAY, this.f);
 	this.box.transparent = true;
-	if(typeof this.box.drawBorder === 'function') this.box.drawBorder();
+	if(this.borderEnabled && typeof this.box.drawBorder === 'function') this.box.drawBorder();
 	if(typeof this.box.open === 'function') this.box.open();
 	else if(typeof this.box.show === 'function') this.box.show();
 	if(typeof this.box.top === 'function') this.box.top();
@@ -979,23 +1113,23 @@ FigletMessage.prototype._updatePosition = function(){
 };
 FigletMessage.prototype._draw = function(){
 	if(!this.box || !this.inner) return;
-	try { this.box.clear(); } catch(e){}
-	// if(typeof this.box.drawBorder === 'function'){
-	// 	this.box.attr = BG_BLACK|LIGHTGRAY;
-	// 	try { this.box.drawBorder(); } catch(e){}
-	// }
-	try { this.inner.clear(); } catch(e){}
-	var lineCount = Math.min(this.lines.length, this.inner.height);
-	for(var i=0;i<lineCount;i++){
-		var line = this.lines[i];
-		if(line.length > this.inner.width) line = line.substr(0, this.inner.width);
-		var trimmed = line.replace(/\s+$/,'');
-		var startX = Math.max(1, Math.floor((this.inner.width - trimmed.length)/2) + 1);
-		this.inner.gotoxy(startX, i+1);
-		var color = this.currentColor || WHITE;
-		this.inner.attr = color | BG_BLACK;
-		this.inner.putmsg(trimmed);
-		// this.inner.makeContentTransparent();
+	this._clearFrame(this.inner);
+	var maxW = this.inner.width;
+	var maxH = this.inner.height;
+	var lineCount = Math.min(this.lines.length, maxH);
+	for(var row=0; row<lineCount; row++){
+		var rawLine = this.lines[row] || '';
+		if(rawLine.length > maxW) rawLine = rawLine.substr(0, maxW);
+		var trimmed = rawLine.replace(/\s+$/,'');
+		var start = Math.max(0, Math.floor((maxW - trimmed.length)/2));
+		for(var col=0; col<trimmed.length && (start + col) < maxW; col++){
+			var ch = trimmed.charAt(col);
+			var attr = this._getCharAttr(ch);
+			if(this._isTransparentChar(ch, attr)) continue;
+			try {
+				this.inner.setData(start + col, row, ch, attr, false);
+			} catch(e){}
+		}
 	}
 	try {
 		this.inner.cycle();

@@ -2040,19 +2040,31 @@ MessageBoard.prototype._buildThreadSequence = function(rootId){
         if(!num) return null;
         if(self._fullHeaders && self._fullHeaders[num]) return self._fullHeaders[num];
         try {
-            if(!mb){ mb = new MsgBase(code); if(!mb.open()){ mb = null; return null; } }
+            if(!mb){
+                mb = new MsgBase(code);
+                if(!mb.open()){
+                    mb = null;
+                    return null;
+                }
+            }
             var hdr = mb.get_msg_header(false, num, true);
-            if(hdr){ self._storeFullHeader(hdr); return hdr; }
+            if(hdr){
+                self._storeFullHeader(hdr);
+                return hdr;
+            }
         } catch(e){}
         return self._fullHeaders[num] || null;
     }
 
     var root = ensureHeader(rootId);
-    if(!root){ if(mb){ try { mb.close(); } catch(e){} } return []; }
+    if(!root){
+        if(mb){ try { mb.close(); } catch(e){} }
+        return [];
+    }
 
     var sequence = [];
     var visited = {};
-    function traverse(node){
+    function traverseThreadLinks(node){
         if(!node || visited[node.number]) return;
         visited[node.number] = true;
         sequence.push(node);
@@ -2061,14 +2073,20 @@ MessageBoard.prototype._buildThreadSequence = function(rootId){
             if(visited[childNum]) break;
             var child = ensureHeader(childNum);
             if(!child) break;
-            traverse(child);
+            traverseThreadLinks(child);
             var nextNum = child.thread_next;
             if(!nextNum || visited[nextNum]) break;
             childNum = nextNum;
         }
     }
 
-    traverse(root);
+    traverseThreadLinks(root);
+
+    if(sequence.length <= 1){
+        var fallback = this._buildThreadSequenceByReplies(root, ensureHeader);
+        if(fallback && fallback.length > sequence.length) sequence = fallback;
+    }
+
     if(mb){ try { mb.close(); } catch(e){} }
     if(!sequence.length) return [];
     this._threadSequenceCache[cacheKey] = sequence;
@@ -2077,6 +2095,170 @@ MessageBoard.prototype._buildThreadSequence = function(rootId){
 
 
 
+
+MessageBoard.prototype._buildThreadSequenceByReplies = function(root, ensureHeader){
+	if(!root || typeof ensureHeader !== 'function') return [];
+	var self = this;
+	var headerList = (this.threadHeaders && this.threadHeaders.length) ? this.threadHeaders : [];
+	var registered = {};
+	var childrenById = {};
+	var childrenByNum = {};
+
+	function addChild(map, key, hdr){
+		if(!key || !hdr) return;
+		if(!map[key]) map[key] = [];
+		if(map[key].indexOf(hdr) === -1) map[key].push(hdr);
+	}
+
+	function registerHeader(hdr){
+		if(!hdr || typeof hdr.number !== 'number' || registered[hdr.number]) return;
+		registered[hdr.number] = true;
+		var replyIds = self._extractReplyIds(hdr);
+		for(var i=0;i<replyIds.length;i++) addChild(childrenById, replyIds[i], hdr);
+		var replyNums = self._extractReplyNumbers(hdr);
+		for(var j=0;j<replyNums.length;j++) addChild(childrenByNum, replyNums[j], hdr);
+	}
+
+	for(var idx=0; idx<headerList.length; idx++){
+		var num = headerList[idx] && headerList[idx].number;
+		if(!num || registered[num]) continue;
+		var hdr = ensureHeader(num);
+		if(hdr) registerHeader(hdr);
+	}
+	registerHeader(root);
+
+	var sequence = [];
+	var visited = {};
+
+	function collectChildren(node){
+		var candidates = [];
+		var ids = self._extractMessageIds(node);
+		for(var n=0;n<ids.length;n++){
+			var list = childrenById[ids[n]];
+			if(list && list.length) candidates = candidates.concat(list);
+		}
+		var numeric = childrenByNum[node.number];
+		if(numeric && numeric.length) candidates = candidates.concat(numeric);
+		if(!candidates.length) return [];
+		var unique = [];
+		var seen = {};
+		for(var c=0;c<candidates.length;c++){
+			var cand = candidates[c];
+			if(!cand || typeof cand.number !== 'number') continue;
+			if(visited[cand.number]) continue;
+			if(seen[cand.number]) continue;
+			seen[cand.number] = true;
+			unique.push(cand);
+		}
+		unique.sort(function(a,b){ return self._threadSortValue(a) - self._threadSortValue(b); });
+		return unique;
+	}
+
+	function walk(node){
+		if(!node || visited[node.number]) return;
+		visited[node.number] = true;
+		sequence.push(node);
+		var kids = collectChildren(node);
+		for(var k=0;k<kids.length;k++) walk(kids[k]);
+	}
+
+	walk(root);
+	return sequence;
+};
+
+MessageBoard.prototype._normalizeMessageId = function(value){
+	if(value === null || typeof value === 'undefined') return null;
+	var str = ('' + value).trim();
+	if(!str.length) return null;
+	if(str.charAt(0) === '<' && str.charAt(str.length-1) === '>') str = str.substring(1, str.length-1).trim();
+	if(!str.length) return null;
+	return str.toLowerCase();
+};
+
+MessageBoard.prototype._extractMessageIds = function(hdr){
+	var ids = [];
+	if(!hdr) return ids;
+	var fields = ['id', 'message_id', 'msgid'];
+	for(var i=0;i<fields.length;i++){
+		var val = hdr[fields[i]];
+		if(!val) continue;
+		if(val instanceof Array){
+			for(var j=0;j<val.length;j++){
+				var norm = this._normalizeMessageId(val[j]);
+				if(norm && ids.indexOf(norm) === -1) ids.push(norm);
+			}
+		}else{
+			var norm = this._normalizeMessageId(val);
+			if(norm && ids.indexOf(norm) === -1) ids.push(norm);
+		}
+	}
+	return ids;
+};
+
+MessageBoard.prototype._extractReplyIds = function(hdr){
+	var ids = [];
+	var self = this;
+	function push(val){
+		if(!val) return;
+		if(val instanceof Array){
+			for(var x=0;x<val.length;x++) push(val[x]);
+			return;
+		}
+		var str = ('' + val);
+		if(!str.length) return;
+		var matches = str.match(/<[^>]+>/g);
+		if(matches && matches.length){
+			for(var m=0;m<matches.length;m++){
+				var norm = self._normalizeMessageId(matches[m]);
+				if(norm && ids.indexOf(norm) === -1) ids.push(norm);
+			}
+			return;
+		}
+		var norm = self._normalizeMessageId(str);
+		if(norm && ids.indexOf(norm) === -1) ids.push(norm);
+	}
+	if(!hdr) return ids;
+	var fields = ['reply_id', 'replyid', 'in_reply_to', 'references', 'reply_msgid'];
+	for(var i=0;i<fields.length;i++) push(hdr[fields[i]]);
+	return ids;
+};
+
+MessageBoard.prototype._extractReplyNumbers = function(hdr){
+	var nums = [];
+	function push(val){
+		if(val === null || typeof val === 'undefined') return;
+		if(val instanceof Array){
+			for(var x=0;x<val.length;x++) push(val[x]);
+			return;
+		}
+		var str = ('' + val).trim();
+		if(!str.length) return;
+		if(!/^-?\d+$/.test(str)) return;
+		var num = parseInt(str, 10);
+		if(isNaN(num) || num <= 0) return;
+		if(nums.indexOf(num) === -1) nums.push(num);
+	}
+	if(!hdr) return nums;
+	var fields = ['reply_to', 'replyto', 'reply_num', 'reply', 'thread_back', 'thread_parent'];
+	for(var i=0;i<fields.length;i++) push(hdr[fields[i]]);
+	return nums;
+};
+
+MessageBoard.prototype._threadSortValue = function(hdr){
+	if(!hdr) return 0;
+	var fields = ['when_written_time', 'when_written', 'when_imported_time', 'when_imported', 'when_saved_time', 'when_saved'];
+	for(var i=0;i<fields.length;i++){
+		var val = hdr[fields[i]];
+		if(typeof val === 'number' && !isNaN(val)) return val;
+		if(typeof val === 'string' && val.length){
+			var num = parseInt(val, 10);
+			if(!isNaN(num)) return num;
+		}
+	}
+	if(typeof hdr.number === 'number') return hdr.number;
+	var n = parseInt(hdr.number, 10);
+	return isNaN(n) ? 0 : n;
+};
 
 MessageBoard.prototype._indexThreadTree = function(){
     this.threadNodeIndex = [];
