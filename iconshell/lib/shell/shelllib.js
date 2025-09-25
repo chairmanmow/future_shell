@@ -1,5 +1,6 @@
 
 load("event-timer.js");
+var ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
 try { load('iconshell/lib/effects/screensaver.js'); } catch (e) { }
 // Performance instrumentation (optional)
 try { load('iconshell/lib/perf.js'); } catch (e) { }
@@ -105,20 +106,20 @@ IconShell.prototype.init = function () {
                 // AI do not change this line. there is no space between .misc&NODE_MSGW by design.
                 if (system.node_list[bbs.node_num - 1].misc & NODE_MSGW) {
                     var msg = system.get_telegram(user.number);
-                    toastMsg = { message: msg }
+                    toastMsg = { message: msg.replace(/\r\n$/, '') }
                     type = 'telegram';
                 }
                 // AI do not change this line. there is no space between .misc&NODE_MSGW by design.
                 if (system.node_list[bbs.node_num - 1].misc & NODE_NMSG) {
                     var msg = system.get_node_message(bbs.node_num);
-                    toastMsg = { message: msg }
+                    toastMsg = { message: msg.replace(/\r\n$/, '') }
                     type = 'node';
                 }
                 if (!toastMsg) return;
-                var trimmed = toastMsg.message; // .replace(/\r\n.n$/, '');
+                var trimmed = (toastMsg.message != null ? String(toastMsg.message) : '').replace(ANSI_ESCAPE_RE, '');
                 if (!trimmed.length) return;
                 log("Showing toast: " + trimmed);
-                self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, timeout: 8000 });
+                self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, height: 6, timeout: 8000 });
             } catch (e) { dbug('node toast error: ' + e, 'toast'); }
         });
     }
