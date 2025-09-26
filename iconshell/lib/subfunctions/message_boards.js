@@ -1,13 +1,8 @@
-// Hello World demo subprogram to validate Subprogram framework.
-// Behavior:
-// 1. Shows greeting and asks for name.
-// 2. Mirrors keystrokes in input frame until ENTER.
-// 3. Greets user by name and prompts to press any key to exit.
-// 4. ESC at any time aborts immediately.
-
 load('sbbsdefs.js');
 load("iconshell/lib/subfunctions/subprogram.js");
 load("iconshell/lib/util/debug.js");
+load('iconshell/lib/subfunctions/message_board_ui.js');
+load('iconshell/lib/subfunctions/message_board_views.js');
 if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';
 if (typeof KEY_BACKSPACE === 'undefined') var KEY_BACKSPACE = '\b';
@@ -107,6 +102,8 @@ var GROUPING_PREFIXES = ['RE: ', 'Re: ', 'FW: ', 'FWD: '];
 function MessageBoard(opts) {
     opts = opts || {};
     this.blockScreenSaver = false;
+    this.frameSet = null;
+    this.overlay = null;
     Subprogram.call(this, { name: 'message-board', parentFrame: opts.parentFrame, shell: opts.shell });
     this._init();
 }
@@ -116,11 +113,9 @@ extend(MessageBoard, Subprogram);
 MessageBoard.prototype.enter = function (done) {
     var self = this;
     this._done = (typeof done === 'function') ? done : function () { };
-
-    Subprogram.prototype.enter.call(this, function () { if (typeof done === 'function') done(); });
-    // Re-bootstrap state so a reused instance starts fresh
+    // Reset state before base enter so initial draw uses fresh data
     this._init(true);
-    this.draw();
+    Subprogram.prototype.enter.call(this, function () { if (typeof done === 'function') done(); });
     if (this.autoCycle) {
         try { this.cycle(); } catch (e) { }
     }
@@ -268,13 +263,22 @@ MessageBoard.prototype._cancelFrameCycle = function () {
 };
 
 MessageBoard.prototype._ensureFrames = function () {
+    if (this.frameSet) {
+        this.frameSet.ensure();
+        return;
+    }
+    if (typeof MessageBoardUI !== 'undefined' && MessageBoardUI && MessageBoardUI.FrameSet) {
+        this.frameSet = new MessageBoardUI.FrameSet(this);
+        this.frameSet.ensure();
+        return;
+    }
+    // Fallback to legacy behaviour if FrameSet unavailable
     if (this.outputFrame && this.outputFrame.is_open) return;
     var pf = this.hostFrame || this.rootFrame || null;
     var x = pf ? pf.x : 1;
     var y = pf ? pf.y : 1;
     var w = pf ? pf.width : console.screen_columns;
     var h = pf ? pf.height : console.screen_rows;
-    // Reserve one line for input/status
     this.outputFrame = new Frame(x, y, w, h - 1, BG_BLACK | LIGHTGRAY, pf);
     this.setBackgroundFrame(this.outputFrame);
     this.inputFrame = new Frame(x, y + h - 1, w, 1, BG_BLUE | WHITE, pf);
@@ -283,7 +287,64 @@ MessageBoard.prototype._ensureFrames = function () {
     this._writeStatus('Message Boards: ' + this.view);
 };
 
+MessageBoard.prototype._ensureViewControllers = function () {
+    if (this._viewControllers && this._viewControllersOwner === this) return this._viewControllers;
+    var map = {};
+    if (typeof MessageBoardViews !== 'undefined' && MessageBoardViews) {
+        try {
+            if (typeof MessageBoardViews.createViewMap === 'function') {
+                map = MessageBoardViews.createViewMap(this) || {};
+            } else if (typeof MessageBoardViews.createLegacyViewMap === 'function') {
+                map = MessageBoardViews.createLegacyViewMap(this) || {};
+            }
+        } catch (_createErr) { map = {}; }
+    }
+    this._viewControllers = map;
+    this._viewControllersOwner = this;
+    return this._viewControllers;
+};
+
+MessageBoard.prototype._getViewController = function (viewId) {
+    if (!viewId) return null;
+    var map = this._ensureViewControllers();
+    if (!map) return null;
+    if (map.hasOwnProperty(viewId)) return map[viewId];
+    return null;
+};
+
+MessageBoard.prototype._deactivateActiveViewController = function (context) {
+    if (!this._activeViewController) return;
+    try {
+        if (typeof this._activeViewController.exit === 'function') {
+            this._activeViewController.exit(context || {});
+        }
+    } catch (_exitErr) { }
+    this._activeViewController = null;
+    this._activeViewId = null;
+};
+
+MessageBoard.prototype._activateViewController = function (viewId, args) {
+    var controller = this._getViewController(viewId);
+    if (!controller) return null;
+    if (this._activeViewController && this._activeViewController !== controller) {
+        try {
+            if (typeof this._activeViewController.exit === 'function') {
+                this._activeViewController.exit({ next: viewId, args: args });
+            }
+        } catch (_switchErr) { }
+    }
+    if (this._activeViewController !== controller) {
+        this._activeViewController = controller;
+        this._activeViewId = controller.id || viewId;
+    }
+    return controller;
+};
+
 MessageBoard.prototype.draw = function () {
+    if (this.overlay && this.overlay.isActive()) {
+        this.overlay.refresh();
+        return;
+    }
     this._renderCurrentView(this.view);
 };
 
@@ -300,6 +361,8 @@ MessageBoard.prototype.exit = function () {
 };
 
 MessageBoard.prototype._handleKey = function (key) {
+    if (this.overlay && this.overlay.isActive()) return false;
+    if (this._navigationLock) return true;
     if (!key) return true;
     if (this.view === 'read' && this._consumeReadNoticeKey && this._consumeReadNoticeKey(key)) return true;
     if (this._navSearchActive) {
@@ -310,7 +373,6 @@ MessageBoard.prototype._handleKey = function (key) {
         if (this.view === 'group') {
             if (this.items.length && this.items[0].type === 'quit') {
                 this.selection = 0; // highlight quit
-                this._paintIconGrid();
                 this.exit();
                 return false;
             }
@@ -320,18 +382,12 @@ MessageBoard.prototype._handleKey = function (key) {
         } else if (this.view === 'sub') {
             if (this.items.length && this.items[0].type === 'groups') {
                 this.selection = 0; // highlight groups pseudo-item
-                this._paintIconGrid();
-                this._renderGroupView();
-                return false;
             }
-            // fallback: go to groups anyway
             this._renderGroupView();
             return false;
         } else if (this.view === 'threads') {
             this._renderSubView(this.curgrp); return false;
         } else if (this.view === 'read') {
-            // Ensure read-specific frames are removed so thread view can redraw cleanly
-            if (this._destroyReadFrames) { try { this._destroyReadFrames(); } catch (e) { } }
             this._renderThreadsView(this.cursub); return false;
         } else if (this.view === 'search') {
             this._exitSearchResults();
@@ -367,9 +423,6 @@ MessageBoard.prototype._handleKey = function (key) {
             return false;
         }
         if (idx === 'read-sub-icon') {
-            if (this.view === 'read' && typeof this._destroyReadFrames === 'function') {
-                try { this._destroyReadFrames(); } catch (e) { }
-            }
             this._renderSubView(this.curgrp);
             return false;
         }
@@ -412,13 +465,16 @@ MessageBoard.prototype._handleKey = function (key) {
             return true;
         }
     }
+    var controller = this._getViewController(this.view);
+    if (controller && typeof controller.handleKey === 'function') {
+        var handled = controller.handleKey.call(controller, key);
+        if (typeof handled !== 'undefined') return handled;
+    }
     switch (this.view) {
         case 'group': return this._handleGroupKey(key);
         case 'sub': return this._handleSubKey(key);
         case 'threads':
-            // Use tree view if built; fallback to legacy flat list
-            if (this.threadTree) return this._handleThreadTreeKey(key);
-            return this._handleThreadsKey(key);
+            return true;
         case 'search': return this._handleSearchKey(key);
         case 'read': return this._handleReadKey(key);
         default: return true;
@@ -426,20 +482,36 @@ MessageBoard.prototype._handleKey = function (key) {
 };
 
 MessageBoard.prototype._cleanup = function () {
+    this._endViewTransition();
+    this._deactivateActiveViewController({ reason: 'cleanup' });
+    this._viewControllersOwner = null;
+    this._viewControllers = null;
+    this._hideTransitionNotice({ skipRepaint: true });
     try { this._destroyReadFrames && this._destroyReadFrames(); } catch (e) { }
     this._destroyThreadUI();
     this._hideReadNotice({ skipRepaint: true });
     this._cancelFrameCycle();
     try { this._clearIconGrid && this._clearIconGrid(); } catch (e) { }
-    try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
-    try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
+    if (this.frameSet && typeof this.frameSet.close === 'function') {
+        this.frameSet.close();
+    } else {
+        try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
+        try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
+        this.outputFrame = null;
+        this.inputFrame = null;
+    }
     this._resetState();
 };
 
 MessageBoard.prototype._resetState = function () {
+    this._endViewTransition();
+    this._hideTransitionNotice({ skipRepaint: true });
     this.outputFrame = null;
     this.inputFrame = null;
     this.view = 'group';
+    this._activeViewController = null;
+    this._activeViewId = null;
+    this._navigationLock = false;
     this.selection = 0; this.scrollOffset = 0;
     this.items = [];
     this._hotspotMap = {};
@@ -477,7 +549,12 @@ MessageBoard.prototype._resetState = function () {
     this._readNoticeFrame = null;
     this._readNoticeEvent = null;
     this._readNoticeActive = false;
-}
+    this._subUnreadCounts = {};
+    this._readNoticeContainer = null;
+    this._transitionNoticeFrame = null;
+    this._transitionNoticeActive = false;
+    this._transitionNoticeContainer = null;
+};
 
 MessageBoard.prototype._releaseHotspots = function () {
     if (typeof console.clear_hotspots === 'function') {
@@ -487,10 +564,18 @@ MessageBoard.prototype._releaseHotspots = function () {
 };
 
 MessageBoard.prototype._init = function (reentry) {
+    if (!this.frameSet && typeof MessageBoardUI !== 'undefined' && MessageBoardUI && MessageBoardUI.FrameSet) {
+        this.frameSet = new MessageBoardUI.FrameSet(this);
+    }
+    if (!this.overlay && typeof MessageBoardUI !== 'undefined' && MessageBoardUI && MessageBoardUI.TransitionOverlay) {
+        this.overlay = new MessageBoardUI.TransitionOverlay(this);
+    }
+    this._endViewTransition();
     if (reentry) this._cancelFrameCycle();
     this._hideReadNotice({ skipRepaint: true });
     this.outputFrame = null;
     this.inputFrame = null;
+    this._navigationLock = false;
     this.cursub = bbs.cursub_code;
     this.curgrp = bbs.curgrp;
     this.view = 'group';
@@ -525,6 +610,14 @@ MessageBoard.prototype._init = function (reentry) {
     this._cachedSubCode = null;
     this._threadHeadersCache = {};
     this._subMessageCounts = {};
+    this._subUnreadCounts = {};
+    this._readNoticeFrame = null;
+    this._readNoticeEvent = null;
+    this._readNoticeActive = false;
+    this._readNoticeContainer = null;
+    this._transitionNoticeFrame = null;
+    this._transitionNoticeActive = false;
+    this._transitionNoticeContainer = null;
     this._setReadBodyText('');
     this._readScroll = 0;
     this._readSubIconFrame = null;
@@ -533,6 +626,10 @@ MessageBoard.prototype._init = function (reentry) {
     this._buildHotspotCharSet();
     // Default to no artificial cap; hotspot mapping handles visible rows only
     this.threadHeaderLimit = 0;
+    if (reentry) this._deactivateActiveViewController({ reason: 'reinit' });
+    this._viewControllersOwner = null;
+    this._viewControllers = null;
+    this._ensureViewControllers();
     if (reentry) this._releaseHotspots();
 };
 
@@ -560,246 +657,37 @@ MessageBoard.prototype._changeGroup = function (group) {
 }
 
 MessageBoard.prototype._renderCurrentView = function (view) {
-    switch (view) {
-        case 'group':
-            this._renderGroupView();
-            break;
-        case 'sub':
-            this._renderSubView();
-            break;
-        case 'threads':
-            this._renderThreadsView();
-            break;
-        case 'search':
-            this._renderSearchResults(true);
-            break;
-        case 'read':
-            this._renderReadView();
-            break;
-        case 'post':
-            this._renderPostView();
-            break;
-        default:
-            this._renderGroupView();
-            break;
-    }
-}
-
-MessageBoard.prototype._renderGroupView = function (groups) {
-    // Render a grid of all top level message groups.
-    // Use our icon paradigm to display as clickable items in a grid.
-    // Selecting an item calls _renderSubView with that group.
-    this._ensureFrames();
-    this._destroyThreadUI();
-    this._clearIconGrid();
-    this.view = 'group';
-    // Build items from msg_area.grp_list (prepend Quit special cell)
-    var list = [];
-    list.push({
-        type: 'quit',
-        label: 'Quit',
-        hotkey: '\x1b',
-        iconFile: this._resolveBoardIcon('quit', 'quit'),
-        iconBg: BG_RED,
-        iconFg: WHITE
-    });
-    list.push({
-        type: 'search',
-        label: 'Search',
-        hotkey: 'S',
-        iconFile: this._resolveBoardIcon('search', 'search'),
-        iconBg: BG_BLUE,
-        iconFg: WHITE
-    });
-    for (var gi = 0; gi < msg_area.grp_list.length; gi++) {
-        var grp = msg_area.grp_list[gi];
-        if (!grp || !grp.sub_list || !grp.sub_list.length) continue;
-        list.push({
-            type: 'group',
-            label: grp.name.substr(0, 12),
-            hotkey: (grp.name && grp.name.length ? grp.name[0].toUpperCase() : null),
-            iconFile: this._resolveBoardIcon(grp.name, 'group'),
-            iconBg: BG_BLUE,
-            iconFg: WHITE,
-            groupIndex: gi
-        });
-    }
-    this.items = list;
-    this._computeNonSpecialOrdinals();
-    this.selection = Math.min(this.selection, this.items.length - 1);
-    this._paintIconGrid();
-    this._writeStatus('GROUPS: Enter opens subs | S=Search | ESC=Quit');
-}
-
-MessageBoard.prototype._renderSubView = function (group) {
-    this.curgrp = group;
-    this.view = 'sub';
-    // Render a grid of all the subs in the specified group.
-    // Use our icon paradigm to display as clickable items in a grid.
-    // Selecting an item (sub) calls _renderThreadsView with that group.
-    this._ensureFrames();
-    this._destroyThreadUI();
-    this._clearIconGrid();
-    var grp = msg_area.grp_list[this.curgrp];
-    var list = [];
-    // Prepend Groups pseudo-item (acts as back to group view)
-    list.push({
-        type: 'groups',
-        label: 'Groups',
-        hotkey: '\x1b',
-        iconFile: this._resolveBoardIcon('groups', 'groups'),
-        iconBg: BG_GREEN,
-        iconFg: BLACK
-    });
-    list.push({
-        type: 'search',
-        label: 'Search',
-        hotkey: 'S',
-        iconFile: this._resolveBoardIcon('search', 'search'),
-        iconBg: BG_BLUE,
-        iconFg: WHITE
-    });
-    if (!grp) grp = { sub_list: [] };
-    for (var si = 0; si < grp.sub_list.length; si++) {
-        var sub = grp.sub_list[si];
-        var subName = (sub.name || sub.code || '').substr(0, 12);
-        var totalMessages = this._getSubMessageCount(sub.code);
-        var labelInfo = this._formatSubLabel(subName, totalMessages);
-        list.push({
-            type: 'sub',
-            label: labelInfo.text,
-            hotkey: (sub.name && sub.name.length ? sub.name[0].toUpperCase() : null),
-            iconFile: this._resolveBoardIcon(sub.code || sub.name, 'sub'),
-            iconBg: BG_CYAN,
-            iconFg: BLACK,
-            subCode: sub.code,
-            _labelBase: subName,
-            _labelSegments: labelInfo.segments,
-            _messageCount: totalMessages
-        });
-    }
-    if (grp.sub_list && grp.sub_list.length && !this._lastActiveSubCode) this._lastActiveSubCode = grp.sub_list[0].code;
-    this.items = list;
-    this._computeNonSpecialOrdinals();
-    this.selection = 0; this.scrollOffset = 0;
-    this._paintIconGrid();
-    this._writeStatus('SUBS: Enter opens threads | S=Search | Backspace=Groups | ' + (this.selection + 1) + '/' + this.items.length);
-
-}
-
-MessageBoard.prototype._renderThreadsView = function (sub) {
-    var previousCode = this.cursub || this._lastActiveSubCode || this._cachedSubCode || bbs.cursub_code || null;
-    var state = this._syncSubState(sub || previousCode);
-    var code = state && state.code ? state.code : (this.cursub || this._lastActiveSubCode || bbs.cursub_code);
-    if (!code) return;
-    this.cursub = code;
-    this._lastActiveSubCode = code;
-    var subChanged = previousCode && code !== previousCode;
-    this.view = 'threads';
-    this._releaseHotspots();
-    dbug('MessageBoard: enter threads view sub=' + code, 'messageboard');
-    // Load messages in the specified sub (if not already loaded).
-    // If no messages, call _renderPostView to prompt for first post.
-    // Render a list of threads in the specified message area.
-    // Use tree.js to group messages into threads. (no icons here)
-    // Enable mouse reporting for thread selection.
-    // If use selects a thread, call _renderReadView with that message.
-    this._ensureFrames();
-    // Remove any leftover icon frames so list draws cleanly
-    this._clearIconGrid();
-    this._destroyThreadUI();
-    if (!this._fullHeaders) this._fullHeaders = {};
-    if (!this._threadSequenceCache) this._threadSequenceCache = {};
-    if (subChanged) {
-        this.threadTreeSelection = 0;
-        this.threadHeaders = [];
-        this.threadNodeIndex = [];
-        this.threadTree = null;
-        this.threadScrollOffset = 0;
-        this.threadSelection = 0;
-    }
-    this._ensureThreadSearchUI();
-    if (subChanged) {
-        this._threadSearchFocus = false;
-        this._threadSearchBuffer = '';
-    } else {
-        this._threadSearchFocus = false;
-        this._threadSearchBuffer = this._threadSearchBuffer || '';
-    }
-    this._renderThreadSearchBar();
-    var contentFrame = this._threadContentFrame || this.outputFrame;
-    // Immediate visual feedback before heavy work
-    try { contentFrame.clear(); contentFrame.gotoxy(1, 1); contentFrame.putmsg('Building thread list...'); contentFrame.cycle(); } catch (e) { }
-    this._loadThreadHeaders();
-    // Build thread tree (single branch per thread)
-    this._ensureTreeLib();
-    this._buildThreadTree();
-    if (!this.threadHeaders.length) {
-        contentFrame.clear();
-        contentFrame.gotoxy(2, 2); contentFrame.putmsg('No messages. Press P to post the first message.');
-        this._writeStatus('THREADS: P=Post  S=Search  Backspace=Subs  0/0');
-        return;
-    }
-    this.threadTreeSelection = Math.min(this.threadTreeSelection, Math.max(0, this.threadNodeIndex.length - 1));
-    if (this.threadTree && this.threadNodeIndex.length) {
-        this._paintThreadTree();
-    } else {
-        dbug('MessageBoard: thread tree empty, fallback list', 'messageboard');
-        this.threadSelection = 0; this.threadScrollOffset = 0; this._paintThreadList();
-    }
-}
-
-
-MessageBoard.prototype._renderReadView = function (msg) {
-    // log('MessageBoard: enter read view', 'messageboard', JSON.stringify(msg));
-    if (!msg) return;
-    this.view = 'read';
-    this._releaseHotspots();
-    this._hotspotMap = {};
-    this.lastReadMsg = msg;
-    this._storeFullHeader(msg);
-    if (!this.outputFrame) this._ensureFrames();
-    // Destroy prior read frames if any
-    if (this._destroyReadFrames) this._destroyReadFrames();
-    var f = this.outputFrame; f.clear();
-    // Load avatar lib
-    if (!bbs.mods) bbs.mods = {};
-    if (!bbs.mods.avatar_lib) { try { bbs.mods.avatar_lib = load({}, 'avatar_lib.js'); } catch (e) { } }
-    this._avatarLib = bbs.mods.avatar_lib || null;
-    var avh = (this._avatarLib && this._avatarLib.defs && this._avatarLib.defs.height) || 6;
-    var headerH = Math.min(avh, f.height - 1);
-    this._readHeaderFrame = new Frame(f.x, f.y, f.width, headerH, BG_BLUE | WHITE, f.parent);
-    var bodyY = this._readHeaderFrame.y + this._readHeaderFrame.height;
-    var bodyH = Math.max(1, f.y + f.height - bodyY);
-    this._readBodyFrame = new Frame(f.x, bodyY, f.width, bodyH, f.attr || (BG_BLACK | LIGHTGRAY), f.parent);
-    try { this._readHeaderFrame.open(); this._readBodyFrame.open(); } catch (e) { }
-    this._paintReadHeader && this._paintReadHeader(msg);
-    var code = this.cursub || (msg.sub || null) || this._lastActiveSubCode || bbs.cursub_code;
-    var fullHeader = msg;
-    var bodyText = '';
-    if (code && msg && typeof msg.number === 'number') {
-        var mb = new MsgBase(code);
-        if (mb.open()) {
-            try {
-                var cached = (this._fullHeaders && this._fullHeaders[msg.number]) || null;
-                if (!cached) {
-                    try { cached = mb.get_msg_header(false, msg.number, true); } catch (e) { cached = null; }
-                    if (cached) this._storeFullHeader(cached);
-                }
-                if (cached) fullHeader = cached;
-                if (fullHeader) this._storeFullHeader(fullHeader);
-                bodyText = this._readMessageBody(mb, fullHeader) || '';
-            } finally {
-                try { mb.close(); } catch (_e) { }
-            }
+    if (!view) view = this.view || 'group';
+    var args = [];
+    for (var i = 1; i < arguments.length; i++) args.push(arguments[i]);
+    var controller = this._activateViewController(view, args);
+    if (controller && typeof controller.enter === 'function') {
+        this._navigationLock = true;
+        try {
+            return controller.enter.apply(controller, args);
+        } finally {
+            this._navigationLock = false;
         }
     }
-    this.lastReadMsg = fullHeader;
-    this._updateScanPointer(fullHeader);
-    this._readScroll = 0;
-    this._setReadBodyText(bodyText);
-    this._paintRead();
-}
+    return undefined;
+};
+
+MessageBoard.prototype._renderThreadsView = function () {
+    var controller = this._getViewController('threads');
+    if (controller && typeof controller.enter === 'function') {
+        return controller.enter.apply(controller, arguments);
+    }
+    return undefined;
+};
+
+
+MessageBoard.prototype._renderReadView = function () {
+    var controller = this._getViewController('read');
+    if (controller && typeof controller.enter === 'function') {
+        return controller.enter.apply(controller, arguments);
+    }
+    return undefined;
+};
 
 MessageBoard.prototype._setReadBodyText = function (text) {
     this._readBodyText = text || '';
@@ -978,10 +866,39 @@ MessageBoard.prototype._readMessageBody = function (msgbase, header) {
 
 MessageBoard.prototype._updateScanPointer = function (header) {
     if (!header || typeof header.number !== 'number') return;
-    if (!this.cursub || !msg_area[this.curgrp] || !msg_area[this.curgrp][this.cursub]) return;
-    if (header.number > msg_area[this.curgrp][this.cursub].scan_ptr) {
-        msg_area[this.curgrp][this.cursub].scan_ptr = header.number;
+    var code = this.cursub || header.sub || header.sub_code || bbs.cursub_code || null;
+    if (!code) return;
+    var number = header.number;
+    var apply = function (obj) {
+        if (!obj) return;
+        if (typeof obj.scan_ptr !== 'number' || number > obj.scan_ptr) obj.scan_ptr = number;
+        if (typeof obj.last_read !== 'number' || number > obj.last_read) obj.last_read = number;
+    };
+    if (msg_area) {
+        if (typeof this.curgrp === 'number' && msg_area[this.curgrp] && msg_area[this.curgrp][code]) apply(msg_area[this.curgrp][code]);
+        if (msg_area.sub && msg_area.sub[code]) apply(msg_area.sub[code]);
+        var idx = this._ensureSubIndex();
+        if (idx && idx[code] && msg_area.grp_list && msg_area.grp_list[idx[code].groupIndex]) {
+            apply(msg_area.grp_list[idx[code].groupIndex].sub_list[idx[code].subIndex]);
+        }
     }
+    if (this._subUnreadCounts && this._subUnreadCounts.hasOwnProperty(code)) delete this._subUnreadCounts[code];
+};
+
+MessageBoard.prototype._renderGroupView = function () {
+    var controller = this._getViewController('group');
+    if (controller && typeof controller.enter === 'function') {
+        return controller.enter.apply(controller, arguments);
+    }
+    return undefined;
+};
+
+MessageBoard.prototype._renderSubView = function () {
+    var controller = this._getViewController('sub');
+    if (controller && typeof controller.enter === 'function') {
+        return controller.enter.apply(controller, arguments);
+    }
+    return undefined;
 };
 
 MessageBoard.prototype._paintRead = function () {
@@ -1016,54 +933,12 @@ MessageBoard.prototype._paintRead = function () {
 };
 
 MessageBoard.prototype._handleReadKey = function (key) {
-    if (this.view !== 'read') return true;
-    var f = this._readBodyFrame || this.outputFrame; var usable = f ? f.height - 1 : 20; if (usable < 1) usable = 1;
-    var lines = this._getReadLines();
-    var maxStart = Math.max(0, (lines.length - usable));
-    switch (key) {
-        case KEY_UP: this._readScroll = Math.max(0, (this._readScroll || 0) - 1); this._paintRead(); return true;
-        case KEY_DOWN: this._readScroll = Math.min(maxStart, (this._readScroll || 0) + 1); this._paintRead(); return true;
-        case KEY_PAGEUP: this._readScroll = Math.max(0, (this._readScroll || 0) - usable); this._paintRead(); return true;
-        case KEY_PAGEDN: this._readScroll = Math.min(maxStart, (this._readScroll || 0) + usable); this._paintRead(); return true;
-        case KEY_HOME: this._readScroll = 0; this._paintRead(); return true;
-        case KEY_END: this._readScroll = maxStart; this._paintRead(); return true;
-        case KEY_LEFT: // previous thread
-            if (this._openAdjacentThread(-1)) return false;
-            return true;
-        case KEY_RIGHT: // next thread
-            if (this._openAdjacentThread(1)) return false;
-            return true;
-        case KEY_ENTER:
-        case '\r':
-        case '\n':
-            if ((this._readScroll || 0) < maxStart) {
-                this._readScroll = Math.min(maxStart, (this._readScroll || 0) + usable);
-                this._paintRead();
-                return true;
-            }
-            if (this._openRelativeInThread(1)) return false;
-            if (this._openAdjacentThread(1)) return false;
-            return true;
-        case '\x7f': // DEL
-        case '\x08': // Backspace -> previous message in thread
-            if (this._openRelativeInThread(-1)) return false; // consumed
-            // If no previous message, ignore (do not exit) ; ESC reserved for exit
-            return true;
-        case '\x08': // Backspace also returns
-            // (This case now repurposed above for prev message; unreachable duplicate kept for safety)
-            return true;
-        case 'R': case 'r': // Reply to current message
-            if (this.lastReadMsg) { this._renderPostView({ replyTo: this.lastReadMsg }); return false; }
-            return true;
-        case 'P': case 'p': // New post (thread)
-            this._renderPostView(); return false;
-        case '\x12': // Ctrl-R refresh body
-            this._renderReadView(this.lastReadMsg); return true;
-        case 'S': case 's': case '/':
-            this._promptSearch(this.cursub || this._lastActiveSubCode || null, 'threads');
-            return false;
-        default: return true;
+    var controller = this._getViewController('read');
+    if (controller && typeof controller.handleKey === 'function') {
+        var handled = controller.handleKey.call(controller, key);
+        if (typeof handled !== 'undefined') return handled;
     }
+    return true;
 };
 
 // Open previous/next thread container based on threadTreeSelection delta (-1 or +1)
@@ -1150,6 +1025,7 @@ MessageBoard.prototype._openRelativeInThread = function (dir) {
 MessageBoard.prototype._consumeReadNoticeKey = function (key) {
     if (!this._readNoticeActive) return false;
     this._hideReadNotice();
+    if (key === '\x1b' || key === '\x08' || key === KEY_ESC || key === KEY_BACKSPACE) return false;
     return true;
 };
 
@@ -1157,8 +1033,6 @@ MessageBoard.prototype._showReadNotice = function (kind) {
     if (this.view !== 'read') return;
     if (!kind) return;
     this._hideReadNotice({ skipRepaint: true });
-    var host = this._readBodyFrame || this.outputFrame || this.hostFrame || this.rootFrame;
-    if (!host) return;
     var labelMap = {
         'next-message': 'Showing next message',
         'prev-message': 'Showing previous message',
@@ -1168,26 +1042,16 @@ MessageBoard.prototype._showReadNotice = function (kind) {
     var text = labelMap[kind] || labelMap['next-message'];
     var isThread = (kind.indexOf('thread') !== -1);
     var attr = (isThread ? BG_MAGENTA : BG_BLUE) | WHITE;
-    var width = Math.min(host.width, Math.max(20, text.length + 4));
-    var height = 3;
-    var x = Math.max(1, Math.floor((host.width - width) / 2) + 1);
-    var y = Math.max(1, Math.floor((host.height - height) / 2) + 1);
-    var frame = new Frame(x, y, width, height, attr, host);
-    try {
-        frame.open();
-        frame.attr = attr;
-        frame.clear();
-        var midY = Math.max(1, Math.floor((height + 1) / 2));
-        var startX = Math.max(1, Math.floor((width - text.length) / 2) + 1);
-        frame.gotoxy(startX, midY);
-        frame.putmsg(text);
-        frame.cycle();
-        try { frame.top(); } catch (_e) { }
-    } catch (e) {
-        try { frame.close(); } catch (_err) { }
+    var host = this.hostFrame || this.rootFrame || this.outputFrame || this.parentFrame || this._readBodyFrame;
+    var frames = this._createNoticeFrames(host, text, attr);
+    if (!frames) {
+        this._readNoticeFrame = null;
+        this._readNoticeContainer = null;
+        this._readNoticeActive = false;
         return;
     }
-    this._readNoticeFrame = frame;
+    this._readNoticeContainer = frames.container;
+    this._readNoticeFrame = frames.dialog;
     this._readNoticeActive = true;
     if (this.timer && typeof this.timer.addEvent === 'function') {
         var self = this;
@@ -1209,13 +1073,144 @@ MessageBoard.prototype._hideReadNotice = function (opts) {
         try { this._readNoticeFrame.close(); } catch (e) { }
         this._readNoticeFrame = null;
     }
+    if (this._readNoticeContainer) {
+        try { this._readNoticeContainer.close(); } catch (_ce) { }
+        this._readNoticeContainer = null;
+    }
     this._readNoticeActive = false;
     if (!skipRepaint && this.view === 'read' && this._readBodyFrame) {
         try { this._paintRead(); } catch (_e) { }
     }
 };
 
-MessageBoard.prototype._renderPostView = function (postOptions) {
+MessageBoard.prototype._createNoticeFrames = function (host, text, attr) {
+    if (!host) return null;
+    if (typeof host.is_open === 'boolean' && !host.is_open) host = host.parent || null;
+    if (!host) return null;
+    var hostWidth = (typeof host.width === 'number' && host.width > 0) ? host.width : ((typeof console !== 'undefined' && console && console.screen_columns) || 80);
+    var hostHeight = (typeof host.height === 'number' && host.height > 0) ? host.height : ((typeof console !== 'undefined' && console && console.screen_rows) || 24);
+    var parent = host.parent || host;
+    var coverX = (parent === host) ? 1 : ((typeof host.x === 'number' ? host.x : 1));
+    var coverY = (parent === host) ? 1 : ((typeof host.y === 'number' ? host.y : 1));
+    var cover;
+    try {
+        cover = new Frame(coverX, coverY, hostWidth, hostHeight, attr || 0, parent);
+        cover.transparent = true;
+        cover.open();
+        cover.transparent = true;
+        try { cover.top(); } catch (_coverTopErr) { }
+        try { cover.cycle(); } catch (_coverCycleErr) { }
+    } catch (_coverErr) {
+        if (cover) {
+            try { cover.close(); } catch (_coverCloseErr) { }
+        }
+        return null;
+    }
+    var textWidth = text.length + 6;
+    var dialogWidth = Math.max(20, Math.min(hostWidth, textWidth));
+    var dialogHeight = 3;
+    var dialogX = Math.max(1, Math.floor((hostWidth - dialogWidth) / 2) + 1);
+    var dialogY = Math.max(1, Math.floor((hostHeight - dialogHeight) / 2) + 1);
+    var dialog;
+    try {
+        dialog = new Frame(dialogX, dialogY, dialogWidth, dialogHeight, attr, cover);
+        dialog.open();
+        dialog.clear(attr);
+        var msgX = Math.max(1, Math.floor((dialogWidth - text.length) / 2) + 1);
+        var msgY = Math.max(1, Math.floor((dialogHeight + 1) / 2));
+        dialog.gotoxy(msgX, msgY);
+        dialog.putmsg(text);
+        try { dialog.top(); } catch (_dialogTopErr) { }
+        try { dialog.cycle(); } catch (_dialogCycleErr) { }
+        try { cover.top(); } catch (_coverTopErr2) { }
+        try { cover.cycle(); } catch (_coverCycleErr2) { }
+    } catch (_dialogErr) {
+        if (dialog) {
+            try { dialog.close(); } catch (_dialogCloseErr) { }
+        }
+        try { cover.close(); } catch (_coverCloseErr2) { }
+        return null;
+    }
+    return { container: cover, dialog: dialog };
+};
+
+MessageBoard.prototype._showTransitionNotice = function (text) {
+    text = text || 'Loading...';
+    this._hideTransitionNotice({ skipRepaint: true });
+    var attr = (typeof BG_BLUE === 'number' ? BG_BLUE : 0) | (typeof WHITE === 'number' ? WHITE : 7);
+    var host = this.hostFrame || this.rootFrame || this.outputFrame || this.parentFrame || null;
+    var frames = this._createNoticeFrames(host, text, attr);
+    if (!frames) {
+        this._transitionNoticeFrame = null;
+        this._transitionNoticeContainer = null;
+        this._transitionNoticeActive = false;
+        return false;
+    }
+    this._transitionNoticeContainer = frames.container;
+    this._transitionNoticeFrame = frames.dialog;
+    this._transitionNoticeActive = true;
+    return true;
+};
+
+MessageBoard.prototype._hideTransitionNotice = function (opts) {
+    opts = opts || {};
+    if (this._transitionNoticeFrame) {
+        try { this._transitionNoticeFrame.close(); } catch (_e) { }
+    }
+    this._transitionNoticeFrame = null;
+    if (this._transitionNoticeContainer) {
+        try { this._transitionNoticeContainer.close(); } catch (_ce) { }
+    }
+    this._transitionNoticeContainer = null;
+    this._transitionNoticeActive = false;
+};
+
+MessageBoard.prototype._renderTransitionOverlay = function () {
+    if (this.overlay && typeof this.overlay.render === 'function') {
+        this.overlay.render();
+    }
+};
+
+MessageBoard.prototype._beginViewTransition = function (label, opts) {
+    if (this.overlay && typeof this.overlay.begin === 'function') {
+        this.overlay.begin(label, opts);
+    }
+};
+
+MessageBoard.prototype._getTransitionHostFrame = function () {
+    if (this.view === 'read') {
+        if (this._readBodyFrame && this._readBodyFrame.is_open) return this._readBodyFrame;
+        if (this._readHeaderFrame && this._readHeaderFrame.is_open) return this._readHeaderFrame;
+    }
+    if (this.view === 'threads') {
+        if (this._threadContentFrame && this._threadContentFrame.is_open) return this._threadContentFrame;
+    }
+    if (this.view === 'search') {
+        if (this.outputFrame && this.outputFrame.is_open) return this.outputFrame;
+    }
+    if (this.view === 'sub' || this.view === 'group' || this.view === 'post') {
+        if (this.outputFrame && this.outputFrame.is_open) return this.outputFrame;
+    }
+    if (this.outputFrame && this.outputFrame.is_open) return this.outputFrame;
+    if (this.hostFrame && this.hostFrame.is_open) return this.hostFrame;
+    if (this.parentFrame && this.parentFrame.is_open) return this.parentFrame;
+    if (this.rootFrame && this.rootFrame.is_open) return this.rootFrame;
+    return null;
+};
+
+MessageBoard.prototype._refreshTransitionOverlay = function () {
+    if (this.overlay && typeof this.overlay.refresh === 'function') {
+        this.overlay.refresh();
+    }
+};
+
+MessageBoard.prototype._endViewTransition = function () {
+    if (this.overlay && typeof this.overlay.end === 'function') {
+        this.overlay.end();
+    }
+};
+
+MessageBoard.prototype._renderPostViewCore = function (postOptions) {
     // Delegate to built-in editor only. postOptions.replyTo (header) indicates reply.
     var sub = this.cursub || (bbs && bbs.cursub_code) || null;
     if (!sub) { this._writeStatus('POST: No sub selected'); return; }
@@ -1232,6 +1227,17 @@ MessageBoard.prototype._renderPostView = function (postOptions) {
     try { this._destroyReadFrames && this._destroyReadFrames(); } catch (e) { }
     this._renderThreadsView(sub);
 }
+
+MessageBoard.prototype._renderPostView = function () {
+    var controller = this._getViewController('post');
+    if (controller && typeof controller.enter === 'function') {
+        return controller.enter.apply(controller, arguments);
+    }
+    if (typeof this._renderPostViewCore === 'function') {
+        return this._renderPostViewCore.apply(this, arguments);
+    }
+    return undefined;
+};
 
 MessageBoard.prototype._paintReadHeader = function (msg) {
     if (!this._readHeaderFrame || !msg) return;
@@ -1747,26 +1753,12 @@ MessageBoard.prototype._executeSearch = function (code, query) {
     this._renderSearchResults();
 };
 
-MessageBoard.prototype._renderSearchResults = function (preserveState) {
-    if (this._destroyReadFrames) {
-        try { this._destroyReadFrames(); } catch (e) { }
+MessageBoard.prototype._renderSearchResults = function () {
+    var controller = this._getViewController('search');
+    if (controller && typeof controller.enter === 'function') {
+        return controller.enter.apply(controller, arguments);
     }
-    this._destroyThreadUI();
-    this._ensureFrames();
-    this._releaseHotspots();
-    this._clearIconGrid();
-    this.view = 'search';
-    if (!this.outputFrame) return;
-    if (!this._searchResults || !this._searchResults.length) {
-        try { this.outputFrame.clear(); this.outputFrame.putmsg('No matches found.'); } catch (e) { }
-        this._writeStatus('SEARCH: No matches');
-        return;
-    }
-    if (!preserveState) {
-        this._searchSelection = Math.max(0, Math.min(this._searchSelection, this._searchResults.length - 1));
-        this._searchScrollOffset = Math.min(this._searchScrollOffset, this._searchSelection);
-    }
-    this._paintSearchResults();
+    return undefined;
 };
 
 MessageBoard.prototype._paintSearchResults = function () {
@@ -1811,32 +1803,11 @@ MessageBoard.prototype._paintSearchResults = function () {
 };
 
 MessageBoard.prototype._handleSearchKey = function (key) {
-    if (this.view !== 'search') return true;
-    if (key === '\x1b' || key === '\x08') {
-        this._exitSearchResults();
-        return false;
+    var controller = this._getViewController('search');
+    if (controller && typeof controller.handleKey === 'function') {
+        var handled = controller.handleKey.call(controller, key);
+        if (typeof handled !== 'undefined') return handled;
     }
-    if (!this._searchResults || !this._searchResults.length) return true;
-    var usable = this.outputFrame ? Math.max(1, this.outputFrame.height - 2) : this._searchResults.length;
-    var oldSel = this._searchSelection;
-    if (key === KEY_UP) this._searchSelection = Math.max(0, this._searchSelection - 1);
-    else if (key === KEY_DOWN) this._searchSelection = Math.min(this._searchResults.length - 1, this._searchSelection + 1);
-    else if (key === KEY_PAGEUP) this._searchSelection = Math.max(0, this._searchSelection - usable);
-    else if (key === KEY_PAGEDN) this._searchSelection = Math.min(this._searchResults.length - 1, this._searchSelection + usable);
-    else if (key === KEY_HOME) this._searchSelection = 0;
-    else if (key === KEY_END) this._searchSelection = this._searchResults.length - 1;
-    else if (key === '\r' || key === '\n' || key === KEY_ENTER) {
-        var item = this._searchResults[this._searchSelection];
-        if (item && item.header) {
-            this._readReturnView = 'search';
-            this._syncSubState(item.code || this.cursub);
-            this._renderReadView(item.header);
-        }
-        return false;
-    } else {
-        return true;
-    }
-    if (this._searchSelection !== oldSel) this._paintSearchResults();
     return true;
 };
 
@@ -1854,11 +1825,11 @@ MessageBoard.prototype._exitSearchResults = function () {
 };
 
 MessageBoard.prototype._paintIconGrid = function () {
+    this._clearIconGrid();
     this.outputFrame.clear();
     // Clear previous hotspots
     if (typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch (e) { } }
     this._hotspotMap = {};
-    this._clearIconGrid();
     if (!this.items.length) { this.outputFrame.putmsg('No items'); return; }
     // Lazy load Icon and reuse existing icon infrastructure
     if (!this._Icon) { try { this._Icon = load('iconshell/lib/shell/icon.js').Icon || Icon; } catch (e) { try { load('iconshell/lib/shell/icon.js'); this._Icon = Icon; } catch (e2) { } } }
@@ -1874,22 +1845,58 @@ MessageBoard.prototype._paintIconGrid = function () {
         var globalIndex = this.scrollOffset + v;
         var col = idx % metrics.cols; var row = Math.floor(idx / metrics.cols);
         var x = (col * metrics.cellW) + 2; var y = (row * metrics.cellH) + 1;
-        var iconFrame = new Frame(this.outputFrame.x + x - 1, this.outputFrame.y + y - 1, metrics.iconW, metrics.iconH, (visible[v].iconBg || 0) | (visible[v].iconFg || 0), this.outputFrame);
-        var labelFrame = new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, BG_BLACK | LIGHTGRAY, this.outputFrame);
         var itemData = visible[v];
+        var inSubView = (this.view === 'sub');
+        var isSubIcon = (inSubView && itemData.type === 'sub');
+        var baseX = this.outputFrame.x + x - 1;
+        var baseY = this.outputFrame.y + y - 1;
+        var iconYOffset = inSubView ? 1 : 0;
+        var iconFrame = new Frame(baseX, baseY + iconYOffset, metrics.iconW, metrics.iconH, (itemData.iconBg || 0) | (itemData.iconFg || 0), this.outputFrame);
+        var labelFrame = new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, BG_BLACK | LIGHTGRAY, this.outputFrame);
+        var titleFrame = null;
+        if (inSubView) {
+            var titleColor = (typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : (typeof CYAN !== 'undefined' ? CYAN : WHITE);
+            titleFrame = new Frame(iconFrame.x, iconFrame.y - 1, metrics.iconW, 1, BG_BLACK | titleColor, this.outputFrame);
+            titleFrame.transparent = false;
+            if (typeof titleFrame.word_wrap !== 'undefined') titleFrame.word_wrap = false;
+            try { titleFrame.open(); } catch (_ignoredOpen) { }
+        }
         if (itemData.type === 'sub' && itemData.subCode) {
             var updated = this._getSubMessageCount(itemData.subCode);
             itemData._messageCount = updated;
             var baseName = itemData._labelBase || (itemData.label || '');
-            var refreshed = this._formatSubLabel(baseName, updated);
+            var unread = this._getSubUnreadCount ? this._getSubUnreadCount(itemData.subCode, updated) : (itemData._unreadCount || 0);
+            itemData._unreadCount = unread;
+            var refreshed = this._formatSubLabel(baseName, updated, unread);
             itemData.label = refreshed.text;
             itemData._labelSegments = refreshed.segments;
         }
         var iconObj = new this._Icon(iconFrame, labelFrame, itemData);
         iconObj.render();
-        this._iconCells.push({ icon: iconFrame, label: labelFrame, item: itemData, iconObj: iconObj });
+        var isSelected = (globalIndex === this.selection);
+        if (titleFrame) {
+            try {
+                var titleAttr = isSelected
+                    ? ((typeof WHITE !== 'undefined') ? WHITE : ((typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : LIGHTCYAN))
+                    : ((typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : ((typeof CYAN !== 'undefined') ? CYAN : WHITE));
+                var titleText = '';
+                if (itemData.type === 'sub') titleText = itemData._labelBase || itemData.title || itemData.label || '';
+                else titleText = itemData.title || itemData.label || '';
+                titleFrame.clear(BG_BLACK | titleAttr);
+                titleFrame.attr = BG_BLACK | titleAttr;
+                titleFrame.gotoxy(1, 1);
+                if (this._center) titleText = this._center(titleText, titleFrame.width);
+                else if (titleText.length > titleFrame.width) titleText = titleText.substr(0, titleFrame.width);
+                var colorSeq = isSelected
+                    ? '\x01n\x01h\x01w'
+                    : '\x01n\x01h\x01c';
+                titleFrame.putmsg(colorSeq + titleText + '\x01n');
+                try { titleFrame.cycle(); } catch (_ignoredCycle) { }
+            } catch (_ignoredTitle) { }
+        }
+        this._iconCells.push({ icon: iconFrame, label: labelFrame, title: titleFrame, item: itemData, iconObj: iconObj });
         try {
-            this._renderIconLabel(labelFrame, itemData, globalIndex === this.selection, metrics.iconW);
+            this._renderIconLabel(labelFrame, itemData, isSelected, metrics.iconW);
         } catch (e) { }
         // Hotspot mapping: ESC for special first cell; numbering starts at 1 for others (1-9 then A-Z)
         var item = itemData;
@@ -1939,6 +1946,7 @@ MessageBoard.prototype._clearIconGrid = function () {
         var c = this._iconCells[i];
         try { c.icon && c.icon.close(); } catch (e) { }
         try { c.label && c.label.close(); } catch (e) { }
+        try { c.title && c.title.close(); } catch (e) { }
     }
     this._iconCells = [];
 };
@@ -1959,6 +1967,9 @@ MessageBoard.prototype._loadThreadHeaders = function (limit) {
     try {
         var total = mb.total_msgs;
         if (!total) return;
+        var nowTs = (typeof Date !== 'undefined' && Date.now) ? Date.now() : (time() * 1000);
+        if (!this._subMessageCounts) this._subMessageCounts = {};
+        this._subMessageCounts[code] = { total: Math.max(0, parseInt(total, 10) || 0), ts: nowTs };
         if (cached && cached.total === total && cached.headers) {
             this.threadHeaders = cached.headers.slice();
             if (cached.fullHeaders) {
@@ -2001,6 +2012,14 @@ MessageBoard.prototype._loadThreadHeaders = function (limit) {
         }
     }
     this._threadHeadersCache[cacheKey] = { total: total, headers: cacheHeaders, fullHeaders: cacheFull };
+    var stats = this._getSubPointers(code);
+    var pointer = stats.pointer || 0;
+    var unread = 0;
+    for (var j = 0; j < this.threadHeaders.length; j++) {
+        if (this.threadHeaders[j].number > pointer) unread++;
+    }
+    if (!this._subUnreadCounts) this._subUnreadCounts = {};
+    this._subUnreadCounts[code] = { unread: unread, ts: nowTs };
 };
 
 MessageBoard.prototype._paintThreadList = function () {
@@ -2483,145 +2502,21 @@ MessageBoard.prototype._paintThreadTree = function () {
     this._registerThreadSearchHotspot();
 };
 
-MessageBoard.prototype._handleThreadTreeKey = function (key) {
-    if (!this.threadTree) return true;
-    switch (key) {
-        case KEY_UP:
-            this.threadTreeSelection = Math.max(0, this.threadTreeSelection - 1); this._paintThreadTree(); return true;
-        case KEY_DOWN:
-            this.threadTreeSelection = Math.min(this.threadNodeIndex.length - 1, this.threadTreeSelection + 1); this._paintThreadTree(); return true;
-        case KEY_HOME:
-            this.threadTreeSelection = 0; this._paintThreadTree(); return true;
-        case KEY_END:
-            this.threadTreeSelection = this.threadNodeIndex.length - 1; this._paintThreadTree(); return true;
-        case '\x08': // Backspace
-        case 'Q':
-        case '\x1B':
-            this._renderSubView(this.curgrp);
-            return false;
-        case '/':
-        case 'S':
-        case 's':
-            this._focusThreadSearch('');
-            return true;
-        case ' ': // Space toggles expand/collapse if tree node
-            var node = this.threadNodeIndex[this.threadTreeSelection];
-            if (node && node.__isTree) { if (node.status & node.__flags__.CLOSED) node.open(); else node.close(); this._paintThreadTree(); }
-            return true;
-        case '\r': case '\n':
-            var node2 = this.threadNodeIndex[this.threadTreeSelection];
-            if (node2) {
-                if (node2.__isTree) { // expand
-                    if (node2.status & node2.__flags__.CLOSED) node2.open(); else { // open & no children? treat as header
-                        // fallthrough to first child if exists
-                        if (node2.items && node2.items.length) { node2.open(); }
-                    }
-                    this._paintThreadTree();
-                } else if (node2.__msgHeader) {
-                    this._renderReadView(node2.__msgHeader);
-                }
-            }
-            return false;
-        case 'P': case 'p': this._renderPostView(); return false;
-        case 'R': case 'r': {
-            var sel = this.threadNodeIndex[this.threadTreeSelection];
-            if (sel && sel.__msgHeader) { this._renderPostView({ replyTo: sel.__msgHeader }); return false; }
-            return true;
-        }
-        default: return true;
-    }
-};
-
-MessageBoard.prototype._handleThreadsKey = function (key) {
-    if (!this.threadHeaders.length) {
-        if (key === 'P' || key === 'p') { this._renderPostView(); return false; }
-        if (key === '\x08') { this._renderSubView(this.curgrp); return false; }
-        return true;
-    }
-    var oldSel = this.threadSelection;
-    var f = this._threadContentFrame || this.outputFrame; var usable = f ? f.height - 2 : 10; if (usable < 3) usable = f ? f.height : 10;
-    if ((key === KEY_UP || key === KEY_PAGEUP) && this.threadSelection === 0) {
-        this._focusThreadSearch('');
-        return true;
-    }
-    switch (key) {
-        case KEY_UP: this.threadSelection = Math.max(0, this.threadSelection - 1); break;
-        case KEY_DOWN: this.threadSelection = Math.min(this.threadHeaders.length - 1, this.threadSelection + 1); break;
-        case KEY_PAGEUP: this.threadSelection = Math.max(0, this.threadSelection - usable); break;
-        case KEY_PAGEDN: this.threadSelection = Math.min(this.threadHeaders.length - 1, this.threadSelection + usable); break;
-        case KEY_HOME: this.threadSelection = 0; break;
-        case KEY_END: this.threadSelection = this.threadHeaders.length - 1; break;
-        case '\x08': // Backspace
-            this._renderSubView(this.curgrp); return false;
-        case 'P': case 'p':
-            this._renderPostView(); return false;
-        case 'R': case 'r':
-            var rh = this.threadHeaders[this.threadSelection]; if (rh) { this._renderPostView({ replyTo: rh }); }
-            return false;
-        case '\r': case '\n':
-            var hdr = this.threadHeaders[this.threadSelection]; if (hdr) { this._renderReadView(hdr); } return false;
-        default: return true;
-    }
-    if (this.threadSelection !== oldSel) this._paintThreadList();
-    return true;
-};
-
 
 MessageBoard.prototype._handleGroupKey = function (key) {
-    var metrics = this._calcGridMetrics();
-    var maxVisible = metrics.cols * metrics.rows;
-    var oldSel = this.selection;
-    if (key === KEY_LEFT) this.selection = Math.max(0, this.selection - 1);
-    else if (key === KEY_RIGHT) this.selection = Math.min(this.items.length - 1, this.selection + 1);
-    else if (key === KEY_UP) this.selection = Math.max(0, this.selection - metrics.cols);
-    else if (key === KEY_DOWN) this.selection = Math.min(this.items.length - 1, this.selection + metrics.cols);
-    else if (key === "\x0d" || key === "\n") { // Enter
-        var item = this.items[this.selection];
-        if (item) {
-            if (item.type === 'quit') { this.exit(); return false; }
-            if (item.type === 'search') { this._promptSearch(this._lastActiveSubCode || this.cursub || null, 'group'); return false; }
-            if (item.type === 'group') { this._renderSubView(item.groupIndex); return false; }
-        }
-        return false;
-    }
-    else if (key === 'S' || key === 's' || key === '/') { this._promptSearch(this._lastActiveSubCode || this.cursub || null, 'group'); return false; }
-    else if (key === KEY_PAGEUP) { this.selection = Math.max(0, this.selection - maxVisible); }
-    else if (key === KEY_PAGEDN) { this.selection = Math.min(this.items.length - 1, this.selection + maxVisible); }
-    if (this.selection !== oldSel) {
-        var current = this.items[this.selection];
-        if (current && current.subCode) this._lastActiveSubCode = current.subCode;
-        this._paintIconGrid();
+    var controller = this._getViewController('group');
+    if (controller && typeof controller.handleKey === 'function') {
+        var handled = controller.handleKey.call(controller, key);
+        if (typeof handled !== 'undefined') return handled;
     }
     return true;
 };
 
 MessageBoard.prototype._handleSubKey = function (key) {
-    var metrics = this._calcGridMetrics();
-    var maxVisible = metrics.cols * metrics.rows;
-    var oldSel = this.selection;
-    if (key === KEY_LEFT) this.selection = Math.max(0, this.selection - 1);
-    else if (key === KEY_RIGHT) this.selection = Math.min(this.items.length - 1, this.selection + 1);
-    else if (key === KEY_UP) this.selection = Math.max(0, this.selection - metrics.cols);
-    else if (key === KEY_DOWN) this.selection = Math.min(this.items.length - 1, this.selection + metrics.cols);
-    else if (key === "\x08") { // Backspace
-        this._renderGroupView();
-        return false;
-    }
-    else if (key === "\x0d" || key === "\n") { // Enter
-        var item = this.items[this.selection];
-        if (item) {
-            if (item.type === 'groups') { this._renderGroupView(); return false; }
-            if (item.type === 'sub') { this._renderThreadsView(item.subCode); return false; }
-        }
-        return false;
-    }
-    else if (key === 'S' || key === 's' || key === '/') { this._searchReturnView = 'sub'; this._promptSearch(this._lastActiveSubCode || null, 'sub'); return false; }
-    else if (key === KEY_PAGEUP) { this.selection = Math.max(0, this.selection - maxVisible); }
-    else if (key === KEY_PAGEDN) { this.selection = Math.min(this.items.length - 1, this.selection + maxVisible); }
-    if (this.selection !== oldSel) {
-        var current = this.items[this.selection];
-        if (current && current.subCode) this._lastActiveSubCode = current.subCode;
-        this._paintIconGrid();
+    var controller = this._getViewController('sub');
+    if (controller && typeof controller.handleKey === 'function') {
+        var handled = controller.handleKey.call(controller, key);
+        if (typeof handled !== 'undefined') return handled;
     }
     return true;
 };
@@ -2699,26 +2594,95 @@ MessageBoard.prototype._getSubMessageCount = function (code) {
         } catch (e) { total = 0; }
         finally { mb.close(); }
     }
+    if (!total) {
+        var stats = this._getSubPointers(code);
+        if (stats.total) total = stats.total;
+    }
     this._subMessageCounts[code] = { total: total, ts: now };
     return total;
 };
 
-MessageBoard.prototype._formatSubLabel = function (name, total) {
+MessageBoard.prototype._getSubPointers = function (code) {
+    var pointer = 0;
+    var total = 0;
+    if (!code || !msg_area) return { pointer: pointer, total: total };
+    var merge = function (subObj) {
+        if (!subObj) return;
+        if (typeof subObj.scan_ptr === 'number') pointer = Math.max(pointer, parseInt(subObj.scan_ptr, 10) || 0);
+        if (typeof subObj.last_read === 'number') pointer = Math.max(pointer, parseInt(subObj.last_read, 10) || 0);
+        if (typeof subObj.posts === 'number') total = Math.max(total, parseInt(subObj.posts, 10) || 0);
+    };
+    if (msg_area.sub && msg_area.sub[code]) merge(msg_area.sub[code]);
+    var idx = this._ensureSubIndex();
+    if (idx && idx[code] && msg_area.grp_list && msg_area.grp_list[idx[code].groupIndex]) {
+        merge(msg_area.grp_list[idx[code].groupIndex].sub_list[idx[code].subIndex]);
+    }
+    if (typeof this.curgrp === 'number' && msg_area[this.curgrp]) {
+        var map = msg_area[this.curgrp];
+        if (map && map[code]) merge(map[code]);
+    }
+    return { pointer: pointer, total: total };
+};
+
+MessageBoard.prototype._getSubUnreadCount = function (code, totalHint) {
+    if (!code || typeof MsgBase !== 'function') return 0;
+    if (!this._subUnreadCounts) this._subUnreadCounts = {};
+    var now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : (time() * 1000);
+    var cached = this._subUnreadCounts[code];
+    if (cached && (now - cached.ts) < 5000) return cached.unread;
+    var stats = this._getSubPointers(code);
+    var pointer = stats.pointer || 0;
+    var total = (typeof totalHint === 'number') ? totalHint : (stats.total || this._getSubMessageCount(code));
+    var unread = 0;
+    var mb = new MsgBase(code);
+    if (mb.open()) {
+        try {
+            var last = (typeof mb.last_msg === 'number') ? mb.last_msg : 0;
+            if (pointer < last) {
+                var start = pointer + 1;
+                var limit = last;
+                var maxLoop = 2000;
+                var iter = 0;
+                for (var num = start; num <= limit; num++) {
+                    var hdr = mb.get_msg_header(false, num, false);
+                    if (hdr) unread++;
+                    iter++;
+                    if (iter >= maxLoop) {
+                        unread += Math.max(0, (limit - pointer) - iter);
+                        break;
+                    }
+                }
+            }
+        } catch (e) {
+            unread = Math.max(0, total - (pointer || 0));
+        } finally {
+            try { mb.close(); } catch (_ignored) { }
+        }
+    } else {
+        unread = Math.max(0, total - (pointer || 0));
+    }
+    if (unread < 0 || !isFinite(unread)) unread = 0;
+    this._subUnreadCounts[code] = { unread: unread, ts: now };
+    return unread;
+};
+
+MessageBoard.prototype._formatSubLabel = function (name, total, unread) {
     name = name || '';
     total = Math.max(0, parseInt(total, 10) || 0);
-    var countText = String(total);
+    unread = Math.max(0, parseInt(unread, 10) || 0);
+    var readCount = Math.max(0, total - unread);
     var segments = [];
-    var text = '';
-    var cyan = (typeof CYAN !== 'undefined') ? CYAN : (typeof LIGHTCYAN !== 'undefined' ? LIGHTCYAN : WHITE);
-    segments.push({ text: countText, color: cyan });
-    text += countText;
-    if (name.length) {
-        segments.push({ text: ' ', color: null });
-        text += ' ';
-        segments.push({ text: name, color: null });
-        text += name;
-    }
-    return { text: text, segments: segments };
+    var parts = [];
+    var readColor = (typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : ((typeof WHITE !== 'undefined') ? WHITE : 7);
+    var unreadColor = unread > 0
+        ? ((typeof YELLOW !== 'undefined') ? YELLOW : ((typeof LIGHTRED !== 'undefined') ? LIGHTRED : WHITE))
+        : ((typeof DARKGRAY !== 'undefined') ? DARKGRAY : ((typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : WHITE));
+    segments.push({ text: String(readCount), color: readColor });
+    segments.push({ text: '/', color: null });
+    segments.push({ text: String(unread), color: unreadColor });
+    parts.push(String(readCount));
+    parts.push('/' + String(unread));
+    return { text: parts.join('').trim(), segments: segments };
 };
 
 // Fallback center helper (avoids dependency on global center())
@@ -2770,17 +2734,17 @@ MessageBoard.prototype._findMenuIndexByType = function (type) {
 
 MessageBoard.prototype.pauseForReason = function (reason) {
     log('[Message Board] Pausing for reason: ' + (reason || 'unspecified reason'));
+    this._endViewTransition();
     // HEY AI ASSISTANTS, this needs to be .top() not bottom quit messing it up
     if (reason === 'screensaver_on' && this.__bg_frame && typeof this.__bg_frame.top === 'function') {
         try { this.__bg_frame.top(); this.__bg_frame.cycle(); } catch (e) { }
-        // TODO: iterate through the characters in the background frame and clearAttributes 
-        // if the space is blank to enable transparency
         this.__bg_frame.transparent = true;
     }
 };
 
 MessageBoard.prototype.resumeForReason = function (reason) {
     log('[Message Board] Resuming from pause: ' + (reason || 'unspecified reason'));
+    this._endViewTransition();
     // HEY AI ASSISTANTS, this needs to be .bottom() not top quit messing it up
 
     if (reason === 'screensaver_off') {
