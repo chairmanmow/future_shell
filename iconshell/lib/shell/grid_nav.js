@@ -531,6 +531,7 @@ IconShell.prototype._createIconCell = function(i, dims, items, parentFrame, Icon
         iconAttr = (hasBg ? items[i].iconBg : 0) | (hasFg ? items[i].iconFg : 0);
     }
     var iconFrame = new Frame(x, y, dims.iconW, dims.iconH, iconAttr, parentFrame);
+    iconFrame.transparent = true;
     var labelFrame = new Frame(x, y + dims.iconH, dims.iconW, dims.labelH, ICSH_ATTR('FRAME_STANDARD'), parentFrame);
     var iconObj = new Icon(iconFrame, labelFrame, items[i], i == 0);
     iconObj.render();
@@ -549,7 +550,8 @@ IconShell.prototype.paintIcon = function (cell, selected, invert) {
     dbug('[paintIcon] called for label="' + (cell.item && cell.item.label) + '" selected=' + selected + ' invert=' + invert, "view");
     var item = cell.item;
     if (item && item.isPlaceholder) return; // nothing to paint
-    if (typeof item.iconBg !== 'undefined' && typeof item.iconFg !== 'undefined') {
+    var hasIconAsset = cell.iconObj && cell.iconObj.data && (cell.iconObj.data.iconFile || (cell.iconObj.data.avatarObj && cell.iconObj.data.avatarObj.data));
+    if (!hasIconAsset && typeof item.iconBg !== 'undefined' && typeof item.iconFg !== 'undefined') {
         cell.icon.clear(item.iconBg | item.iconFg);
     }
 

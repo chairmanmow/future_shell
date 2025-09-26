@@ -1,33 +1,6 @@
 // gamesmenu.js
 // Returns an array of menu items for all accessible games/doors for the current user
 var ICON_LOOKUP = {
-    "THEPIT":"gladiator",
-    "TW2002BBSLINK":"ufo",
-	"LORD":"reddragon",
-	"LORD2":"reddragon",
-	"JEOPARDY":"jeopardy",
-    "MAZERACE":"maze",
-    "FATFISH":"fish",
-    "BOGGLE":"boggle",
-    "TETRIS":"tetris",
-    "SOKOBAN":"synkroban",
-    "BULLSEYE":"bullseye",
-    "CHICKEN":"chicken",
-    "STARTREK":"spock",
-    "GOOBLE":"pacman",
-    "DICEWARZ":"dicewars",
-    "DICEWAR2":"dicewars",
-    "STARSTOX":"starstocks",
-    "GO-FOR":"gopher",
-    "SBJ":"blackjack",
-    "UBERBLOX":"uberblox",
-    "KNK":"kingcomputer",
-    "MSWEEPER":"minesweeper",
-    "DRUGLORD":"drugwars",
-    "GTTRIVIA":"goodtimes",
-    "LEMONS":"lemons",
-    "THIRSTY":"thirstyville",
-    "WORDEM":"wordem"
 }
 
 // Dynamically build an icon filename lookup from the icons directory (.ans/.bin)
@@ -37,7 +10,7 @@ var DYNAMIC_ICON_FILES = (function () {
 	try {
 		// js.exec_dir ends with subfunctions/ for this script; go up one to lib/ and into icons/
 		var iconPathBase = "iconshell/lib/icons/"
-    	var iconDir = system.mods_dir + iconPathBase;
+		var iconDir = system.mods_dir + iconPathBase;
 		var list = directory(iconDir) || [];
 		var patterns = [iconDir + "*.ans", iconDir + "*.bin"];
 		for (var p = 0; p < patterns.length; p++) {
@@ -82,9 +55,9 @@ function getItemsForXtrnSection(index) {
 		var item = {
 			label: prog.name,
 			type: "item",
-			hotkey:null,
-			action: (function(code, name) {
-				return function() { this.runExternal(function(){ bbs.exec_xtrn(code)}); };
+			hotkey: null,
+			action: (function (code, name) {
+				return function () { this.runExternal(function () { bbs.exec_xtrn(code) }); };
 			})(prog.code, prog.name)
 		};
 		var codeUpper = prog.code.toUpperCase();
@@ -103,7 +76,7 @@ function getItemsForXtrnSection(index) {
 		}
 		items.push(item);
 	}
-	items.sort(function(a, b) {
+	items.sort(function (a, b) {
 		var la = a.label.toLowerCase();
 		var lb = b.label.toLowerCase();
 		if (la < lb) return -1;

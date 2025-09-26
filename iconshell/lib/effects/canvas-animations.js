@@ -124,21 +124,31 @@ Life.prototype._hash = function(){
 	return acc.toString(36);
 };
 Life.prototype._draw = function(){
-	var f=this.f; var w=this.w; var visH=Math.floor(this.h/2);
-	f.gotoxy(1,1); f.attr=this.palette[this.colorIndex%this.palette.length];
-	for(var vy=0; vy<visH; vy++){
-		var yTop=vy*2, yBot=yTop+1; var line='';
-		for(var x=0;x<w;x++){
-			var top=this.grid[yTop][x], bot=this.grid[yBot][x];
-			if(top && bot) line+='\xDB';
-			else if(top) line+='\xDF';
-			else if(bot) line+='\xDC';
-			else line+=' ';
-		}
-		if(line.length>f.width) line=line.substr(0,f.width);
-		f.putmsg(line+'\r\n');
+	var f=this.f; if(!f) return;
+	var w=this.w; var visH=Math.floor(this.h/2);
+	var attr = (this.palette[this.colorIndex%this.palette.length] || LIGHTGREEN);
+	if(!this._drawCache || this._drawCache.length !== visH){
+		this._drawCache = [];
+		for(var i=0;i<visH;i++) this._drawCache[i] = [];
 	}
-	f.cycle();
+	for(var vy=0; vy<visH; vy++){
+		var rowCache = this._drawCache[vy];
+		var yTop=vy*2, yBot=yTop+1;
+		for(var x=0;x<w && x < f.width;x++){
+			var top=this.grid[yTop][x], bot=this.grid[yBot][x];
+			var ch;
+			if(top && bot) ch='\xDB';
+			else if(top) ch='\xDF';
+			else if(bot) ch='\xDC';
+			else ch=' ';
+			if(rowCache[x] === ch && this._lastAttr === attr) continue;
+			if(ch === ' ') f.clearData(x, vy, false);
+			else f.setData(x, vy, ch, attr, false);
+			rowCache[x] = ch;
+		}
+	}
+	this._lastAttr = attr;
+	if(typeof f.cycle === 'function') f.cycle();
 };
 Life.prototype.tick = function(){
 	if(!this.f) return;
@@ -455,22 +465,34 @@ Aurora.prototype.init = function(frame, opts){
 Aurora.prototype.tick = function(){
 	var f=this.f; if(!f) return;
 	this.time += this.speed;
-	try { f.clear(); } catch(e){}
+	if(!this._auroraCache || this._auroraCache.length !== f.width){
+		this._auroraCache = [];
+		for(var cx=0; cx<f.width; cx++) this._auroraCache[cx] = [];
+	}
 	for(var x=1;x<=f.width;x++){
+		var cacheCol = this._auroraCache[x-1];
 		var phase = this.columns[x-1] + this.time;
 		var center = Math.sin(phase) * (f.height/4) + (f.height/2);
 		var thickness = (Math.cos(phase*0.7)+1) * (f.height/6) + 2;
 		for(var y=1;y<=f.height;y++){
 			var dist = Math.abs(y - center);
-			if(dist > thickness) continue;
+			if(dist > thickness){
+				if(cacheCol[y-1]){
+					f.clearData(x-1, y-1, false);
+					cacheCol[y-1] = 0;
+				}
+				continue;
+			}
 			var norm = 1 - (dist / (thickness+0.01));
 			var idx = Math.min(this.palette.length-1, Math.floor(norm * this.palette.length));
-			f.gotoxy(x,y);
-			f.attr = (this.palette[idx] || LIGHTCYAN) | BG_BLACK;
-			f.putmsg('|');
+			var attr = (this.palette[idx] || LIGHTCYAN) | BG_BLACK;
+			if(cacheCol[y-1] !== attr){
+				f.setData(x-1, y-1, '|', attr, false);
+				cacheCol[y-1] = attr;
+			}
 		}
 	}
-	try { f.cycle(); } catch(e){}
+	if(typeof f.cycle === 'function') try { f.cycle(); } catch(e){}
 };
 Aurora.prototype.dispose = function(){ this.columns.length = 0; };
 
@@ -774,6 +796,11 @@ function FigletMessage(){
 	this.currentColor = (typeof WHITE === 'number') ? WHITE : 7;
 	this._colorQueue = [];
 	this.borderEnabled = false;
+	this._dirty = false;
+	this._prevLines = [];
+	this._attrCache = [];
+	this.baseFg = (typeof WHITE === 'number') ? WHITE : 7;
+	this.baseBg = 0;
 }
 FigletMessage.prototype.init = function(frame, opts){
 	this.f = frame;
@@ -898,10 +925,11 @@ FigletMessage.prototype._renderNew = function(preserve){
 	this._selectColor();
 	this._measureContent();
 	this._createFrames(preserve === true);
+	this._dirty = true;
 };
 FigletMessage.prototype._maxInnerWidth = function(){
 	if(!this.f) return 40;
-	return Math.max(1, this.f.width - 2);
+	return Math.max(1, this.f.width - 6);
 };
 FigletMessage.prototype._maxInnerHeight = function(){
 	if(!this.f) return 10;
@@ -984,62 +1012,49 @@ FigletMessage.prototype._wrapPlainMessage = function(text, maxWidth, maxHeight){
 };
 FigletMessage.prototype._selectColor = function(){
 	if(!this.colorsEnabled){
-		this.currentColor = (typeof WHITE === 'number') ? WHITE : 7;
-		this.currentColorIndex = -1;
-		this._colorQueue = [];
+		this.baseFg = (typeof WHITE === 'number') ? WHITE : 7;
+		this.baseBg = 0;
+		this._dirty = true;
 		return;
 	}
-	var palette = (this.colorPalette && this.colorPalette.length) ? this.colorPalette : _figletBuildColorPalette();
-	if(!palette.length){
-		this.currentColor = (typeof WHITE === 'number') ? WHITE : 7;
-		this.currentColorIndex = -1;
-		this._colorQueue = [];
+	if(!this.colorPalette || !this.colorPalette.length){
+		this.baseFg = (typeof WHITE === 'number') ? WHITE : 7;
+		this.baseBg = 0;
+		this._dirty = true;
 		return;
 	}
 	if(!this._colorQueue || !this._colorQueue.length){
-		this._colorQueue = palette.slice();
+		this._colorQueue = this.colorPalette.slice();
 		for(var i=this._colorQueue.length-1;i>0;i--){
-			var j = Math.floor(Math.random()*(i+1));
-			var tmp = this._colorQueue[i];
-			this._colorQueue[i] = this._colorQueue[j];
-			this._colorQueue[j] = tmp;
+			var j=Math.floor(Math.random()*(i+1));
+			var tmp=this._colorQueue[i]; this._colorQueue[i]=this._colorQueue[j]; this._colorQueue[j]=tmp;
 		}
 	}
-	var nextColor = this._colorQueue.shift();
-	if(typeof nextColor !== 'number') nextColor = palette[0];
-	this.currentColor = (typeof nextColor === 'number') ? nextColor : ((typeof WHITE === 'number') ? WHITE : 7);
-	this.currentColorIndex = palette.indexOf(this.currentColor);
-	if(this.currentColorIndex < 0 && palette.length){
-		this.currentColorIndex = 0;
-		this.currentColor = palette[0];
-	}
+	var next = this._colorQueue.shift();
+	if(typeof next !== 'number') next = this.colorPalette[0];
+	this.baseFg = next;
+	this.baseBg = this._pickShadeBackground(this.baseFg);
+	this._dirty = true;
 };
 FigletMessage.prototype._pickShadeBackground = function(fg){
     var pool = (this._shadeBackgrounds && this._shadeBackgrounds.length) ? this._shadeBackgrounds : _figletBuildBackgroundPalette();
     if(!pool.length) return 0;
     var baseFg = fg & 0x07;
-    var filtered = [];
     for(var i=0;i<pool.length;i++){
         var bg = pool[i];
         var baseBg = (bg >> 4) & 0x0F;
-        if(baseBg !== baseFg) filtered.push(bg);
+        if(baseBg !== baseFg) return bg;
     }
-    var candidates = filtered.length ? filtered : pool;
-    var idx = Math.floor(Math.random() * candidates.length);
-    if(idx >= candidates.length) idx = candidates.length - 1;
-    return candidates[idx];
+    return pool[0];
 };
 
 FigletMessage.prototype._getCharAttr = function(ch){
-    var fg = this.colorsEnabled ? (this.currentColor || ((typeof WHITE === 'number') ? WHITE : 7)) : ((typeof WHITE === 'number') ? WHITE : 7);
-    var attr = fg;
-    if(this.colorsEnabled && ch && ch.charCodeAt){
+    var fg = this.colorsEnabled ? (this.baseFg || ((typeof WHITE === 'number') ? WHITE : 7)) : ((typeof WHITE === 'number') ? WHITE : 7);
+    var attr = fg | BG_BLACK;
+    if(Array.isArray(FIGLET_SHADE_CODES) && this.colorsEnabled && ch && ch.charCodeAt){
         var code = ch.charCodeAt(0);
         if(FIGLET_SHADE_CODES.indexOf(code) !== -1){
-            var bg = this._pickShadeBackground(fg);
-            if(typeof bg === 'number' && bg !== 0){
-                attr = fg | bg;
-            }
+            attr = (this.baseFg || fg) | (this.baseBg || 0);
         }
     }
     return attr;
@@ -1098,6 +1113,9 @@ FigletMessage.prototype._createFrames = function(preservePosition){
 	if(preservePosition && typeof prevY === 'number') this.posY = Math.min(Math.max(1, prevY), maxY);
 	else this.posY = Math.max(1, Math.floor((this.f.height - boxHeight)/2) + 1);
 	this.box.moveTo(Math.round(this.posX), Math.round(this.posY));
+	this._prevLines = [];
+	this._attrCache = [];
+	this._dirty = true;
 };
 FigletMessage.prototype._updatePosition = function(){
 	if(!this.moveEnabled || !this.box) return;
@@ -1113,28 +1131,67 @@ FigletMessage.prototype._updatePosition = function(){
 };
 FigletMessage.prototype._draw = function(){
 	if(!this.box || !this.inner) return;
-	this._clearFrame(this.inner);
-	var maxW = this.inner.width;
-	var maxH = this.inner.height;
-	var lineCount = Math.min(this.lines.length, maxH);
-	for(var row=0; row<lineCount; row++){
-		var rawLine = this.lines[row] || '';
-		if(rawLine.length > maxW) rawLine = rawLine.substr(0, maxW);
-		var trimmed = rawLine.replace(/\s+$/,'');
-		var start = Math.max(0, Math.floor((maxW - trimmed.length)/2));
-		for(var col=0; col<trimmed.length && (start + col) < maxW; col++){
-			var ch = trimmed.charAt(col);
-			var attr = this._getCharAttr(ch);
-			if(this._isTransparentChar(ch, attr)) continue;
-			try {
-				this.inner.setData(start + col, row, ch, attr, false);
-			} catch(e){}
+	var frame = this.inner;
+	var width = frame.width;
+	var height = frame.height;
+	var lines = this.lines || [];
+	var maxRows = Math.min(lines.length, height);
+	if(!this._prevLines || this._prevLines.length !== height){
+		this._prevLines = new Array(height);
+	}
+	if(!this._attrCache || this._attrCache.length !== height){
+		this._attrCache = new Array(height);
+	}
+	var anyChanges = false;
+	if(this._dirty){
+		for(var row = 0; row < height; row++){
+			var rowChars = this._prevLines[row];
+			if(!rowChars || rowChars.length !== width){
+				rowChars = new Array(width);
+				this._prevLines[row] = rowChars;
+			}
+			var attrRow = this._attrCache[row];
+			if(!attrRow || attrRow.length !== width){
+				attrRow = new Array(width);
+				this._attrCache[row] = attrRow;
+			}
+			var rawLine = (row < maxRows) ? (lines[row] || '') : '';
+			if(rawLine.length > width) rawLine = rawLine.substr(0, width);
+			var trimmed = rawLine.replace(/\s+$/,'');
+			var start = Math.max(0, Math.floor((width - trimmed.length) / 2));
+			for(var col = 0; col < width; col++){
+				var newChar = ' ';
+				var newAttr = null;
+				var within = (col >= start) && (col - start < trimmed.length);
+				if(within){
+					newChar = trimmed.charAt(col - start);
+					newAttr = this._getCharAttr(newChar);
+					if(this._isTransparentChar(newChar, newAttr)){
+						newChar = ' ';
+						newAttr = null;
+					}
+				}
+				var prevChar = rowChars[col];
+				var prevAttr = attrRow[col];
+				if(prevChar === newChar && prevAttr === newAttr) continue;
+				anyChanges = true;
+				if(newChar === ' '){
+					try { frame.clearData(col, row, false); } catch(_){}
+					rowChars[col] = ' ';
+					attrRow[col] = null;
+				} else {
+					try { frame.setData(col, row, newChar, newAttr, false); } catch(_){}
+					rowChars[col] = newChar;
+					attrRow[col] = newAttr;
+				}
+			}
 		}
 	}
 	try {
-		this.inner.cycle();
+		if(anyChanges || this._dirty) frame.cycle();
 		this.box.cycle();
-	} catch(e){}
+	} catch(_){ }
+	this._dirty = false;
 };
 FigletMessage.prototype.tick = function(){
 	if(++this.tickCounter >= this.refreshTicks){

@@ -43,6 +43,11 @@ function ShellScreenSaver(opts){
     this.timerEvent = null;
     this.usingTimer = false;
     this.timerIntervalMs = 80;
+    this.minTimerIntervalMs = 60;
+    this.maxTimerIntervalMs = 200;
+    this.autoThrottle = true;
+    this._throttleSamples = 0;
+    this._throttleCooldown = 0;
     this.active = false;
     this.current = null;
     this.sequence = ['matrix_rain'];
@@ -71,12 +76,34 @@ ShellScreenSaver.prototype.configure = function(cfg){
         var si = parseInt(cfg.switch_interval, 10);
         if(!isNaN(si) && si >= 0) this.switchIntervalMs = si * 1000;
     }
+    if(cfg.min_fps !== undefined){
+        var minFps = parseInt(cfg.min_fps, 10);
+        if(!isNaN(minFps) && minFps > 0) this.maxTimerIntervalMs = Math.max(20, Math.floor(1000 / minFps));
+    }
+    if(cfg.max_fps !== undefined){
+        var maxFps = parseInt(cfg.max_fps, 10);
+        if(!isNaN(maxFps) && maxFps > 0) this.minTimerIntervalMs = Math.max(20, Math.floor(1000 / maxFps));
+    }
+    if(cfg.max_interval_ms !== undefined){
+        var maxInt = parseInt(cfg.max_interval_ms, 10);
+        if(!isNaN(maxInt) && maxInt > 0) this.maxTimerIntervalMs = Math.max(this.minTimerIntervalMs, maxInt);
+    }
+    if(cfg.min_interval_ms !== undefined){
+        var minInt = parseInt(cfg.min_interval_ms, 10);
+        if(!isNaN(minInt) && minInt > 0) this.minTimerIntervalMs = Math.min(this.maxTimerIntervalMs, Math.max(20, minInt));
+    }
     if(cfg.fps !== undefined){
         var fps = parseInt(cfg.fps, 10);
         if(!isNaN(fps) && fps > 0){
-            this.timerIntervalMs = Math.max(40, Math.floor(1000 / fps));
+            this.timerIntervalMs = Math.floor(1000 / fps);
         }
     }
+    if(cfg.timer_interval_ms !== undefined){
+        var ti = parseInt(cfg.timer_interval_ms, 10);
+        if(!isNaN(ti) && ti > 0) this.timerIntervalMs = ti;
+    }
+    if(cfg.autothrottle !== undefined) this.autoThrottle = !!cfg.autothrottle;
+    this._clampTimerInterval();
     if(cfg.clear_on_switch !== undefined) this.clearOnSwitch = !!cfg.clear_on_switch;
     this.animationOptions = cfg.animationOptions ? clone(cfg.animationOptions) : {};
     for(var key in this.registry){
@@ -106,9 +133,20 @@ ShellScreenSaver.prototype.detachTimer = function(){
 };
 
 ShellScreenSaver.prototype._resetTimerInterval = function(){
+    this._clampTimerInterval();
     if(this.usingTimer && this.timer && typeof this.timer.addEvent === 'function'){
         this.attachTimer(this.timer);
     }
+};
+
+ShellScreenSaver.prototype._clampTimerInterval = function(){
+    if(this.minTimerIntervalMs > this.maxTimerIntervalMs){
+        var swap = this.minTimerIntervalMs;
+        this.minTimerIntervalMs = this.maxTimerIntervalMs;
+        this.maxTimerIntervalMs = swap;
+    }
+    if(this.timerIntervalMs < this.minTimerIntervalMs) this.timerIntervalMs = this.minTimerIntervalMs;
+    if(this.timerIntervalMs > this.maxTimerIntervalMs) this.timerIntervalMs = this.maxTimerIntervalMs;
 };
 
 ShellScreenSaver.prototype._registerBuiltins = function(){
@@ -345,6 +383,7 @@ ShellScreenSaver.prototype._tick = function(){
     if(!this.active){
         return;
     }
+    var tickStart = nowMs();
     if(this.current && !this._ensureActiveFrame()){
         return;
     }
@@ -361,12 +400,53 @@ ShellScreenSaver.prototype._tick = function(){
             if(this._matrix && typeof this._matrix.cycle === 'function') this._matrix.cycle();
         } else if(this.current.instance && typeof this.current.instance.tick === 'function'){
             var runningName = this.current.name;
+            var tickElapsed = 0;
             try { this.current.instance.tick(); } catch(e){
                 try { log(LOG_ERR, 'screensaver tick error '+runningName+': '+e); } catch(_){ }
                 if(runningName && this.registry[runningName]) this.registry[runningName].failed = true;
                 this._stopCurrent();
+                tickElapsed = nowMs() - tickStart;
+                this._applyAutoThrottle(tickElapsed);
+                return;
             }
+            tickElapsed = nowMs() - tickStart;
+            this._applyAutoThrottle(tickElapsed);
+            return;
         }
+    }
+    var elapsed = nowMs() - tickStart;
+    this._applyAutoThrottle(elapsed);
+};
+
+ShellScreenSaver.prototype._applyAutoThrottle = function(elapsedMs){
+    if(!this.autoThrottle || !this.usingTimer) return;
+    if(elapsedMs <= 0) return;
+    if(elapsedMs > this.timerIntervalMs && this.timerIntervalMs < this.maxTimerIntervalMs){
+        var newInterval = Math.min(this.maxTimerIntervalMs, Math.max(this.timerIntervalMs + 10, Math.round(elapsedMs * 1.1)));
+        if(newInterval !== this.timerIntervalMs){
+            this.timerIntervalMs = newInterval;
+            this._resetTimerInterval();
+        }
+        this._throttleSamples = 0;
+        this._throttleCooldown = 12;
+        return;
+    }
+    if(this._throttleCooldown > 0){
+        this._throttleCooldown--;
+        return;
+    }
+    if(elapsedMs < (this.timerIntervalMs * 0.45) && this.timerIntervalMs > this.minTimerIntervalMs){
+        this._throttleSamples++;
+        if(this._throttleSamples >= 24){
+            var lowered = Math.max(this.minTimerIntervalMs, this.timerIntervalMs - 10);
+            if(lowered !== this.timerIntervalMs){
+                this.timerIntervalMs = lowered;
+                this._resetTimerInterval();
+            }
+            this._throttleSamples = 0;
+        }
+    } else {
+        this._throttleSamples = 0;
     }
 };
 
