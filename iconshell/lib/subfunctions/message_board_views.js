@@ -609,6 +609,7 @@
             try { if (headerFrame) headerFrame.open(); if (bodyFrame) bodyFrame.open(); } catch (_e2) { }
             board._readHeaderFrame = headerFrame;
             board._readBodyFrame = bodyFrame;
+            if (board._ensureReadBodyCanvas) board._ensureReadBodyCanvas();
             if (board._paintReadHeader) board._paintReadHeader(msg);
             var code = board.cursub || (msg.sub || null) || board._lastActiveSubCode || bbs.cursub_code;
             var fullHeader = msg;
@@ -633,7 +634,11 @@
             board.lastReadMsg = fullHeader;
             if (board._updateScanPointer) board._updateScanPointer(fullHeader);
             board._readScroll = 0;
-            if (board._setReadBodyText) board._setReadBodyText(bodyText);
+            var bodyInfo = board._sanitizeFtnBody ? board._sanitizeFtnBody(bodyText) : { text: bodyText, metadata: null };
+            board._readMessageMetadata = bodyInfo.metadata || null;
+            var displayBody = bodyInfo.text || '';
+            if (board._setReadBodyText) board._setReadBodyText(displayBody);
+            if (board._renderReadBodyContent) board._renderReadBodyContent(displayBody);
             if (board._paintRead) board._paintRead();
         } finally {
             board._endViewTransition();
@@ -643,10 +648,21 @@
     ReadView.prototype.handleKey = function (key) {
         var board = this.board;
         if (!board || board.view !== 'read') return true;
-        var f = board._readBodyFrame || board.outputFrame;
-        var usable = f ? f.height - 1 : 20; if (usable < 1) usable = 1;
-        var lines = board._getReadLines ? board._getReadLines() : [];
-        var maxStart = Math.max(0, (lines.length - usable));
+        var canvas = board._readBodyCanvas || null;
+        var usable;
+        var maxStart;
+        if (canvas) {
+            usable = canvas.height || 0;
+            if (usable < 1) usable = 1;
+            var totalLines = canvas.data_height || 0;
+            maxStart = Math.max(0, totalLines - usable);
+        } else {
+            var f = board._readBodyFrame || board.outputFrame;
+            usable = f ? f.height - 1 : 20;
+            if (usable < 1) usable = 1;
+            var lines = board._getReadLines ? board._getReadLines() : [];
+            maxStart = Math.max(0, (lines.length - usable));
+        }
         switch (key) {
             case KEY_UP:
                 board._readScroll = Math.max(0, (board._readScroll || 0) - 1);

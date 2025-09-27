@@ -99,6 +99,446 @@ function _mbFindIconBase(name) {
 }
 
 var GROUPING_PREFIXES = ['RE: ', 'Re: ', 'FW: ', 'FWD: '];
+
+function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride) {
+    if (!frame || typeof contents !== 'string') return false;
+    if (typeof Char !== 'function') return false;
+    var width = (typeof widthOverride === 'number' && widthOverride > 0) ? widthOverride : frame.width;
+    var height = (typeof heightOverride === 'number' && heightOverride > 0) ? heightOverride : frame.height;
+    try { frame.clear(frame.attr); } catch (_clearErr) { }
+    if (frame.__properties__) {
+        frame.__properties__.data = [];
+        frame.__position__.offset.x = 0;
+        frame.__position__.offset.y = 0;
+    }
+    if (typeof frame.home === 'function') frame.home();
+
+    var lines = contents.split(/\r\n|\n|\r/);
+    var attr = (typeof frame.attr === 'number') ? frame.attr : ((typeof BG_BLACK === 'number' ? BG_BLACK : 0) | (typeof LIGHTGRAY === 'number' ? LIGHTGRAY : 7));
+    var bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+    var fg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+    var hi = 0;
+    var y = 0;
+    var saved = { x: 0, y: 0 };
+
+    function fgAttr(code) {
+        switch (code) {
+            case 30: return (typeof BLACK === 'number') ? BLACK : 0;
+            case 31: return (typeof RED === 'number') ? RED : 4;
+            case 32: return (typeof GREEN === 'number') ? GREEN : 2;
+            case 33: return (typeof BROWN === 'number') ? BROWN : 6;
+            case 34: return (typeof BLUE === 'number') ? BLUE : 1;
+            case 35: return (typeof MAGENTA === 'number') ? MAGENTA : 5;
+            case 36: return (typeof CYAN === 'number') ? CYAN : 3;
+            case 37: return (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+            default: return (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+        }
+    }
+
+    function bgAttr(code) {
+        switch (code) {
+            case 40: return (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+            case 41: return (typeof BG_RED === 'number') ? BG_RED : 0;
+            case 42: return (typeof BG_GREEN === 'number') ? BG_GREEN : 0;
+            case 43: return (typeof BG_BROWN === 'number') ? BG_BROWN : 0;
+            case 44: return (typeof BG_BLUE === 'number') ? BG_BLUE : 0;
+            case 45: return (typeof BG_MAGENTA === 'number') ? BG_MAGENTA : 0;
+            case 46: return (typeof BG_CYAN === 'number') ? BG_CYAN : 0;
+            case 47: return (typeof BG_LIGHTGRAY === 'number') ? BG_LIGHTGRAY : 0;
+            default: return (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+        }
+    }
+
+    while (lines.length > 0) {
+        var line = lines.shift();
+        var x = 0;
+        while (line.length > 0) {
+            var attrMatch = line.match(/^\x1b\[((?:[0-9]{1,3};?)*)([0-9]{0,3})m/);
+            if (attrMatch !== null) {
+                line = line.substr(attrMatch[0].length);
+                var paramsStr = attrMatch[1];
+                var lastParam = attrMatch[2];
+                var params = [];
+                if (paramsStr && paramsStr.length) params = paramsStr.split(';');
+                if (lastParam && lastParam.length) params.push(lastParam);
+                if (!params.length) params = ['0'];
+                for (var pi = 0; pi < params.length; pi++) {
+                    var codeStr = params[pi];
+                    if (!codeStr.length) codeStr = '0';
+                    var num = Number(codeStr);
+                    if (num === 0) {
+                        bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+                        fg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+                        hi = 0;
+                        continue;
+                    }
+                    if (num === 1) {
+                        hi |= (typeof HIGH === 'number') ? HIGH : 0x08;
+                        continue;
+                    }
+                    if (num === 2 || num === 21 || num === 22) {
+                        hi &= ~((typeof HIGH === 'number') ? HIGH : 0x08);
+                        continue;
+                    }
+                    if (num === 5) {
+                        hi |= (typeof BLINK === 'number') ? BLINK : 0x80;
+                        continue;
+                    }
+                    if (num === 25) {
+                        hi &= ~((typeof BLINK === 'number') ? BLINK : 0x80);
+                        continue;
+                    }
+                    if (num === 39) {
+                        fg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+                        continue;
+                    }
+                    if (num === 49) {
+                        bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+                        continue;
+                    }
+                    if (num >= 40 && num <= 47) {
+                        bg = bgAttr(num);
+                        continue;
+                    }
+                    if (num >= 100 && num <= 107) {
+                        bg = bgAttr(num - 60);
+                        continue;
+                    }
+                    if (num >= 30 && num <= 37) {
+                        fg = fgAttr(num);
+                        continue;
+                    }
+                    if (num >= 90 && num <= 97) {
+                        fg = fgAttr(num - 60);
+                        hi |= (typeof HIGH === 'number') ? HIGH : 0x08;
+                        continue;
+                    }
+                    if ((num === 38 || num === 48) && params.length > pi + 1) {
+                        var mode = parseInt(params[pi + 1], 10);
+                        if (mode === 5 && params.length > pi + 2) {
+                            pi += 2;
+                        } else if (mode === 2 && params.length > pi + 4) {
+                            pi += 4;
+                        }
+                        continue;
+                    }
+                }
+                attr = bg + fg + hi;
+                continue;
+            }
+
+            var posMatch = line.match(/^\x1b\[(\d*);?(\d*)[Hf]/);
+            if (posMatch !== null) {
+                line = line.substr(posMatch.shift().length);
+                if (posMatch.length === 0) {
+                    x = 0; y = 0;
+                } else {
+                    if (posMatch[0]) y = Math.max(0, Number(posMatch.shift()) - 1);
+                    if (posMatch[0]) x = Math.max(0, Number(posMatch.shift()) - 1);
+                }
+                continue;
+            }
+
+            var upMatch = line.match(/^\x1b\[(\d*)A/);
+            if (upMatch !== null) {
+                line = line.substr(upMatch.shift().length);
+                var up = Number(upMatch.shift() || 1);
+                y = Math.max(0, y - up);
+                continue;
+            }
+
+            var downMatch = line.match(/^\x1b\[(\d*)B/);
+            if (downMatch !== null) {
+                line = line.substr(downMatch.shift().length);
+                var down = Number(downMatch.shift() || 1);
+                y += down;
+                continue;
+            }
+
+            var rightMatch = line.match(/^\x1b\[(\d*)C/);
+            if (rightMatch !== null) {
+                line = line.substr(rightMatch.shift().length);
+                var right = Number(rightMatch.shift() || 1);
+                x += right;
+                continue;
+            }
+
+            var leftMatch = line.match(/^\x1b\[(\d*)D/);
+            if (leftMatch !== null) {
+                line = line.substr(leftMatch.shift().length);
+                var left = Number(leftMatch.shift() || 1);
+                x = Math.max(0, x - left);
+                continue;
+            }
+
+            var clearMatch = line.match(/^\x1b\[2J/);
+            if (clearMatch !== null) {
+                line = line.substr(clearMatch.shift().length);
+                try { frame.clear(frame.attr); } catch (_ignoreClear) { }
+                if (frame.__properties__) frame.__properties__.data = [];
+                x = 0; y = 0;
+                continue;
+            }
+
+            var saveMatch = line.match(/^\x1b\[s/);
+            if (saveMatch !== null) {
+                line = line.substr(saveMatch.shift().length);
+                saved.x = x; saved.y = y;
+                continue;
+            }
+
+            var restoreMatch = line.match(/^\x1b\[u/);
+            if (restoreMatch !== null) {
+                line = line.substr(restoreMatch.shift().length);
+                x = saved.x || 0; y = saved.y || 0;
+                continue;
+            }
+
+            var ch = line.charAt(0);
+            line = line.substr(1);
+            if (y < 0) y = 0;
+            if (x < 0) x = 0;
+            if (x >= width) {
+                x = 0; y += 1;
+            }
+            if (frame.__properties__) {
+                if (!frame.__properties__.data[y]) frame.__properties__.data[y] = [];
+                frame.__properties__.data[y][x] = new Char(ch, attr);
+            }
+            x++;
+        }
+        y++;
+        if (typeof height === 'number' && height > 0 && y >= height) break;
+    }
+
+    if (typeof frame.refresh === 'function') frame.refresh();
+    try { frame.cycle(); } catch (_cycleErr) { }
+    return true;
+}
+if (typeof Frame !== 'undefined' && typeof Frame.prototype.loadAnsiString !== 'function') {
+    (function () {
+        function ansiBgToAttr(code) {
+            switch (code) {
+                case 40: return (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+                case 41: return (typeof BG_RED === 'number') ? BG_RED : 0;
+                case 42: return (typeof BG_GREEN === 'number') ? BG_GREEN : 0;
+                case 43: return (typeof BG_BROWN === 'number') ? BG_BROWN : 0;
+                case 44: return (typeof BG_BLUE === 'number') ? BG_BLUE : 0;
+                case 45: return (typeof BG_MAGENTA === 'number') ? BG_MAGENTA : 0;
+                case 46: return (typeof BG_CYAN === 'number') ? BG_CYAN : 0;
+                case 47: return (typeof BG_LIGHTGRAY === 'number') ? BG_LIGHTGRAY : 0;
+                default: return (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+            }
+        }
+
+        function ansiFgToAttr(code) {
+            switch (code) {
+                case 30: return (typeof BLACK === 'number') ? BLACK : 0;
+                case 31: return (typeof RED === 'number') ? RED : 4;
+                case 32: return (typeof GREEN === 'number') ? GREEN : 2;
+                case 33: return (typeof BROWN === 'number') ? BROWN : 6;
+                case 34: return (typeof BLUE === 'number') ? BLUE : 1;
+                case 35: return (typeof MAGENTA === 'number') ? MAGENTA : 5;
+                case 36: return (typeof CYAN === 'number') ? CYAN : 3;
+                case 37: return (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+                default: return (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+            }
+        }
+
+        function parseAnsiIntoFrame(frame, contents, width) {
+            if (!frame || typeof contents !== 'string') return false;
+            if (typeof Char !== 'function') return false;
+            width = (typeof width === 'number' && width > 0) ? width : frame.width;
+            try { frame.clear(frame.attr); } catch (_clearErr) { }
+            if (frame.__properties__) {
+                frame.__properties__.data = [];
+                frame.__position__.offset.x = 0;
+                frame.__position__.offset.y = 0;
+            }
+            if (typeof frame.home === 'function') frame.home();
+
+            var lines = contents.split(/\r\n|\n|\r/);
+            var attr = (typeof frame.attr === 'number') ? frame.attr : ((typeof BG_BLACK === 'number' ? BG_BLACK : 0) | (typeof LIGHTGRAY === 'number' ? LIGHTGRAY : 7));
+            var bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+            var fg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+            var hi = 0;
+            var y = 0;
+            var saved = { x: 0, y: 0 };
+
+            while (lines.length > 0) {
+                var line = lines.shift();
+                var x = 0;
+                while (line.length > 0) {
+                    var attrMatch = line.match(/^\x1b\[((?:[0-9]{1,3};?)*)([0-9]{0,3})m/);
+                    if (attrMatch !== null) {
+                        line = line.substr(attrMatch[0].length);
+                        var paramsStr = attrMatch[1];
+                        var lastParam = attrMatch[2];
+                        var params = [];
+                        if (paramsStr && paramsStr.length) params = paramsStr.split(';');
+                        if (lastParam && lastParam.length) params.push(lastParam);
+                        if (!params.length) params = ['0'];
+                        for (var pi = 0; pi < params.length; pi++) {
+                            var codeStr = params[pi];
+                            if (!codeStr.length) codeStr = '0';
+                            var num = Number(codeStr);
+                            if (num === 0) {
+                                bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+                                fg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+                                hi = 0;
+                                continue;
+                            }
+                            if (num === 1) {
+                                hi |= (typeof HIGH === 'number') ? HIGH : 0x08;
+                                continue;
+                            }
+                            if (num === 2 || num === 21 || num === 22) {
+                                hi &= ~((typeof HIGH === 'number') ? HIGH : 0x08);
+                                continue;
+                            }
+                            if (num === 5) {
+                                hi |= (typeof BLINK === 'number') ? BLINK : 0x80;
+                                continue;
+                            }
+                            if (num === 25) {
+                                hi &= ~((typeof BLINK === 'number') ? BLINK : 0x80);
+                                continue;
+                            }
+                            if (num === 39) {
+                                fg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+                                continue;
+                            }
+                            if (num === 49) {
+                                bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+                                continue;
+                            }
+                            if (num >= 40 && num <= 47) {
+                                bg = ansiBgToAttr(num);
+                                continue;
+                            }
+                            if (num >= 100 && num <= 107) {
+                                bg = ansiBgToAttr(num - 60);
+                                continue;
+                            }
+                            if (num >= 30 && num <= 37) {
+                                fg = ansiFgToAttr(num);
+                                continue;
+                            }
+                            if (num >= 90 && num <= 97) {
+                                fg = ansiFgToAttr(num - 60);
+                                hi |= (typeof HIGH === 'number') ? HIGH : 0x08;
+                                continue;
+                            }
+                            if ((num === 38 || num === 48) && params.length > pi + 1) {
+                                var mode = parseInt(params[pi + 1], 10);
+                                if (mode === 5 && params.length > pi + 2) {
+                                    pi += 2;
+                                    continue;
+                                }
+                                if (mode === 2 && params.length > pi + 4) {
+                                    pi += 4;
+                                    continue;
+                                }
+                            }
+                        }
+                        attr = bg + fg + hi;
+                        continue;
+                    }
+
+                    var posMatch = line.match(/^\x1b\[(\d*);?(\d*)[Hf]/);
+                    if (posMatch !== null) {
+                        line = line.substr(posMatch.shift().length);
+                        if (posMatch.length === 0) {
+                            x = 0; y = 0;
+                        } else {
+                            if (posMatch[0]) y = Math.max(0, Number(posMatch.shift()) - 1);
+                            if (posMatch[0]) x = Math.max(0, Number(posMatch.shift()) - 1);
+                        }
+                        continue;
+                    }
+
+                    var upMatch = line.match(/^\x1b\[(\d*)A/);
+                    if (upMatch !== null) {
+                        line = line.substr(upMatch.shift().length);
+                        var up = Number(upMatch.shift() || 1);
+                        y = Math.max(0, y - up);
+                        continue;
+                    }
+                    var downMatch = line.match(/^\x1b\[(\d*)B/);
+                    if (downMatch !== null) {
+                        line = line.substr(downMatch.shift().length);
+                        var down = Number(downMatch.shift() || 1);
+                        y += down;
+                        continue;
+                    }
+                    var rightMatch = line.match(/^\x1b\[(\d*)C/);
+                    if (rightMatch !== null) {
+                        line = line.substr(rightMatch.shift().length);
+                        var right = Number(rightMatch.shift() || 1);
+                        x += right;
+                        continue;
+                    }
+                    var leftMatch = line.match(/^\x1b\[(\d*)D/);
+                    if (leftMatch !== null) {
+                        line = line.substr(leftMatch.shift().length);
+                        var left = Number(leftMatch.shift() || 1);
+                        x = Math.max(0, x - left);
+                        continue;
+                    }
+
+                    var clearMatch = line.match(/^\x1b\[2J/);
+                    if (clearMatch !== null) {
+                        line = line.substr(clearMatch.shift().length);
+                        try { frame.clear(frame.attr); } catch (_ignoreClear) { }
+                        if (frame.__properties__) frame.__properties__.data = [];
+                        x = 0; y = 0;
+                        continue;
+                    }
+
+                    var saveMatch = line.match(/^\x1b\[s/);
+                    if (saveMatch !== null) {
+                        line = line.substr(saveMatch.shift().length);
+                        saved.x = x; saved.y = y;
+                        continue;
+                    }
+
+                    var restoreMatch = line.match(/^\x1b\[u/);
+                    if (restoreMatch !== null) {
+                        line = line.substr(restoreMatch.shift().length);
+                        x = saved.x || 0; y = saved.y || 0;
+                        continue;
+                    }
+
+                    var ch = line.charAt(0);
+                    line = line.substr(1);
+                    if (y < 0) y = 0;
+                    if (x < 0) x = 0;
+                    if (x >= width) {
+                        x = 0; y += 1;
+                    }
+                    if (frame.__properties__) {
+                        if (!frame.__properties__.data[y]) frame.__properties__.data[y] = [];
+                        frame.__properties__.data[y][x] = new Char(ch, attr);
+                    }
+                    x++;
+                }
+                y++;
+            }
+            if (typeof frame.refresh === 'function') frame.refresh();
+            try { frame.cycle(); } catch (_cycleErr) { }
+            return true;
+        }
+
+        Frame.prototype.loadAnsiString = function (contents, width, height) {
+            return parseAnsiIntoFrame(this, contents, width);
+        };
+    })();
+}
+
+// Extend Frame with an in-memory ANSI loader when available. We avoid touching
+// the core exec frame implementation by installing a helper locally.
+// (Temporarily removed per instruction to rely on shipped implementation.)
+
 function MessageBoard(opts) {
     opts = opts || {};
     this.blockScreenSaver = false;
@@ -550,6 +990,7 @@ MessageBoard.prototype._resetState = function () {
     this._readNoticeEvent = null;
     this._readNoticeActive = false;
     this._subUnreadCounts = {};
+    this._readMessageMetadata = null;
     this._readNoticeContainer = null;
     this._transitionNoticeFrame = null;
     this._transitionNoticeActive = false;
@@ -622,6 +1063,9 @@ MessageBoard.prototype._init = function (reentry) {
     this._readScroll = 0;
     this._readSubIconFrame = null;
     this._readSubIconHotspotKey = '@';
+    this._readBodyCanvas = null;
+    this._readBodyTotalLines = 0;
+    this._readBodyHasAnsi = false;
     // Build comprehensive hotspot character set (single-key tokens only)
     this._buildHotspotCharSet();
     // Default to no artificial cap; hotspot mapping handles visible rows only
@@ -693,6 +1137,86 @@ MessageBoard.prototype._setReadBodyText = function (text) {
     this._readBodyText = text || '';
     this._readBodyLineCache = null;
     this._readBodyLineCacheWidth = 0;
+};
+
+MessageBoard.prototype._ensureReadBodyCanvas = function () {
+    var bodyFrame = this._readBodyFrame;
+    if (!bodyFrame) {
+        if (this._readBodyCanvas) {
+            try { this._readBodyCanvas.close(); } catch (_e) { }
+        }
+        this._readBodyCanvas = null;
+        return null;
+    }
+    var desiredWidth = Math.min(80, bodyFrame.width || 80);
+    var desiredHeight = Math.max(1, bodyFrame.height || 1);
+    var offsetX = Math.max(0, Math.floor((bodyFrame.width - desiredWidth) / 2));
+    var parentFrame = bodyFrame.parent || bodyFrame;
+    var originX = (parentFrame === bodyFrame) ? (offsetX + 1) : (bodyFrame.x + offsetX);
+    var originY = (parentFrame === bodyFrame) ? 1 : bodyFrame.y;
+    var needsRebuild = !this._readBodyCanvas
+        || this._readBodyCanvas.parent !== parentFrame
+        || this._readBodyCanvas.x !== originX
+        || this._readBodyCanvas.y !== originY
+        || this._readBodyCanvas.width !== desiredWidth
+        || this._readBodyCanvas.height !== desiredHeight;
+    if (needsRebuild) {
+        if (this._readBodyCanvas) {
+            try { this._readBodyCanvas.close(); } catch (_closeErr) { }
+        }
+        var canvas;
+        try {
+            canvas = new Frame(originX, originY, desiredWidth, desiredHeight, bodyFrame.attr, parentFrame);
+            canvas.v_scroll = true;
+            canvas.h_scroll = false;
+            if (canvas.__settings__) {
+                canvas.__settings__.word_wrap = false;
+                canvas.__settings__.lf_strict = true;
+            }
+            canvas.transparent = false;
+            canvas.open();
+            canvas.clear(bodyFrame.attr);
+            canvas.attr = bodyFrame.attr;
+        } catch (_canvasErr) {
+            canvas = null;
+        }
+        this._readBodyCanvas = canvas;
+    }
+    return this._readBodyCanvas;
+};
+
+MessageBoard.prototype._renderReadBodyContent = function (text) {
+    var canvas = this._ensureReadBodyCanvas();
+    this._readBodyTotalLines = 0;
+    this._readBodyHasAnsi = false;
+    if (!canvas) return;
+    if (this._readBodyFrame) {
+        try { this._readBodyFrame.clear(this._readBodyFrame.attr); } catch (_bodyClearErr) { }
+    }
+    var bodyText = (typeof text === 'string') ? text : '';
+    var attr = (typeof canvas.attr === 'number') ? canvas.attr : ((typeof BG_BLACK === 'number' ? BG_BLACK : 0) | (typeof LIGHTGRAY === 'number' ? LIGHTGRAY : 7));
+    try { canvas.clear(attr); } catch (_clearErr) { }
+    if (canvas.__properties__) {
+        canvas.__properties__.data = [];
+        canvas.__position__.offset.x = 0;
+        canvas.__position__.offset.y = 0;
+        canvas.__properties__.ctrl_a = false;
+    }
+    if (typeof canvas.home === 'function') canvas.home();
+    var rendered = _renderAnsiIntoFrame(canvas, bodyText, canvas.width, canvas.height);
+    this._readBodyHasAnsi = !!rendered;
+    if (!rendered) {
+        throw new Error('ANSI render failed for message body.');
+    }
+    try { canvas.home(); } catch (_homeErr) { }
+    try { canvas.scrollTo(0, 0); } catch (_scrollErr) { }
+    this._readBodyTotalLines = canvas.data_height || 0;
+    this._readBodyLineCache = null;
+    this._readBodyLineCacheWidth = 0;
+    try { canvas.cycle(); } catch (_cycleErr) { }
+    if (canvas.parent) {
+        try { canvas.parent.cycle(); } catch (_parentCycleErr) { }
+    }
 };
 
 MessageBoard.prototype._getReadLines = function () {
@@ -864,6 +1388,54 @@ MessageBoard.prototype._readMessageBody = function (msgbase, header) {
     return body || '';
 };
 
+MessageBoard.prototype._sanitizeFtnBody = function (text) {
+    var metadata = {
+        kludges: [],
+        tearLines: [],
+        originLines: [],
+        seenBy: [],
+        path: []
+    };
+    if (!text || !text.length) return { text: text || '', metadata: metadata };
+    var endsWithNewline = /(\r\n|\n|\r)$/.test(text);
+    var lines = text.split(/\r\n|\n|\r/);
+    var bodyLines = [];
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line.length) {
+            bodyLines.push(line);
+            continue;
+        }
+        var first = line.charCodeAt(0);
+        if (first === 1) {
+            metadata.kludges.push(line);
+            continue;
+        }
+        var trimmed = line.replace(/^\s+/, '');
+        var upper = trimmed.toUpperCase();
+        if (upper.indexOf('SEEN-BY') === 0) {
+            metadata.seenBy.push(line);
+            continue;
+        }
+        if (upper.indexOf('PATH') === 0) {
+            metadata.path.push(line);
+            continue;
+        }
+        if (/^---/.test(trimmed)) {
+            metadata.tearLines.push(line);
+            continue;
+        }
+        if (/^\* +ORIGIN:/i.test(trimmed)) {
+            metadata.originLines.push(line);
+            continue;
+        }
+        bodyLines.push(line);
+    }
+    var sanitized = bodyLines.join('\r\n');
+    if (endsWithNewline && (bodyLines.length || text.length)) sanitized += '\r\n';
+    return { text: sanitized, metadata: metadata };
+};
+
 MessageBoard.prototype._updateScanPointer = function (header) {
     if (!header || typeof header.number !== 'number') return;
     var code = this.cursub || header.sub || header.sub_code || bbs.cursub_code || null;
@@ -903,6 +1475,24 @@ MessageBoard.prototype._renderSubView = function () {
 
 MessageBoard.prototype._paintRead = function () {
     if (this.view !== 'read') return;
+    var canvas = this._readBodyCanvas;
+    if (canvas) {
+        var totalLines = canvas.data_height || 0;
+        var maxVisible = canvas.height || 0;
+        if (maxVisible <= 0) maxVisible = this._readBodyFrame ? this._readBodyFrame.height : 0;
+        var start = this._readScroll || 0;
+        if (start < 0) start = 0;
+        var maxStart = (totalLines > maxVisible && maxVisible > 0) ? totalLines - maxVisible : 0;
+        if (start > maxStart) start = maxStart;
+        this._readScroll = start;
+        try { canvas.scrollTo(0, start); } catch (_scrollErr) { }
+        try { canvas.cycle(); } catch (_cycleErr) { }
+        if (this._readHeaderFrame) { try { this._readHeaderFrame.cycle(); } catch (_headerCycleErr) { } }
+        var dispStart = totalLines ? (start + 1) : 0;
+        var dispEnd = totalLines ? Math.min(totalLines, start + (maxVisible || 0)) : 0;
+        this._writeStatus('[ENTER]=Scroll/NextMsg  [Bksp/Del]=PrevMsg (Arrows: [Up]/[Down]=Scroll - [Right]/[Left]=Thread+/-) [ESC]=Threads  ' + dispStart + '-' + dispEnd + '/' + totalLines);
+        return;
+    }
     var f = this._readBodyFrame || this.outputFrame; if (!f) return; f.clear();
     var usable = f.height - 1; if (usable < 1) usable = f.height;
     var start = this._readScroll || 0;
@@ -1393,9 +1983,13 @@ MessageBoard.prototype._destroyReadFrames = function () {
     this._hideReadNotice({ skipRepaint: true });
     if (this._readHeaderFrame) { try { this._readHeaderFrame.close(); } catch (e) { } this._readHeaderFrame = null; }
     if (this._readBodyFrame) { try { this._readBodyFrame.close(); } catch (e) { } this._readBodyFrame = null; }
+    if (this._readBodyCanvas) { try { this._readBodyCanvas.close(); } catch (e) { } this._readBodyCanvas = null; }
     if (this._readSubIconFrame) { try { this._readSubIconFrame.close(); } catch (e) { } this._readSubIconFrame = null; }
     this._setReadBodyText('');
     this._readScroll = 0;
+    this._readBodyTotalLines = 0;
+    this._readBodyHasAnsi = false;
+    this._readMessageMetadata = null;
 };
 
 MessageBoard.prototype._destroyThreadUI = function () {
