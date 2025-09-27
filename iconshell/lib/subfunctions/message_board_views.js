@@ -716,6 +716,7 @@
             case '\x7f':
             case '\x08':
                 if (board._openRelativeInThread && board._openRelativeInThread(-1)) return false;
+                if (board._openAdjacentThread && board._openAdjacentThread(-1)) return false;
                 return true;
             case 'R': case 'r':
                 if (board.lastReadMsg) { board._renderPostView({ replyTo: board.lastReadMsg }); return false; }

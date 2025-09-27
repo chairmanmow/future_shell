@@ -1613,32 +1613,54 @@ MessageBoard.prototype._openAdjacentThread = function (delta) {
     if (!this.threadTree || !this.threadNodeIndex || !this.threadNodeIndex.length) return false;
     // Find current container node for lastReadMsg
     var currentMsgNum = this.lastReadMsg && this.lastReadMsg.number;
+    var currentRootId = this.lastReadMsg ? (this.lastReadMsg.thread_id || this.lastReadMsg.number) : null;
     var containerIndex = -1;
     for (var i = 0; i < this.threadNodeIndex.length; i++) {
         var node = this.threadNodeIndex[i];
-        if (node && node.__isTree && node.items) {
-            for (var m = 0; m < node.items.length; m++) { var itm = node.items[m]; if (itm.__msgHeader && itm.__msgHeader.number === currentMsgNum) { containerIndex = i; break; } }
+        if (!node) continue;
+        if (node.__isTree && node.items) {
+            for (var m = 0; m < node.items.length; m++) {
+                var itm = node.items[m];
+                if (itm.__msgHeader && itm.__msgHeader.number === currentMsgNum) {
+                    containerIndex = i;
+                    break;
+                }
+            }
             if (containerIndex !== -1) break;
+        } else if (node.__msgHeader && node.__msgHeader.number === currentMsgNum) {
+            // Single-message thread rendered as top-level item
+            if (!node.parent || node.parent === this.threadTree || (node.__threadRootId && node.__threadRootId === currentRootId)) {
+                containerIndex = i;
+                break;
+            }
         }
     }
     if (containerIndex === -1) return false;
     var target = containerIndex + delta;
     // Seek next/prev container (__isTree) skipping non-container nodes
     while (target >= 0 && target < this.threadNodeIndex.length) {
-        if (this.threadNodeIndex[target].__isTree) break; target += (delta > 0 ? 1 : -1);
+        var candidate = this.threadNodeIndex[target];
+        if (candidate && (candidate.__isTree || (candidate.__msgHeader && candidate.parent === this.threadTree))) break;
+        target += (delta > 0 ? 1 : -1);
     }
     if (target < 0 || target >= this.threadNodeIndex.length) return false;
     var targetNode = this.threadNodeIndex[target];
-    if (!targetNode || !targetNode.__isTree) return false;
-    // Open container and read its first message
-    try { if (targetNode.status & targetNode.__flags__.CLOSED) targetNode.open(); } catch (e) { }
-    if (targetNode.items && targetNode.items.length) {
+    if (!targetNode) return false;
+    var noticeKey = delta > 0 ? 'next-thread' : 'prev-thread';
+    if (targetNode.__isTree && targetNode.items && targetNode.items.length) {
+        try { if (targetNode.status & targetNode.__flags__.CLOSED) targetNode.open(); } catch (e) { }
         var first = targetNode.items[0];
-        if (first.__msgHeader) {
+        if (first && first.__msgHeader) {
             this._renderReadView(first.__msgHeader);
-            this._showReadNotice(delta > 0 ? 'next-thread' : 'prev-thread');
+            this._showReadNotice(noticeKey);
             return true;
         }
+        return false;
+    }
+    if (targetNode.__msgHeader && targetNode.parent === this.threadTree) {
+        this._renderReadView(targetNode.__msgHeader);
+        this._showReadNotice(noticeKey);
+        return true;
     }
     return false;
 };
