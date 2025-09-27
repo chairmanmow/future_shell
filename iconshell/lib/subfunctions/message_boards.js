@@ -123,6 +123,8 @@ function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride, op
     var hi = 0;
     var y = 0;
     var saved = { x: 0, y: 0 };
+    var maxRow = -1;
+    var wroteChar = false;
 
     function fgAttr(code) {
         switch (code) {
@@ -342,6 +344,8 @@ function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride, op
                 if (!frame.__properties__.data[y]) frame.__properties__.data[y] = [];
                 frame.__properties__.data[y][x] = new Char(ch, writeAttr);
             }
+            if (y > maxRow) maxRow = y;
+            wroteChar = true;
             x++;
             if (highlightState) {
                 highlightState.remaining--;
@@ -351,8 +355,11 @@ function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride, op
         }
         highlightState = null;
         y++;
-        if (typeof height === 'number' && height > 0 && y >= height) break;
     }
+
+    var totalRows = wroteChar ? (maxRow + 1) : 0;
+    frame.data_height = totalRows;
+    if (frame.__properties__) frame.__properties__.data_height = totalRows;
 
     if (typeof frame.refresh === 'function') frame.refresh();
     try { frame.cycle(); } catch (_cycleErr) { }
@@ -1549,9 +1556,10 @@ MessageBoard.prototype._paintRead = function () {
         var totalLines = canvas.data_height || 0;
         var maxVisible = canvas.height || 0;
         if (maxVisible <= 0) maxVisible = this._readBodyFrame ? this._readBodyFrame.height : 0;
+        if (maxVisible > 0) maxVisible = Math.max(1, Math.min(maxVisible, canvas.height || maxVisible));
         var start = this._readScroll || 0;
-        if (start < 0) start = 0;
         var maxStart = (totalLines > maxVisible && maxVisible > 0) ? totalLines - maxVisible : 0;
+        if (start < 0) start = 0;
         if (start > maxStart) start = maxStart;
         this._readScroll = start;
         try { canvas.scrollTo(0, start); } catch (_scrollErr) { }

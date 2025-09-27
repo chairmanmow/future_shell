@@ -697,6 +697,14 @@
             case KEY_ENTER:
             case '\r':
             case '\n':
+                if (canvas) {
+                    var current = board._readScroll || 0;
+                    if (current < maxStart) {
+                        board._readScroll = Math.min(maxStart, current + usable);
+                        board._paintRead && board._paintRead();
+                        return true;
+                    }
+                }
                 if ((board._readScroll || 0) < maxStart) {
                     board._readScroll = Math.min(maxStart, (board._readScroll || 0) + usable);
                     board._paintRead && board._paintRead();
@@ -716,7 +724,7 @@
                 board._renderPostView();
                 return false;
             case '\x12':
-                board._renderReadView(board.lastReadMsg);
+                if (board.lastReadMsg) board._renderReadView(board.lastReadMsg);
                 return true;
             case 'S': case 's': case '/':
                 board._promptSearch(board.cursub || board._lastActiveSubCode || null, 'threads');
