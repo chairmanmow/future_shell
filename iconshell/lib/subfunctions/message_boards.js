@@ -100,7 +100,7 @@ function _mbFindIconBase(name) {
 
 var GROUPING_PREFIXES = ['RE: ', 'Re: ', 'FW: ', 'FWD: '];
 
-function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride) {
+function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride, options) {
     if (!frame || typeof contents !== 'string') return false;
     if (typeof Char !== 'function') return false;
     var width = (typeof widthOverride === 'number' && widthOverride > 0) ? widthOverride : frame.width;
@@ -114,6 +114,9 @@ function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride) {
     if (typeof frame.home === 'function') frame.home();
 
     var lines = contents.split(/\r\n|\n|\r/);
+    var opts = options || {};
+    var board = opts.board || null;
+    var highlightQuotes = !!(opts.highlightQuotes && board && typeof board._quoteColorAttrFor === 'function');
     var attr = (typeof frame.attr === 'number') ? frame.attr : ((typeof BG_BLACK === 'number' ? BG_BLACK : 0) | (typeof LIGHTGRAY === 'number' ? LIGHTGRAY : 7));
     var bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
     var fg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
@@ -152,6 +155,27 @@ function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride) {
     while (lines.length > 0) {
         var line = lines.shift();
         var x = 0;
+        var plainIndex = 0;
+        var highlightState = null;
+        var highlightMap = null;
+        if (highlightQuotes) {
+            highlightMap = {};
+            var quotePattern = /(\s|^)([A-Za-z]{2})(>)(\s)/g;
+            var quoteMatch;
+            while ((quoteMatch = quotePattern.exec(line)) !== null) {
+                var leadLen = quoteMatch[1] ? quoteMatch[1].length : 0;
+                var token = (quoteMatch[2] || '').toUpperCase();
+                if (!token) continue;
+                var userStart = quoteMatch.index + leadLen;
+                var userLen = quoteMatch[2].length;
+                var caretStart = userStart + userLen;
+                var userAttr = board._quoteColorAttrFor(token, 0, attr);
+                var caretAttr = board._quoteColorAttrFor(token, 17, attr);
+                if (typeof userAttr === 'number' && userLen > 0) highlightMap[userStart] = { length: userLen, attr: userAttr };
+                if (typeof caretAttr === 'number') highlightMap[caretStart] = { length: 1, attr: caretAttr };
+            }
+        }
+        if (frame.__properties__ && !frame.__properties__.data[y]) frame.__properties__.data[y] = [];
         while (line.length > 0) {
             var attrMatch = line.match(/^\x1b\[((?:[0-9]{1,3};?)*)([0-9]{0,3})m/);
             if (attrMatch !== null) {
@@ -296,17 +320,36 @@ function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride) {
 
             var ch = line.charAt(0);
             line = line.substr(1);
+            if (highlightState && highlightState.remaining <= 0) {
+                highlightState = null;
+            }
+            if (highlightMap && highlightMap.hasOwnProperty(plainIndex)) {
+                var entry = highlightMap[plainIndex];
+                if (entry && typeof entry.attr === 'number' && entry.length > 0) {
+                    highlightState = { remaining: entry.length, attr: entry.attr };
+                }
+            }
             if (y < 0) y = 0;
             if (x < 0) x = 0;
             if (x >= width) {
                 x = 0; y += 1;
+                if (frame.__properties__ && !frame.__properties__.data[y]) frame.__properties__.data[y] = [];
             }
+            var baseAttr = attr;
+            var writeAttr = baseAttr;
+            if (highlightState && typeof highlightState.attr === 'number') writeAttr = highlightState.attr;
             if (frame.__properties__) {
                 if (!frame.__properties__.data[y]) frame.__properties__.data[y] = [];
-                frame.__properties__.data[y][x] = new Char(ch, attr);
+                frame.__properties__.data[y][x] = new Char(ch, writeAttr);
             }
             x++;
+            if (highlightState) {
+                highlightState.remaining--;
+                if (highlightState.remaining <= 0) highlightState = null;
+            }
+            plainIndex++;
         }
+        highlightState = null;
         y++;
         if (typeof height === 'number' && height > 0 && y >= height) break;
     }
@@ -1194,6 +1237,27 @@ MessageBoard.prototype._renderReadBodyContent = function (text) {
         try { this._readBodyFrame.clear(this._readBodyFrame.attr); } catch (_bodyClearErr) { }
     }
     var bodyText = (typeof text === 'string') ? text : '';
+    var renderText = bodyText;
+    var metadata = this._readMessageMetadata || null;
+    if (metadata) {
+        var metaLines = [];
+        function appendLines(arr) {
+            if (arr && arr.length) {
+                for (var i = 0; i < arr.length; i++) metaLines.push(arr[i]);
+            }
+        }
+        appendLines(metadata.kludges);
+        appendLines(metadata.tearLines);
+        appendLines(metadata.originLines);
+        appendLines(metadata.seenBy);
+        appendLines(metadata.path);
+        if (metaLines.length) {
+            var needsTerminator = !( /\r\n|\n|\r$/.test(renderText) );
+            if (renderText.length && needsTerminator) renderText += '\r\n';
+            if (renderText.length) renderText += '\r\n';
+            renderText += '-- Metadata --\r\n' + metaLines.join('\r\n');
+        }
+    }
     var attr = (typeof canvas.attr === 'number') ? canvas.attr : ((typeof BG_BLACK === 'number' ? BG_BLACK : 0) | (typeof LIGHTGRAY === 'number' ? LIGHTGRAY : 7));
     try { canvas.clear(attr); } catch (_clearErr) { }
     if (canvas.__properties__) {
@@ -1203,8 +1267,13 @@ MessageBoard.prototype._renderReadBodyContent = function (text) {
         canvas.__properties__.ctrl_a = false;
     }
     if (typeof canvas.home === 'function') canvas.home();
-    var rendered = _renderAnsiIntoFrame(canvas, bodyText, canvas.width, canvas.height);
-    this._readBodyHasAnsi = !!rendered;
+    var ansiPattern = /\x1b\[[0-9;?]*[@-~]/;
+    var hasAnsi = ansiPattern.test(renderText);
+    var rendered = _renderAnsiIntoFrame(canvas, renderText, canvas.width, canvas.height, {
+        board: this,
+        highlightQuotes: !hasAnsi
+    });
+    this._readBodyHasAnsi = hasAnsi;
     if (!rendered) {
         throw new Error('ANSI render failed for message body.');
     }
