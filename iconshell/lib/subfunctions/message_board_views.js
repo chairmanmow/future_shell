@@ -128,7 +128,7 @@
                 try { board.outputFrame.clear(); board.outputFrame.cycle(); } catch (_ignored4) { }
             }
             if (board._paintIconGrid) board._paintIconGrid();
-            board._writeStatus('GROUPS: Enter opens subs | S=Search | ESC=Quit');
+            board._writeStatus('GROUPS: Enter opens subs | Y=Scan | S=Search | ESC=Quit');
         } finally {
             board._endViewTransition();
         }
@@ -147,6 +147,14 @@
         else if (key === KEY_DOWN) board.selection = Math.min(board.items.length - 1, board.selection + cols);
         else if (key === '\x0d' || key === '\n') return handleGroupEnter(board);
         else if (key === 'S' || key === 's' || key === '/') return promptGroupSearch(board);
+        else if (key === 'Y' || key === 'y') {
+            var scanIndex = board._findMenuIndexByType ? board._findMenuIndexByType('scan') : -1;
+            if (scanIndex !== -1 && board.items[scanIndex] && typeof board.items[scanIndex].action === 'function') {
+                board.selection = scanIndex;
+                board.items[scanIndex].action();
+                return false;
+            }
+        }
         else if (key === KEY_PAGEUP) board.selection = Math.max(0, board.selection - maxVisible);
         else if (key === KEY_PAGEDN) board.selection = Math.min(board.items.length - 1, board.selection + maxVisible);
         if (board.selection !== oldSel && board._paintIconGrid) board._paintIconGrid();
@@ -172,7 +180,17 @@
             hotkey: '',
             iconFile: board._resolveBoardIcon('quit', 'quit'),
             iconBg: BG_RED,
-            iconFg: WHITE
+            iconFg: WHITE,
+            action: function () { board.exit(); }
+        });
+        items.push({
+            type: 'scan',
+            label: 'Scan For You',
+            hotkey: 'Y',
+            iconFile: board._resolveBoardIcon('mailbox', 'scan'),
+            iconBg: BG_CYAN,
+            iconFg: BLACK,
+            action: board._makeAction ? board._makeAction(function () { board._scanMessagesAddressedToUser(); }, { status: 'SCAN: Searching for messages addressed to you...' }) : function () { if (board._scanMessagesAddressedToUser) board._scanMessagesAddressedToUser(); }
         });
         items.push({
             type: 'search',
@@ -180,7 +198,8 @@
             hotkey: 'S',
             iconFile: board._resolveBoardIcon('search', 'search'),
             iconBg: BG_BLUE,
-            iconFg: WHITE
+            iconFg: WHITE,
+            action: function () { board._promptSearch(board._lastActiveSubCode || board.cursub || null, 'group'); }
         });
         for (var gi = 0; gi < msg_area.grp_list.length; gi++) {
             var grp = msg_area.grp_list[gi];
@@ -202,12 +221,8 @@
     function handleGroupEnter(board) {
         var item = board.items[board.selection];
         if (!item) return false;
-        if (item.type === 'quit') {
-            board.exit();
-            return false;
-        }
-        if (item.type === 'search') {
-            board._promptSearch(board._lastActiveSubCode || board.cursub || null, 'group');
+        if (item.action && typeof item.action === 'function') {
+            item.action();
             return false;
         }
         if (item.type === 'group') {
@@ -244,7 +259,7 @@
                 try { board.outputFrame.clear(); board.outputFrame.cycle(); } catch (_ignored4) { }
             }
             if (board._paintIconGrid) board._paintIconGrid();
-            board._writeStatus('SUBS: Enter opens threads | S=Search | Backspace=Groups | ' + (board.selection + 1) + '/' + board.items.length);
+            board._writeStatus('SUBS: Enter opens reader | S=Search | Backspace=Groups | ' + (board.selection + 1) + '/' + board.items.length);
         } finally {
             board._endViewTransition();
         }
@@ -336,7 +351,12 @@
         var item = board.items[board.selection];
         if (!item) return false;
         if (item.type === 'groups') { board._renderGroupView(); return false; }
-        if (item.type === 'sub') { board._renderThreadsView(item.subCode); return false; }
+        if (item.type === 'sub') {
+            var hasUnread = board._subHasUnread ? board._subHasUnread(item.subCode, item._messageCount) : ((item._unreadCount || 0) > 0);
+            if (hasUnread) board._openSubReader(item.subCode);
+            else board._renderThreadsView(item.subCode);
+            return false;
+        }
         return false;
     }
 
@@ -592,7 +612,7 @@
         board.lastReadMsg = msg;
         if (typeof board._storeFullHeader === 'function') board._storeFullHeader(msg);
         if (!board.outputFrame) board._ensureFrames();
-                try {
+        try {
             if (board._destroyReadFrames) board._destroyReadFrames();
             var f = board.outputFrame; if (f) f.clear();
             if (!bbs.mods) bbs.mods = {};
@@ -626,6 +646,7 @@
                         if (cached) fullHeader = cached;
                         if (fullHeader && board._storeFullHeader) board._storeFullHeader(fullHeader);
                         if (board._readMessageBody) bodyText = board._readMessageBody(mb, fullHeader) || '';
+                        board.currentMessageRawBody = bodyText; // capture unmodified raw body
                     } finally {
                         try { mb.close(); } catch (_e4) { }
                     }
@@ -639,6 +660,10 @@
             var displayBody = bodyInfo.text || '';
             if (board._setReadBodyText) board._setReadBodyText(displayBody);
             if (board._renderReadBodyContent) board._renderReadBodyContent(displayBody);
+            // Persist current header/body for reply quoting regardless of later frame destruction
+            board.currentMessageHeader = fullHeader;
+            board.currentMessageBody = displayBody;
+            if (!board.currentMessageRawBody) board.currentMessageRawBody = displayBody; // fallback if raw missing
             if (board._paintRead) board._paintRead();
         } finally {
             board._endViewTransition();
@@ -710,9 +735,15 @@
                     board._paintRead && board._paintRead();
                     return true;
                 }
-                if (board._openRelativeInThread && board._openRelativeInThread(1)) return false;
-                if (board._openAdjacentThread && board._openAdjacentThread(1)) return false;
-                return true;
+                var advanced = false;
+                if (board._openRelativeInThread) advanced = board._openRelativeInThread(1);
+                if (!advanced && board._openAdjacentThread) advanced = board._openAdjacentThread(1);
+                if (advanced) return false;
+                if (board._showReadNotice) {
+                    try { board._showReadNotice('end-of-sub'); } catch (_eEndNotice) { }
+                }
+                board._renderSubView(board.curgrp);
+                return false;
             case '\x7f':
             case '\x08':
                 if (board._openRelativeInThread && board._openRelativeInThread(-1)) return false;
@@ -728,7 +759,7 @@
                 if (board.lastReadMsg) board._renderReadView(board.lastReadMsg);
                 return true;
             case 'S': case 's': case '/':
-                board._promptSearch(board.cursub || board._lastActiveSubCode || null, 'threads');
+                board._promptSearch(board.cursub || board._lastActiveSubCode || null, 'read');
                 return false;
             default:
                 return true;

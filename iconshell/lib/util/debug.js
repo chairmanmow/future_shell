@@ -27,7 +27,7 @@ var DEBUG_CONFIG = {
     whosonline: { active: false, log_color: ANSI_COLORS.CYAN },
     settings: { active: false, log_color: ANSI_COLORS.CYAN },
     view: { active: false, log_color: ANSI_COLORS.CYAN },
-    messageboard: { active: false, log_color: ANSI_COLORS.CYAN },
+    messageboard: { active: true, log_color: ANSI_COLORS.CYAN },
     icon: { active: false, log_color: ANSI_COLORS.CYAN },
 };
 

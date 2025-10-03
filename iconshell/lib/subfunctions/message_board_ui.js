@@ -73,6 +73,7 @@ load('sbbsdefs.js');
         this.framePinned = false;
         this.host = null;
         this.hostOverride = null;
+        this._epoch = 0; // snapshot of board epoch when activated
     }
 
     TransitionOverlay.prototype.isActive = function () {
@@ -81,6 +82,8 @@ load('sbbsdefs.js');
 
     TransitionOverlay.prototype.begin = function (label, opts) {
         opts = opts || {};
+        var board = this.board;
+        if (board && board._epoch !== undefined) this._epoch = board._epoch;
         if (!this.active) {
             this.active = true;
             this.label = label || 'Rendering...';
@@ -106,6 +109,8 @@ load('sbbsdefs.js');
     TransitionOverlay.prototype.render = function () {
         if (!this.active) return;
         var board = this.board;
+        if (board && board._alive === false) { this.end(); return; }
+        if (board && board._epoch !== undefined && this._epoch !== board._epoch) { this.end(); return; }
         if (board && (board._transitionNoticeActive || board._readNoticeActive)) {
             this._closeFrame();
             this.framePinned = false;
@@ -167,6 +172,8 @@ load('sbbsdefs.js');
     TransitionOverlay.prototype.refresh = function () {
         if (!this.active) return;
         var board = this.board;
+        if (board && board._alive === false) { this.end(); return; }
+        if (board && board._epoch !== undefined && this._epoch !== board._epoch) { this.end(); return; }
         if (board && (board._transitionNoticeActive || board._readNoticeActive)) {
             this._closeFrame();
             this.framePinned = false;
