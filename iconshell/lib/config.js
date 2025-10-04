@@ -12,6 +12,7 @@ load("iconshell/lib/subfunctions/system_info.js");
 load("iconshell/lib/subfunctions/message_boards.js");
 load("iconshell/lib/subfunctions/users.js");
 load("iconshell/lib/subfunctions/sysop_commands.js");
+load("iconshell/lib/subfunctions/newsreader.js");
 
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
@@ -119,6 +120,18 @@ user_settings: function(){ if (typeof bbs.user_config==='function') {this.runExt
 			if(typeof this.usageViewer.attachShellTimer === 'function') this.usageViewer.attachShellTimer(this.timer);
 		}
 		this.queueSubprogramLaunch('usage-viewer', this.usageViewer);
+	},
+	newsreader: function(){
+		try { if (typeof NewsReader !== 'function') load('iconshell/lib/subfunctions/newsreader.js'); } catch (e) { dbug('subprogram', 'Failed loading newsreader.js ' + e); return; }
+		if (typeof NewsReader !== 'function') { dbug('subprogram', 'NewsReader class missing after load'); return; }
+		if (!this.newsReaderSub) {
+			this.newsReaderSub = new NewsReader({ parentFrame: this.subFrame, shell: this, timer: this.timer });
+		} else {
+			if (typeof this.newsReaderSub.setParentFrame === 'function') this.newsReaderSub.setParentFrame(this.subFrame);
+			this.newsReaderSub.shell = this;
+			if (typeof this.newsReaderSub.attachShellTimer === 'function') this.newsReaderSub.attachShellTimer(this.timer);
+		}
+		this.queueSubprogramLaunch('newsreader', this.newsReaderSub);
 	},
 	calendar: function(){
 		try { if(typeof CalendarSub !== 'function') load('iconshell/lib/subfunctions/calendar.js'); } catch(e) { dbug('subprogram','Failed loading calendar.js '+e); return; }
@@ -770,6 +783,7 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 		{ label: "Games", type: "folder", iconFile: "games", get children(){ return getItemsForXtrnSection(1);} },
 		{ label: "Apps", type: "folder", iconFile: "apps", get children(){ return getItemsForXtrnSection(0);} },
 		{ label: "Messages", type: "item", iconFile:"messages", action: makeExecXtrnAction("ECREADER") },
+		{ label: "News", type: "item", iconFile:"news", action: BUILTIN_ACTIONS.newsreader },
 		{ label: "Mail", type: "item", iconFile:"mail", dynamic:true, action: BUILTIN_ACTIONS.mail },
 		{ label: "Files", type: "item", iconFile:"folder", action: makeExecXtrnAction("ANSIVIEW") },
 		{ label: "Who", type: "folder", iconFile:"whosonline", get children(){
