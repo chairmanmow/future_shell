@@ -1,4 +1,11 @@
-IconShell.prototype.runExternal = function(fn) {
+load(system.mods_dir + 'iconshell/lib/util/usage_tracker.js');
+var UsageTracker = this.UsageTracker || {};
+
+IconShell.prototype.runExternal = function(fn, opts) {
+    opts = opts || {};
+    var trackUsage = (opts.trackUsage !== false);
+    var programId = opts.programId || 'unknown';
+    var startTs = trackUsage ? Date.now() : 0;
     try {
         // Optional: dissolve animation before clearing and launching external
         // if (this.view && typeof dissolve === 'function') {
@@ -10,6 +17,7 @@ IconShell.prototype.runExternal = function(fn) {
         fn();
         dbug("EXITING EXTERNAL PROGRAMMING RECREATING FRAMES?", "external");
     } finally {
+        var endTs = Date.now();
         console.clear();
         this.recreateFramesIfNeeded();
         // Refresh dynamic children (games menu rebuilding) if we're returning to shell folder view.
@@ -31,6 +39,23 @@ IconShell.prototype.runExternal = function(fn) {
         // Reset inactivity so the screensaver won't instantly resume.
         this._lastActivityTs = Date.now();
         this._stopScreenSaver();
+        if (trackUsage && UsageTracker && typeof UsageTracker.record === 'function') {
+            try {
+                var elapsed = Math.max(0, Math.round((endTs - startTs) / 1000));
+                var info = {
+                    programId: programId,
+                    elapsedSeconds: elapsed,
+                    timestamp: endTs
+                };
+                if (typeof user !== 'undefined' && user) {
+                    if (user.alias) info.userAlias = user.alias;
+                    if (typeof user.number === 'number') info.userNumber = user.number;
+                }
+                UsageTracker.record(info);
+            } catch (trackErr) {
+                log(LOG_ERROR, 'runExternal usage tracking error: ' + trackErr);
+            }
+        }
     }
 };
 

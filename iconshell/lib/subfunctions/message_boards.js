@@ -2859,31 +2859,6 @@ MessageBoard.prototype._promptSearch = function (preferredCode, returnView) {
     this._writeStatus('SEARCH: Unable to open inline prompt for ' + subName);
 };
 
-MessageBoard.prototype._makeAction = function (fn, opts) {
-    opts = opts || {};
-    var self = this;
-    var animate = opts.animation !== 'none';
-    return function () {
-        if (typeof fn !== 'function') return;
-        if (opts.status && typeof self._writeStatus === 'function') {
-            try { self._writeStatus(opts.status); } catch (_eStatus) { }
-        }
-        var exec = function () {
-            try { fn.call(self); } catch (e) { log('MessageBoard action error: ' + e); }
-        };
-        var shell = self.shell || opts.shell || null;
-        if (animate && shell && typeof shell.runExternal === 'function') {
-            shell.runExternal(exec);
-        } else {
-            exec();
-        }
-        if (self.view === 'group' && typeof self._paintIconGrid === 'function') {
-            try { self._paintIconGrid(); } catch (_ePaint) { }
-            try { self._writeStatus('GROUPS: Enter opens subs | Y=Scan | S=Search | ESC=Quit'); } catch (_eReset) { }
-        }
-    };
-};
-
 MessageBoard.prototype._scanMessagesAddressedToUser = function () {
     var now = 0;
     if (typeof Date !== 'undefined' && Date.now) now = Date.now();

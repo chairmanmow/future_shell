@@ -218,7 +218,7 @@ SysopCommand.prototype._submitCommand = function() {
         console.getkey();
     };
     if(this.shell && typeof this.shell.runExternal === 'function'){
-        this.shell.runExternal(runner);
+        this.shell.runExternal(runner, { programId: 'sysop:' + cmd });
     } else {
         runner();
     }

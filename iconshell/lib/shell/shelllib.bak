@@ -63,8 +63,6 @@ IconShell.prototype.init = function () {
     this._screensaverHotspotActive = false;
     this._lastChatPollTs = 0;
     this._lastWasCR = false;
-    this._lastKeyTimestamp = 0;
-    this.keyStrokeTimeoutMs = 1000;
     this._chatPollEvent = null;
     this._subprogramCycleEvent = null;
     this._inactivityEvent = null;
@@ -187,13 +185,37 @@ IconShell.prototype.main = function () {
             }
             if (this._pendingSubLaunch) this._processPendingSubLaunch();
             if (this.timer) {
-                var elapsed = this._lastKeyTimestamp ? (Date.now() - this._lastKeyTimestamp) : Infinity;
-                if (elapsed >= this.keyStrokeTimeoutMs) this.timer.cycle();
+                this.timer.cycle();
+            } else {
+                var ts = Date.now();
+                this.recreateFramesIfNeeded();
+                this._pollChatBackend(ts);
+                this._cycleActiveSubprogram();
+                this._handleInactivity(ts);
+                this._cycleToasts();
+                this._flushPendingFolderRedraw();
+                this._checkConsoleResize();
             }
             yield(true);
         }
     } finally {
-        this._cleanupMainLoop();
+        // Abort periodic chat redraw event on exit
+        if (this._chatRedrawEvent && this._chatRedrawEvent.abort !== undefined) {
+            this._chatRedrawEvent.abort = true;
+        }
+        if (this._resizePollEvent && this._resizePollEvent.abort !== undefined) {
+            this._resizePollEvent.abort = true;
+        }
+        if (this._chatPollEvent && this._chatPollEvent.abort !== undefined) this._chatPollEvent.abort = true;
+        if (this._subprogramCycleEvent && this._subprogramCycleEvent.abort !== undefined) this._subprogramCycleEvent.abort = true;
+        if (this._inactivityEvent && this._inactivityEvent.abort !== undefined) this._inactivityEvent.abort = true;
+        if (this._toastCycleEvent && this._toastCycleEvent.abort !== undefined) this._toastCycleEvent.abort = true;
+        if (this._folderFlushEvent && this._folderFlushEvent.abort !== undefined) this._folderFlushEvent.abort = true;
+        this._chatRedrawEvent = this._resizePollEvent = this._nodeMsgEvent = null;
+        this._chatPollEvent = this._subprogramCycleEvent = this._inactivityEvent = null;
+        this._toastCycleEvent = this._folderFlushEvent = null;
+        this._stopScreenSaver();
+        if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
     }
 };
 
@@ -470,7 +492,6 @@ IconShell.prototype._processKeyQueue = function (keys, nowTs) {
                 continue;
             }
         }
-        this._lastKeyTimestamp = nowTs;
         this.processKeyboardInput(key);
     }
 };
@@ -758,17 +779,3 @@ if (!IconShell.prototype._drawFolderOrig) {
         return this._drawFolderOrig.apply(this, arguments);
     };
 }
-IconShell.prototype._cleanupMainLoop = function () {
-    if (this._chatRedrawEvent && this._chatRedrawEvent.abort !== undefined) this._chatRedrawEvent.abort = true;
-    if (this._resizePollEvent && this._resizePollEvent.abort !== undefined) this._resizePollEvent.abort = true;
-    if (this._chatPollEvent && this._chatPollEvent.abort !== undefined) this._chatPollEvent.abort = true;
-    if (this._subprogramCycleEvent && this._subprogramCycleEvent.abort !== undefined) this._subprogramCycleEvent.abort = true;
-    if (this._inactivityEvent && this._inactivityEvent.abort !== undefined) this._inactivityEvent.abort = true;
-    if (this._toastCycleEvent && this._toastCycleEvent.abort !== undefined) this._toastCycleEvent.abort = true;
-    if (this._folderFlushEvent && this._folderFlushEvent.abort !== undefined) this._folderFlushEvent.abort = true;
-    this._chatRedrawEvent = this._resizePollEvent = this._nodeMsgEvent = null;
-    this._chatPollEvent = this._subprogramCycleEvent = this._inactivityEvent = null;
-    this._toastCycleEvent = this._folderFlushEvent = null;
-    this._stopScreenSaver();
-    if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
-};

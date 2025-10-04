@@ -68,6 +68,52 @@ Subprogram.prototype.cleanup = function(){
     this._myFrames = [];
 };
 
+Subprogram.prototype._teardownHostFrame = function(){
+    if(!this.hostFrame) return;
+    try { this.hostFrame.close(); } catch(e){}
+    var idx = this._myFrames.indexOf(this.hostFrame);
+    if(idx !== -1) this._myFrames.splice(idx, 1);
+    this.hostFrame = null;
+    this.setBackgroundFrame(null);
+};
+
+Subprogram.prototype._releaseFrameRefs = function(){
+    for(var key in this){
+        if(!Object.prototype.hasOwnProperty.call(this, key)) continue;
+        if(!this[key]) continue;
+        if(key === 'parentFrame' || key === 'hostFrame' || key === '__bg_frame' || key === '_myFrames') continue;
+        var val = this[key];
+        if(val && typeof val === 'object'){
+            var isFrameLike = (typeof val.close === 'function' && typeof val.open === 'function' && typeof val.gotoxy === 'function');
+            if(isFrameLike){
+                try { val.close(); } catch(e){}
+                this[key] = null;
+            }
+        }
+    }
+};
+
+Subprogram.prototype.onShellResize = function(dims){
+    this._releaseFrameRefs();
+    this._teardownHostFrame();
+    this._myFrames = [];
+    if(typeof this.handleResize === 'function'){
+        try { this.handleResize(dims); } catch(e){}
+    }
+    this._ensureHostFrame();
+    if(typeof this.afterResize === 'function'){
+        try { this.afterResize(dims); } catch(e){}
+    }
+    if(typeof this.refresh === 'function'){
+        try { this.refresh(); } catch(e){}
+    } else if(typeof this.draw === 'function'){
+        try { this.draw(); } catch(e){}
+    }
+    if(this.parentFrame && typeof this.parentFrame.cycle === 'function'){
+        try { this.parentFrame.cycle(); } catch(e){}
+    }
+};
+
 Subprogram.prototype.registerFrame = function(frame){
     this._myFrames.push(frame);
 };

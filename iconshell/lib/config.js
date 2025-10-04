@@ -55,8 +55,8 @@ var BUILTIN_ACTIONS = {
 		else { this.ircChatSub.parentFrame = this.root; this.ircChatSub.shell = this; }
 		this.queueSubprogramLaunch('irc-chat', this.ircChatSub);
 	},
-	msg_scan_config: function(){ if (typeof bbs.cfg_msg_scan==='function') {this.runExternal(function(){bbs.cfg_msg_scan()}) }  },
-	user_settings: function(){ if (typeof bbs.user_config==='function') {this.runExternal(function(){bbs.user_config()}) }  },
+msg_scan_config: function(){ if (typeof bbs.cfg_msg_scan==='function') {this.runExternal(function(){bbs.cfg_msg_scan()}, { programId: 'cfg_msg_scan' }); }  },
+user_settings: function(){ if (typeof bbs.user_config==='function') {this.runExternal(function(){bbs.user_config()}, { programId: 'user_config' }); }  },
 	hello: function(){ if(!this.helloWorld) this.helloWorld = new HelloWorld(); this.queueSubprogramLaunch('hello-world', this.helloWorld); },
 	exit: function(){ throw('Exit Shell'); },
 	msg_boards: function(){
@@ -95,9 +95,30 @@ var BUILTIN_ACTIONS = {
 	filearea: function(){
 		try { if(typeof FileArea !== 'function') load('iconshell/lib/subfunctions/file_area.js'); } catch(e) { dbug('subprogram','Failed loading file_area.js '+e); return; }
 		if(typeof FileArea !== 'function') { dbug('subprogram','FileArea class missing after load'); return; }
-		if(!this.fileArea) this.fileArea = new FileArea({ parentFrame: this.subFrame });
-		// this.fileArea.setParentFrame(this.subFrame);
+		var fileAreaIcons = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.fileAreaIcons) ? ICSH_SETTINGS.fileAreaIcons : null;
+		if(!this.fileArea) this.fileArea = new FileArea({ parentFrame: this.subFrame, shell: this, iconMap: fileAreaIcons });
+		else {
+			if(typeof this.fileArea.setParentFrame === 'function') this.fileArea.setParentFrame(this.subFrame);
+			this.fileArea.shell = this;
+			if(typeof this.fileArea.setIconMap === 'function') this.fileArea.setIconMap(fileAreaIcons);
+		}
 		this.queueSubprogramLaunch('file-area', this.fileArea);
+	},
+	usage_viewer: function(){
+		try { load('iconshell/lib/subfunctions/usage-viewer.js'); } catch(e) { dbug('subprogram','Failed loading usage-viewer.js '+e); return; }
+		if(typeof UsageViewer !== 'function') { dbug('subprogram','UsageViewer class missing after load'); return; }
+		var needsNewInstance = !this.usageViewer;
+		if(!needsNewInstance && typeof UsageViewer.VERSION !== 'undefined') {
+			if (this.usageViewer._version !== UsageViewer.VERSION) needsNewInstance = true;
+		}
+		if(needsNewInstance) {
+			this.usageViewer = new UsageViewer({ parentFrame: this.subFrame, shell: this, timer: this.timer });
+		} else {
+			if (typeof this.usageViewer.setParentFrame === 'function') this.usageViewer.setParentFrame(this.subFrame);
+			this.usageViewer.shell = this;
+			if(typeof this.usageViewer.attachShellTimer === 'function') this.usageViewer.attachShellTimer(this.timer);
+		}
+		this.queueSubprogramLaunch('usage-viewer', this.usageViewer);
 	},
 	calendar: function(){
 		try { if(typeof CalendarSub !== 'function') load('iconshell/lib/subfunctions/calendar.js'); } catch(e) { dbug('subprogram','Failed loading calendar.js '+e); return; }
@@ -242,7 +263,7 @@ function makeExecXtrnAction(code) {
 					_icsh_err('exec_xtrn('+code+') failed: ' + ex);
 					_informUser(self, 'Launch failed: ' + code);
 				}
-			});
+			}, { programId: code });
 		} catch(e) {
 			_icsh_err('Unhandled error launching external '+code+': '+e);
 			_informUser(self, 'Error launching: '+code);
@@ -764,6 +785,7 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 		{ label: "Who List", type: "item", iconFile:"whosonline", action: BUILTIN_ACTIONS.who_list },
 		{ label: "Hello", type: "item", iconFile:"folder", action: BUILTIN_ACTIONS.hello },
 		{ label: "Sys Info", type: "item", iconFile:"kingcomputer", action: BUILTIN_ACTIONS.sysinfo },
+		{ label: "Usage", type: "item", iconFile:"calendar", action: BUILTIN_ACTIONS.usage_viewer },
 		{ label: "Settings", type: "item", iconFile:"settings", action: BUILTIN_ACTIONS.settings },
 		{ label: "Exit", type: "item", iconFile:"exit", action: BUILTIN_ACTIONS.exit }
 	]

@@ -1,0 +1,131 @@
+{
+	"2025-10": {
+		"totals": {
+			"count": 14,
+			"seconds": 1987
+		},
+		"programs": {
+			"chicken": {
+				"count": 1,
+				"seconds": 33,
+				"lastTimestamp": 1759468533666
+			},
+			"gooble": {
+				"count": 1,
+				"seconds": 716,
+				"lastTimestamp": 1759469350983
+			},
+			"scfgansi": {
+				"count": 2,
+				"seconds": 323,
+				"lastTimestamp": 1759515962678
+			},
+			"clans": {
+				"count": 1,
+				"seconds": 19,
+				"lastTimestamp": 1759470606835
+			},
+			"ansiview": {
+				"count": 1,
+				"seconds": 160,
+				"lastTimestamp": 1759472241793
+			},
+			"bordello": {
+				"count": 1,
+				"seconds": 216,
+				"lastTimestamp": 1759475118921
+			},
+			"thepit": {
+				"count": 1,
+				"seconds": 357,
+				"lastTimestamp": 1759475488536
+			},
+			"lord-rst": {
+				"count": 1,
+				"seconds": 4,
+				"lastTimestamp": 1759515863279
+			},
+			"file-area:download": {
+				"count": 3,
+				"seconds": 17,
+				"lastTimestamp": 1759517317784
+			},
+			"file-area:upload": {
+				"count": 2,
+				"seconds": 142,
+				"lastTimestamp": 1759517300027
+			}
+		},
+		"users": {
+			"Hm Derdoc": {
+				"count": 9,
+				"seconds": 1828,
+				"programs": {
+					"chicken": {
+						"count": 1,
+						"seconds": 33,
+						"lastTimestamp": 1759468533666
+					},
+					"gooble": {
+						"count": 1,
+						"seconds": 716,
+						"lastTimestamp": 1759469350983
+					},
+					"scfgansi": {
+						"count": 2,
+						"seconds": 323,
+						"lastTimestamp": 1759515962678
+					},
+					"clans": {
+						"count": 1,
+						"seconds": 19,
+						"lastTimestamp": 1759470606835
+					},
+					"ansiview": {
+						"count": 1,
+						"seconds": 160,
+						"lastTimestamp": 1759472241793
+					},
+					"bordello": {
+						"count": 1,
+						"seconds": 216,
+						"lastTimestamp": 1759475118921
+					},
+					"thepit": {
+						"count": 1,
+						"seconds": 357,
+						"lastTimestamp": 1759475488536
+					},
+					"lord-rst": {
+						"count": 1,
+						"seconds": 4,
+						"lastTimestamp": 1759515863279
+					}
+				},
+				"lastTimestamp": 1759515962678,
+				"alias": "Hm Derdoc",
+				"number": 1
+			},
+			"Larry Lagomorph": {
+				"count": 5,
+				"seconds": 159,
+				"programs": {
+					"file-area:download": {
+						"count": 3,
+						"seconds": 17,
+						"lastTimestamp": 1759517317784
+					},
+					"file-area:upload": {
+						"count": 2,
+						"seconds": 142,
+						"lastTimestamp": 1759517300027
+					}
+				},
+				"alias": "Larry Lagomorph",
+				"number": 17,
+				"lastTimestamp": 1759517317784
+			}
+		},
+		"lastTimestamp": 1759517317784
+	}
+}

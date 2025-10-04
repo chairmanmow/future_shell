@@ -85,11 +85,17 @@ function Mail(opts) {
 	function makeAction(fn,msg,opts){
 		opts = opts || {};
 		var animate = opts.animation !== 'none';
+		var programId = opts.programId || (msg ? ('mail:' + msg.replace(/\s+/g,'_').toLowerCase()) : 'mail');
 		return function(){
 			var sh = self.shell;
 			if(animate && sh && typeof sh.runExternal === 'function') {
+				var animateOpts = { programId: programId };
+				if (opts.trackUsage === false) animateOpts.trackUsage = false;
 				sh.runExternal(function(){ try { fn(); } catch(ex){ 
-					log("run external error", ex) } });
+					log("run external error", ex) } }, animateOpts);
+			} else if (sh && typeof sh.runExternal === 'function') {
+				sh.runExternal(function(){ try { fn(); } catch(ex){ 
+					log("run external error", ex) } }, { programId: programId, trackUsage: opts.trackUsage });
 			} else {
 				try { fn(); } catch(ex){ 
 					log("exec fn() error", ex)
@@ -103,13 +109,13 @@ function Mail(opts) {
 	this.totalMailCount = 0;
 	this.menuOptions = [
 		{ baseLabel: 'Exit', iconFile:'back', action: function(){ self.exit(); } },
-		{ baseLabel: 'Inbox', iconFile:'messages', dynamic:true,  action: makeAction(function(){ bbs.read_mail(); }, 'Reading mail...') },
+		{ baseLabel: 'Inbox', iconFile:'messages', dynamic:true,  action: makeAction(function(){ bbs.read_mail(); }, 'Reading mail...', { programId: 'mail:inbox' }) },
 		// Native interactive compose (custom pre-screen, no confirmation desired)
 		{ baseLabel: 'Compose Email', iconFile:'compose', confirm:false, action: function(){ self.composeInteractiveEmail(); } },
-		{ baseLabel: 'Scan For You', iconFile:'mailbox', action: makeAction(function(){ self._scanMessagesAddressedToUser(); }, 'Scanning for messages to you...') },
+		{ baseLabel: 'Scan For You', iconFile:'mailbox', action: makeAction(function(){ self._scanMessagesAddressedToUser(); }, 'Scanning for messages to you...', { programId: 'mail:scan_for_you' }) },
 		{ baseLabel: 'Netmail Queue', iconFile:'clock', action: makeAction(function(){
 			self._renderNetmailList({ mode: 'queue', title: 'Fido Netmail Queue' });
-		}, 'Viewing netmail queue...') },
+		}, 'Viewing netmail queue...', { programId: 'mail:netmail_queue' }) },
 		{ baseLabel: 'Sent Mail', iconFile:'redman', action: makeAction(function(){
 			if(typeof bbs === 'undefined' || typeof bbs.read_mail !== 'function') return;
 			var currentUserNum = (typeof user !== 'undefined' && user && typeof user.number === 'number' && user.number > 0) ? user.number : null;
@@ -135,7 +141,7 @@ function Mail(opts) {
 			} catch(e) {
 				log('Sent Mail read_mail crashed', e);
 			}
-		}, 'Opening sent mail...') },
+		}, 'Opening sent mail...', { programId: 'mail:sent' }) },
 	];
 	this.updateUnreadCount();
 	// icon cell cache
@@ -389,7 +395,7 @@ Mail.prototype._commitRecipientPrompt = function(accepted){
 		return;
 	}
 	var shell = this.shell;
-	if(shell && typeof shell.runExternal === 'function') shell.runExternal(run);
+	if(shell && typeof shell.runExternal === 'function') shell.runExternal(run, { programId: 'mail:send' });
 	else run();
 	this.updateUnreadCount();
 	if(sent) this._toastSent && this._toastSent(destDisplay);

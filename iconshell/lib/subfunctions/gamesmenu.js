@@ -57,7 +57,7 @@ function getItemsForXtrnSection(index) {
 			type: "item",
 			hotkey: null,
 			action: (function (code, name) {
-				return function () { this.runExternal(function () { bbs.exec_xtrn(code) }); };
+				return function () { this.runExternal(function () { bbs.exec_xtrn(code); }, { programId: code }); };
 			})(prog.code, prog.name)
 		};
 		var codeUpper = prog.code.toUpperCase();

@@ -190,7 +190,7 @@
             iconFile: board._resolveBoardIcon('mailbox', 'scan'),
             iconBg: BG_CYAN,
             iconFg: BLACK,
-            action: board._makeAction ? board._makeAction(function () { board._scanMessagesAddressedToUser(); }, { status: 'SCAN: Searching for messages addressed to you...' }) : function () { if (board._scanMessagesAddressedToUser) board._scanMessagesAddressedToUser(); }
+            action: function () { board._scanMessagesAddressedToUser(); }
         });
         items.push({
             type: 'search',
