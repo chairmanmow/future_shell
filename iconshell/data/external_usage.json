@@ -1,8 +1,8 @@
 {
 	"2025-10": {
 		"totals": {
-			"count": 30,
-			"seconds": 3350
+			"count": 21,
+			"seconds": 3256
 		},
 		"programs": {
 			"chicken": {
@@ -26,9 +26,9 @@
 				"lastTimestamp": 1759470606835
 			},
 			"ansiview": {
-				"count": 2,
-				"seconds": 178,
-				"lastTimestamp": 1759592881560
+				"count": 1,
+				"seconds": 160,
+				"lastTimestamp": 1759472241793
 			},
 			"bordello": {
 				"count": 2,
@@ -61,55 +61,15 @@
 				"lastTimestamp": 1759553307879
 			},
 			"mail:inbox": {
-				"count": 1,
-				"seconds": 9,
-				"lastTimestamp": 1759562383937
-			},
-			"avatchoo": {
-				"count": 1,
-				"seconds": 3,
-				"lastTimestamp": 1759592848090
-			},
-			"sbbslist": {
 				"count": 2,
-				"seconds": 12,
-				"lastTimestamp": 1759593585172
-			},
-			"go-for": {
-				"count": 1,
-				"seconds": 6,
-				"lastTimestamp": 1759592901615
-			},
-			"hamtest": {
-				"count": 1,
-				"seconds": 7,
-				"lastTimestamp": 1759593598636
-			},
-			"ecreader": {
-				"count": 1,
-				"seconds": 2,
-				"lastTimestamp": 1759593604411
-			},
-			"bullseye": {
-				"count": 1,
-				"seconds": 2,
-				"lastTimestamp": 1759593608159
-			},
-			"user_config": {
-				"count": 1,
-				"seconds": 3,
-				"lastTimestamp": 1759593643980
-			},
-			"bcrgames": {
-				"count": 1,
-				"seconds": 46,
-				"lastTimestamp": 1759593712783
+				"seconds": 14,
+				"lastTimestamp": 1759634766992
 			}
 		},
 		"users": {
 			"Hm Derdoc": {
-				"count": 15,
-				"seconds": 3092,
+				"count": 16,
+				"seconds": 3097,
 				"programs": {
 					"chicken": {
 						"count": 1,
@@ -157,12 +117,12 @@
 						"lastTimestamp": 1759553307879
 					},
 					"mail:inbox": {
-						"count": 1,
-						"seconds": 9,
-						"lastTimestamp": 1759562383937
+						"count": 2,
+						"seconds": 14,
+						"lastTimestamp": 1759634766992
 					}
 				},
-				"lastTimestamp": 1759564105390,
+				"lastTimestamp": 1759634766992,
 				"alias": "Hm Derdoc",
 				"number": 1
 			},
@@ -184,62 +144,8 @@
 				"alias": "Larry Lagomorph",
 				"number": 17,
 				"lastTimestamp": 1759517317784
-			},
-			"Equilibrium": {
-				"count": 10,
-				"seconds": 99,
-				"programs": {
-					"avatchoo": {
-						"count": 1,
-						"seconds": 3,
-						"lastTimestamp": 1759592848090
-					},
-					"ansiview": {
-						"count": 1,
-						"seconds": 18,
-						"lastTimestamp": 1759592881560
-					},
-					"sbbslist": {
-						"count": 2,
-						"seconds": 12,
-						"lastTimestamp": 1759593585172
-					},
-					"go-for": {
-						"count": 1,
-						"seconds": 6,
-						"lastTimestamp": 1759592901615
-					},
-					"hamtest": {
-						"count": 1,
-						"seconds": 7,
-						"lastTimestamp": 1759593598636
-					},
-					"ecreader": {
-						"count": 1,
-						"seconds": 2,
-						"lastTimestamp": 1759593604411
-					},
-					"bullseye": {
-						"count": 1,
-						"seconds": 2,
-						"lastTimestamp": 1759593608159
-					},
-					"user_config": {
-						"count": 1,
-						"seconds": 3,
-						"lastTimestamp": 1759593643980
-					},
-					"bcrgames": {
-						"count": 1,
-						"seconds": 46,
-						"lastTimestamp": 1759593712783
-					}
-				},
-				"alias": "Equilibrium",
-				"number": 21,
-				"lastTimestamp": 1759593712783
 			}
 		},
-		"lastTimestamp": 1759593712783
+		"lastTimestamp": 1759634766992
 	}
 }

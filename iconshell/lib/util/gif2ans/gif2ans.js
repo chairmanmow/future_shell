@@ -4,8 +4,8 @@ load("http.js");
 
 function here() { return js.exec_dir; }
 
-load(here() + "gif_loader.js");
-load(here() + "ansi_core.js"); // must export ANSICoreFactory()
+load(here() + "iconshell/lib/util/gif2ans/gif_loader.js");
+load(here() + "iconshell/lib/util/gif2ans/ansi_core.js"); // must export ANSICoreFactory()
 
 // instantiate the core (your style)
 if (typeof ANSICoreFactory !== 'function') throw "ANSICoreFactory() not found";
@@ -34,6 +34,11 @@ function __fetchBytes(pathOrUrl) {
 
 
 function GIF2ANS(optsOrArgv) {
+    if (js.global && js.global.__IMG_AS_LIBRARY__ && typeof this === 'object') {
+        this.GIF2ANS = GIF2ANS;
+    } else if (typeof this === 'object') {
+        this.GIF2ANS = GIF2ANS;
+    }
     var opts = (optsOrArgv && optsOrArgv.splice) ? __parseArgv(optsOrArgv) : (optsOrArgv || {});
     var INPUT = opts.in || "https://www.w3.org/People/mimasa/test/imgformat/img/w3c_home.gif";
     var OUTPUT = opts.out || "/sbbs/work/out.ans";
@@ -63,3 +68,5 @@ function GIF2ANS(optsOrArgv) {
         return { ansi: ansi.bytes, cols: ansi.cols, rows: ansi.rows };
     }
 }
+
+if (typeof this === 'object') this.GIF2ANS = GIF2ANS;

@@ -6,6 +6,7 @@ if (typeof utf8_cp437 === 'undefined') {
 }
 load("iconshell/lib/subfunctions/subprogram.js");
 load('iconshell/lib/shell/icon.js');
+load('iconshell/lib/util/gif2ans/img_loader.js')
 
 function resolveAttr(key, fallback) {
     if (typeof fallback === 'undefined') fallback = 0;
@@ -16,6 +17,8 @@ function resolveAttr(key, fallback) {
 }
 
 var RSS_FEEDS = [
+    { label: "Digital Photography School (png)", url: "https://digital-photography-school.com/feed/", category: "Images", icon: "dps_news" },
+    { label: "NASA latest content (png)", url: "https://science.nasa.gov/feed/?science_org=19791%2C20129", category: "Images", icon: "nasa_image_of_the_day" },
     { label: "BBC News - World", url: "http://feeds.bbci.co.uk/news/world/rss.xml", category: "World News", icon: "bbc_world_news" },
     { label: "Reuters: World News", url: "http://feeds.reuters.com/Reuters/worldNews", category: "World News", icon: 'reuters_world_news' },
     { label: "NPR: News", url: "https://www.npr.org/rss/rss.php?id=1001", category: "World News", icon: 'npr_news' },
@@ -68,6 +71,9 @@ function NewsReader(opts) {
     this._hotspotMap = {};
     this._hotspotChars = null;
     this._gridLayout = null;
+    this.imageAnsiCache = {};
+    this._imageAnsiErrors = {};
+    this._loadingOverlayFrame = null;
     this._resetState();
 }
 extend(NewsReader, Subprogram);
@@ -82,11 +88,15 @@ NewsReader.prototype._resetState = function () {
     this._destroyCategoryIcons();
     this._destroyFeedIcons();
     this._releaseHotspots();
+    this._destroyLoadingOverlay();
     this.categoryIconCells = [];
     this.feedIconCells = [];
     this._categoryGridItems = [];
     this._feedGridItems = [];
     this._gridLayout = null;
+    this._hotspotMap = {};
+    this._hotspotChars = null;
+    this._imageAnsiErrors = {};
     this.categories = this._buildCategories();
     this.state = 'categories';
     this.selectedIndex = 0;
@@ -105,11 +115,12 @@ NewsReader.prototype._resetState = function () {
     this.articleImages = [];
     this.imageSelection = 0;
     this.imageScrollOffset = 0;
+    this.imagePreviewScroll = 0;
     this.articleTextOffset = 1;
     this._currentIconKey = null;
-    this._categoryGridItems = [];
-    this._feedGridItems = [];
-    this._hotspotMap = {};
+    this._currentPreviewUrl = null;
+    this._imagePreviewScrollMax = 0;
+    this._imagePreviewVisibleRows = 0;
 };
 
 NewsReader.prototype.enter = function (done) {
@@ -161,6 +172,54 @@ NewsReader.prototype._destroyArticleIcon = function () {
     this._currentIconKey = null;
 };
 
+NewsReader.prototype._destroyLoadingOverlay = function () {
+    if (!this._loadingOverlayFrame) return;
+    try { this._loadingOverlayFrame.close(); } catch (_overlayCloseErr) { }
+    if (this._myFrames) {
+        var idx = this._myFrames.indexOf(this._loadingOverlayFrame);
+        if (idx !== -1) this._myFrames.splice(idx, 1);
+    }
+    this._loadingOverlayFrame = null;
+};
+
+NewsReader.prototype._showLoadingOverlay = function (message) {
+    if (!this.listFrame || !this.parentFrame) return false;
+    this._destroyLoadingOverlay();
+    var overlayAttr = LIST_ACTIVE;
+    var frame = new Frame(this.listFrame.x, this.listFrame.y, this.listFrame.width, this.listFrame.height, overlayAttr, this.parentFrame);
+    frame.open();
+    frame.clear();
+    frame.attr = overlayAttr;
+    var text = this._toDisplayText(message || 'Converting Image');
+    var lines = ('' + text).split(/\r?\n/);
+    var blockHeight = lines.length;
+    var startY = Math.max(1, Math.floor((frame.height - blockHeight) / 2) + 1);
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line) line = '';
+        if (line.length > frame.width) line = line.substr(0, frame.width);
+        var lineX = Math.max(1, Math.floor((frame.width - line.length) / 2) + 1);
+        var lineY = startY + i;
+        if (lineY > frame.height) break;
+        frame.gotoxy(lineX, lineY);
+        frame.putmsg(line);
+    }
+    this._loadingOverlayFrame = frame;
+    if (typeof this.registerFrame === 'function') this.registerFrame(frame);
+    if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
+        try { this.parentFrame.cycle(); } catch (_overlayShowCycleErr) { }
+    }
+    return true;
+};
+
+NewsReader.prototype._hideLoadingOverlay = function () {
+    if (!this._loadingOverlayFrame) return;
+    this._destroyLoadingOverlay();
+    if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
+        try { this.parentFrame.cycle(); } catch (_overlayHideCycleErr) { }
+    }
+};
+
 NewsReader.prototype._destroyIconCells = function (cells) {
     if (!cells || !cells.length) return;
     for (var i = 0; i < cells.length; i++) {
@@ -202,6 +261,316 @@ NewsReader.prototype._destroyFeedIcons = function () {
         this._releaseHotspots();
         this._gridLayout = null;
     }
+};
+
+NewsReader.prototype._resetFrameSurface = function (frame, attr) {
+    if (!frame) return;
+    var targetAttr = (typeof attr === 'number') ? attr : frame.attr;
+    try { frame.attr = targetAttr; } catch (_eAttr) { }
+    try { frame.clear(targetAttr); } catch (_eClear) { }
+    if (typeof frame.home === 'function') {
+        try { frame.home(); } catch (_eHome) { }
+    }
+    if (frame.__properties__) {
+        frame.__properties__.data = [];
+        frame.__properties__.data_height = 0;
+        if (frame.__position__ && frame.__position__.offset) {
+            frame.__position__.offset.x = 0;
+            frame.__position__.offset.y = 0;
+        }
+    }
+    if (typeof frame.data_height === 'number') frame.data_height = 0;
+};
+
+NewsReader.prototype._normalizeAnsiPreview = function (payload) {
+    if (!payload) return null;
+    if (payload && typeof payload === 'object' && typeof payload.ansi === 'string') {
+        var rows = (typeof payload.rows === 'number' && payload.rows >= 0)
+            ? payload.rows
+            : this._countAnsiLines(payload.ansi);
+        return {
+            ansi: payload.ansi,
+            cols: (typeof payload.cols === 'number' && payload.cols > 0) ? payload.cols : null,
+            rows: rows,
+            source: payload.source || payload
+        };
+    }
+    if (typeof payload === 'string') {
+        return {
+            ansi: payload,
+            cols: null,
+            rows: this._countAnsiLines(payload),
+            source: null
+        };
+    }
+    return null;
+};
+
+NewsReader.prototype._renderAnsiPreview = function (frame, payload, opts) {
+    if (!frame) return false;
+    var normalized = this._normalizeAnsiPreview(payload);
+    if (!normalized || typeof normalized.ansi !== 'string') return false;
+
+    opts = opts || {};
+    var startRow = (typeof opts.startRow === 'number' && opts.startRow > 0) ? Math.floor(opts.startRow) : 0;
+    var maxRows = (typeof opts.maxRows === 'number' && opts.maxRows > 0) ? Math.floor(opts.maxRows) : null;
+    var text = normalized.ansi;
+    var width = Math.max(1, normalized.cols || frame.width || 80);
+    var totalRows = (typeof normalized.rows === 'number') ? Math.max(0, normalized.rows) : this._countAnsiLines(text);
+    if (startRow >= totalRows) startRow = Math.max(0, totalRows - 1);
+    var endRow = maxRows ? Math.min(totalRows, startRow + maxRows) : totalRows;
+
+    if (typeof frame.loadAnsiString === 'function' && startRow === 0 && (!maxRows || endRow >= totalRows)) {
+        try {
+            this._resetFrameSurface(frame, frame.attr);
+            frame.loadAnsiString(text, width);
+            return true;
+        } catch (_loadErr) { }
+    }
+
+    this._resetFrameSurface(frame, frame.attr);
+    var bgDefault = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+    var fgDefault = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+    var hiMask = (typeof HIGH === 'number') ? HIGH : 0x08;
+    var blinkMask = (typeof BLINK === 'number') ? BLINK : 0x80;
+    var bg = bgDefault;
+    var fg = fgDefault;
+    var hi = 0;
+    var attr = bg + fg + hi;
+    var x = 0;
+    var y = 0;
+    var maxLogicalRow = 0;
+    var saved = { x: 0, y: 0 };
+
+    function ansiBgToAttr(code) {
+        switch (code) {
+            case 40: return (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+            case 41: return (typeof BG_RED === 'number') ? BG_RED : 0;
+            case 42: return (typeof BG_GREEN === 'number') ? BG_GREEN : 0;
+            case 43: return (typeof BG_BROWN === 'number') ? BG_BROWN : 0;
+            case 44: return (typeof BG_BLUE === 'number') ? BG_BLUE : 0;
+            case 45: return (typeof BG_MAGENTA === 'number') ? BG_MAGENTA : 0;
+            case 46: return (typeof BG_CYAN === 'number') ? BG_CYAN : 0;
+            case 47: return (typeof BG_LIGHTGRAY === 'number') ? BG_LIGHTGRAY : 0;
+            default: return (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+        }
+    }
+
+    function ansiFgToAttr(code) {
+        switch (code) {
+            case 30: return (typeof BLACK === 'number') ? BLACK : 0;
+            case 31: return (typeof RED === 'number') ? RED : 4;
+            case 32: return (typeof GREEN === 'number') ? GREEN : 2;
+            case 33: return (typeof BROWN === 'number') ? BROWN : 6;
+            case 34: return (typeof BLUE === 'number') ? BLUE : 1;
+            case 35: return (typeof MAGENTA === 'number') ? MAGENTA : 5;
+            case 36: return (typeof CYAN === 'number') ? CYAN : 3;
+            case 37: return (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+            default: return (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+        }
+    }
+
+    function commitChar(ch) {
+        if (ch === '\r') {
+            x = 0;
+            return;
+        }
+        if (ch === '\n') {
+            x = 0;
+            y++;
+            if (y > maxLogicalRow) maxLogicalRow = y;
+            return;
+        }
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        if (x >= width) {
+            x = 0;
+            y++;
+        }
+        if (y >= startRow && y < endRow) {
+            var displayY = y - startRow;
+            if (!maxRows || displayY < maxRows) {
+                if (frame.__properties__) {
+                    if (!frame.__properties__.data[displayY]) frame.__properties__.data[displayY] = [];
+                    if (typeof Char === 'function') frame.__properties__.data[displayY][x] = new Char(ch, attr);
+                    else frame.__properties__.data[displayY][x] = { ch: ch, attr: attr };
+                }
+                if (typeof frame.attr === 'number') {
+                    try { frame.attr = attr; } catch (_setAttr) { }
+                }
+                if (typeof frame.gotoxy === 'function' && typeof frame.putmsg === 'function') {
+                    try {
+                        frame.gotoxy(x + 1, displayY + 1);
+                        frame.putmsg(ch);
+                    } catch (_writeErr) { }
+                }
+            }
+        }
+        if (y > maxLogicalRow) maxLogicalRow = y;
+        x++;
+    }
+
+    for (var i = 0; i < text.length;) {
+        var ch = text.charAt(i);
+        if (ch === '\x1b' && i + 1 < text.length && text.charAt(i + 1) === '[') {
+            var j = i + 2;
+            while (j < text.length) {
+                var code = text.charAt(j);
+                if (code >= '@' && code <= '~') break;
+                j++;
+            }
+            if (j >= text.length) break;
+            var final = text.charAt(j);
+            var paramsText = text.substring(i + 2, j);
+            var params = paramsText.length ? paramsText.split(';') : [];
+            switch (final) {
+                case 'm':
+                    if (!params.length) params = ['0'];
+                    for (var pi = 0; pi < params.length; pi++) {
+                        var codeStr = params[pi];
+                        if (!codeStr.length) codeStr = '0';
+                        var num = parseInt(codeStr, 10);
+                        if (isNaN(num)) num = 0;
+                        if (num === 0) {
+                            bg = bgDefault;
+                            fg = fgDefault;
+                            hi = 0;
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num === 1) {
+                            hi |= hiMask;
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num === 2 || num === 21 || num === 22) {
+                            hi &= ~hiMask;
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num === 5) {
+                            hi |= blinkMask;
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num === 25) {
+                            hi &= ~blinkMask;
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num === 39) {
+                            fg = fgDefault;
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num === 49) {
+                            bg = bgDefault;
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num >= 40 && num <= 47) {
+                            bg = ansiBgToAttr(num);
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num >= 100 && num <= 107) {
+                            bg = ansiBgToAttr(num - 60);
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num >= 30 && num <= 37) {
+                            fg = ansiFgToAttr(num);
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if (num >= 90 && num <= 97) {
+                            fg = ansiFgToAttr(num - 60);
+                            hi |= hiMask;
+                            attr = bg + fg + hi;
+                            continue;
+                        }
+                        if ((num === 38 || num === 48) && params.length > pi + 1) {
+                            var mode = parseInt(params[pi + 1], 10);
+                            if (mode === 5 && params.length > pi + 2) {
+                                pi += 2;
+                                continue;
+                            }
+                            if (mode === 2 && params.length > pi + 4) {
+                                pi += 4;
+                                continue;
+                            }
+                        }
+                    }
+                    break;
+                case 'H':
+                case 'f': {
+                    var row = params.length && params[0].length ? (parseInt(params[0], 10) - 1) : 0;
+                    var col = params.length > 1 && params[1].length ? (parseInt(params[1], 10) - 1) : 0;
+                    if (!isNaN(row)) y = Math.max(0, row);
+                    if (!isNaN(col)) x = Math.max(0, col);
+                    break;
+                }
+                case 'A': {
+                    var up = params.length && params[0].length ? parseInt(params[0], 10) : 1;
+                    if (isNaN(up) || up < 0) up = 1;
+                    y = Math.max(0, y - up);
+                    break;
+                }
+                case 'B': {
+                    var down = params.length && params[0].length ? parseInt(params[0], 10) : 1;
+                    if (isNaN(down) || down < 0) down = 1;
+                    y += down;
+                    if (y > maxLogicalRow) maxLogicalRow = y;
+                    break;
+                }
+                case 'C': {
+                    var right = params.length && params[0].length ? parseInt(params[0], 10) : 1;
+                    if (isNaN(right) || right < 0) right = 1;
+                    x += right;
+                    break;
+                }
+                case 'D': {
+                    var left = params.length && params[0].length ? parseInt(params[0], 10) : 1;
+                    if (isNaN(left) || left < 0) left = 1;
+                    x = Math.max(0, x - left);
+                    break;
+                }
+                case 'J':
+                    if (!params.length || params[0] === '' || params[0] === '2') {
+                        this._resetFrameSurface(frame, frame.attr);
+                        bg = bgDefault;
+                        fg = fgDefault;
+                        hi = 0;
+                        attr = bg + fg + hi;
+                        x = 0;
+                        y = 0;
+                        maxRow = 0;
+                    }
+                    break;
+                case 's':
+                    saved.x = x;
+                    saved.y = y;
+                    break;
+                case 'u':
+                    x = saved.x || 0;
+                    y = saved.y || 0;
+                    break;
+                default:
+                    break;
+            }
+            i = j + 1;
+            continue;
+        }
+        commitChar(ch);
+        i++;
+    }
+
+    if (frame.__properties__) frame.__properties__.data_height = totalRows;
+    if (typeof frame.data_height === 'number') frame.data_height = totalRows;
+    if (typeof frame.cycle === 'function') {
+        try { frame.cycle(); } catch (_cycleErr) { }
+    }
+    return true;
 };
 
 NewsReader.prototype._releaseHotspots = function () {
@@ -581,7 +950,7 @@ NewsReader.prototype._drawArticles = function () {
     this._gridLayout = null;
     this._setHeader((this.currentFeed ? this.currentFeed.label : 'Feed') + ' Articles');
     if (!this.currentArticles.length) {
-        this.listFrame.clear();
+        this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
         this.listFrame.gotoxy(1, 1);
         this.listFrame.putmsg('No articles available.');
         return;
@@ -610,28 +979,106 @@ NewsReader.prototype._drawArticleImages = function () {
         title = 'Images: ' + articleTitle;
     }
     this._setHeader(this._toDisplayText(title));
-    this.listFrame.clear();
-    if (!this.articleImages.length) {
+    this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
+    var urls = this.articleImages || [];
+    if (!urls.length) {
         this.listFrame.gotoxy(1, 1);
         this.listFrame.putmsg('No images found.');
+        this._setStatus('ENTER=read article  BACKSPACE=articles');
         return;
     }
-    var height = this.listFrame.height;
-    if (this.imageSelection < this.imageScrollOffset) this.imageScrollOffset = this.imageSelection;
-    if (this.imageSelection >= this.imageScrollOffset + height) {
-        this.imageScrollOffset = Math.max(0, this.imageSelection - height + 1);
+    if (this.imageSelection >= urls.length) this.imageSelection = urls.length - 1;
+    if (this.imageSelection < 0) this.imageSelection = 0;
+
+    var previewTop = 1;
+    var selectedUrl = urls[this.imageSelection];
+    var previousPreviewUrl = this._currentPreviewUrl;
+    var previewData = this._getImageAnsi(selectedUrl);
+    if (!previewData && urls.length > 1) {
+        var originalIndex = this.imageSelection;
+        for (var attempt = 1; attempt < urls.length; attempt++) {
+            var nextIndex = (originalIndex + attempt) % urls.length;
+            if (nextIndex === originalIndex) break;
+            var candidateUrl = urls[nextIndex];
+            var candidateAnsi = this._getImageAnsi(candidateUrl);
+            if (candidateAnsi) {
+                this.imageSelection = nextIndex;
+                selectedUrl = candidateUrl;
+                previewData = candidateAnsi;
+                this._setStatus('Preview failed on primary image, showing alternate.');
+                break;
+            }
+        }
     }
-    for (var row = 0; row < height; row++) {
+    if (selectedUrl !== previousPreviewUrl) this.imagePreviewScroll = 0;
+    this._currentPreviewUrl = selectedUrl;
+
+    var totalPreviewLines = previewData ? Math.max(1, this._countAnsiLines(previewData)) : 2;
+    var listStart = Math.min(this.listFrame.height, totalPreviewLines + 1);
+    if (listStart < 1) listStart = 1;
+    var previewDisplayRows = Math.max(1, listStart - 1);
+    var maxPreviewScroll = previewData ? Math.max(0, totalPreviewLines - previewDisplayRows) : 0;
+
+    if (!previewData) this.imagePreviewScroll = 0;
+    if (this.imagePreviewScroll < 0) this.imagePreviewScroll = 0;
+    if (this.imagePreviewScroll > maxPreviewScroll) this.imagePreviewScroll = maxPreviewScroll;
+
+    if (previewData) {
+        var previewRendered = false;
+        try {
+            previewRendered = this._renderAnsiPreview(this.listFrame, previewData, {
+                startRow: this.imagePreviewScroll,
+                maxRows: previewDisplayRows
+            });
+        } catch (_renderErr) {
+            previewRendered = false;
+            log('NewsReader image preview render error: ' + _renderErr);
+        }
+        if (!previewRendered) {
+            previewData = null;
+        }
+    }
+
+    if (!previewData) {
+        this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
+        this.imagePreviewScroll = 0;
+        totalPreviewLines = 2;
+        listStart = Math.min(this.listFrame.height, totalPreviewLines + 1);
+        if (listStart < 1) listStart = 1;
+        previewDisplayRows = Math.max(1, listStart - 1);
+        maxPreviewScroll = 0;
+        this.listFrame.attr = LIST_INACTIVE;
+        this.listFrame.gotoxy(1, previewTop);
+        var errMsg = this._imageAnsiErrors ? this._imageAnsiErrors[selectedUrl] : null;
+        if (errMsg) this.listFrame.putmsg('Preview failed: ' + errMsg);
+        else this.listFrame.putmsg('Preview not available.');
+    }
+
+    this._imagePreviewScrollMax = maxPreviewScroll;
+    this._imagePreviewVisibleRows = previewDisplayRows;
+
+    if (this.imageSelection < this.imageScrollOffset) this.imageScrollOffset = this.imageSelection;
+    var visibleRows = Math.max(1, this.listFrame.height - (listStart - 1));
+    if (this.imageSelection >= this.imageScrollOffset + visibleRows) {
+        this.imageScrollOffset = Math.max(0, this.imageSelection - visibleRows + 1);
+    }
+
+    for (var row = 0; row < visibleRows; row++) {
         var idx = this.imageScrollOffset + row;
-        if (idx >= this.articleImages.length) break;
-        var url = this._toDisplayText(this.articleImages[idx]);
-        if (url.length > this.listFrame.width) url = url.substr(0, this.listFrame.width);
-        this.listFrame.gotoxy(1, row + 1);
+        var targetRow = listStart + row;
+        if (row === 0) { this.listFrame.attr = LIST_INACTIVE; }
+        if (targetRow > this.listFrame.height) break;
+        if (idx >= urls.length) break;
+        var prefix = '[' + (idx + 1) + '/' + urls.length + '] ';
+        var display = prefix + this._toDisplayText(urls[idx]);
+        if (display.length > this.listFrame.width) display = display.substr(0, this.listFrame.width);
+        this.listFrame.gotoxy(1, targetRow);
         this.listFrame.attr = (idx === this.imageSelection) ? LIST_ACTIVE : LIST_INACTIVE;
-        this.listFrame.putmsg(url);
+        this.listFrame.putmsg(display);
     }
     this.listFrame.attr = LIST_INACTIVE;
-    this._setStatus('ENTER=read article  BACKSPACE=articles');
+    var statusIndicator = urls.length ? ('Image ' + (this.imageSelection + 1) + '/' + urls.length + '  ') : '';
+    this._setStatus(statusIndicator + 'LEFT/RIGHT=change image  UP/DOWN=scroll preview  ENTER=read article  BACKSPACE=articles');
 };
 
 NewsReader.prototype._drawArticle = function () {
@@ -644,7 +1091,7 @@ NewsReader.prototype._drawArticle = function () {
         header = this.currentArticles[this.articleIndex].title || header;
     }
     this._setHeader(this._toDisplayText(header));
-    this.listFrame.clear();
+    this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
     if (!this.articleLines.length) {
         this.listFrame.gotoxy(1, 1);
         this.listFrame.putmsg('No content available.');
@@ -665,11 +1112,12 @@ NewsReader.prototype._drawArticle = function () {
 };
 
 NewsReader.prototype._renderList = function (items, formatter) {
+    if (!this.listFrame) return;
     if (!items) items = [];
     var height = this.listFrame.height;
     if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
     if (this.selectedIndex >= this.scrollOffset + height) this.scrollOffset = Math.max(0, this.selectedIndex - height + 1);
-    this.listFrame.clear();
+    this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
     for (var row = 0; row < height; row++) {
         var idx = this.scrollOffset + row;
         if (idx >= items.length) break;
@@ -1130,9 +1578,40 @@ NewsReader.prototype._handleImageNavigation = function (key) {
         return;
     }
     var pageSize = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
+    var previewPage = Math.max(1, this._imagePreviewVisibleRows || 1);
     switch (key) {
         case KEY_UP:
-        case '\x1B[A':
+        case '\x1B[A': {
+            var prevScrollUp = this.imagePreviewScroll;
+            this.imagePreviewScroll = Math.max(0, prevScrollUp - 1);
+            if (this.imagePreviewScroll !== prevScrollUp) this.draw();
+            break;
+        }
+        case KEY_DOWN:
+        case '\x1B[B': {
+            var prevScrollDown = this.imagePreviewScroll;
+            var maxScrollDown = Math.max(0, this._imagePreviewScrollMax || 0);
+            var candidate = prevScrollDown + 1;
+            if (candidate > maxScrollDown) candidate = maxScrollDown;
+            this.imagePreviewScroll = candidate;
+            if (this.imagePreviewScroll !== prevScrollDown) this.draw();
+            break;
+        }
+        case 'wheel_up': {
+            var prevWheelUp = this.imagePreviewScroll;
+            this.imagePreviewScroll = Math.max(0, prevWheelUp - previewPage);
+            if (this.imagePreviewScroll !== prevWheelUp) this.draw();
+            break;
+        }
+        case 'wheel_down': {
+            var prevWheelDown = this.imagePreviewScroll;
+            var maxWheelScroll = Math.max(0, this._imagePreviewScrollMax || 0);
+            var wheelCandidate = prevWheelDown + previewPage;
+            if (wheelCandidate > maxWheelScroll) wheelCandidate = maxWheelScroll;
+            this.imagePreviewScroll = wheelCandidate;
+            if (this.imagePreviewScroll !== prevWheelDown) this.draw();
+            break;
+        }
         case KEY_LEFT:
         case '\x1B[D':
             if (this.imageSelection > 0) {
@@ -1141,8 +1620,6 @@ NewsReader.prototype._handleImageNavigation = function (key) {
                 this.draw();
             }
             break;
-        case KEY_DOWN:
-        case '\x1B[B':
         case KEY_RIGHT:
         case '\x1B[C':
             if (this.imageSelection < length - 1) {
@@ -1380,6 +1857,7 @@ NewsReader.prototype._openArticle = function (index) {
     this.articleIndex = index;
     this.articleScroll = 0;
     this.articleLines = this._prepareArticleLines(article);
+    this._imageAnsiErrors = {};
     if (!article.__newsImages) article.__newsImages = this._extractArticleImages(article);
     this.articleImages = (article.__newsImages || []).slice(0);
     this._articleListScroll = this.scrollOffset;
@@ -1447,6 +1925,88 @@ NewsReader.prototype._extractArticleImages = function (article) {
         }
     }
     return results;
+};
+
+NewsReader.prototype._countAnsiLines = function (ansi) {
+    if (!ansi) return 0;
+    if (typeof ansi === 'object') {
+        if (typeof ansi.rows === 'number') return Math.max(0, ansi.rows);
+        if (typeof ansi.ansi === 'string') ansi = ansi.ansi;
+        else if (typeof ansi.text === 'string') ansi = ansi.text;
+        else if (typeof ansi.bytes === 'string') ansi = ansi.bytes;
+        else ansi = '';
+    }
+    var clean = String(ansi).replace(/\r/g, '');
+    var parts = clean.split('\n');
+    var count = 0;
+    for (var i = 0; i < parts.length; i++) {
+        count++;
+    }
+    return count;
+};
+
+NewsReader.prototype._getImageAnsi = function (url) {
+    if (!url) return null;
+    this.imageAnsiCache = this.imageAnsiCache || {};
+    this._imageAnsiErrors = this._imageAnsiErrors || {};
+    if (this.imageAnsiCache[url]) return this.imageAnsiCache[url];
+    if (this._imageAnsiErrors[url]) return null;
+
+    if (typeof convertImageToANSI !== 'function') {
+        try { load('iconshell/lib/util/gif2ans/img_loader.js'); }
+        catch (e) {
+            var msg = (e && e.toString) ? e.toString() : e;
+            this._imageAnsiErrors[url] = msg;
+            log('newsreader image preview: failed to load converter library ' + msg);
+            return null;
+        }
+    }
+
+    var width = this.listFrame ? Math.max(20, Math.min(this.listFrame.width || 80, 120)) : 80;
+    var tempPath = null;
+    var overlayShown = false;
+    try {
+        var source = url;
+        if (/^data:image\//i.test(url)) {
+            var match = url.match(/^data:(image\/[^;]+);base64,(.+)$/i);
+            if (!match) throw 'Unsupported data URI format';
+            var mime = match[1].toLowerCase();
+            var ext = mime.indexOf('png') !== -1 ? '.png' : (mime.indexOf('gif') !== -1 ? '.gif' : '.jpg');
+            var data = base64_decode(match[2]);
+            var tempDir = (typeof system !== 'undefined' && system.temp_dir) ? system.temp_dir : (js.exec_dir || '.');
+            if (tempDir.charAt(tempDir.length - 1) !== '/' && tempDir.charAt(tempDir.length - 1) !== '\\') tempDir += '/';
+            var fileName = 'news_img_' + Date.now() + '_' + Math.floor(Math.random() * 100000) + ext;
+            tempPath = tempDir + fileName;
+            var f = new File(tempPath);
+            if (!f.open('wb')) throw 'Unable to write temp image: ' + tempPath;
+            f.write(data);
+            f.close();
+            source = tempPath;
+        }
+
+        if (!overlayShown) overlayShown = this._showLoadingOverlay('Converting image from :\n' + url);
+        this._setStatus('Rendering image preview...');
+        var ansiResult = convertImageToANSI(source, width, true, null, { returnObject: true });
+        var preview = this._normalizeAnsiPreview(ansiResult);
+        if (preview && typeof preview.ansi === 'string' && preview.ansi.length) {
+            this.imageAnsiCache[url] = preview;
+            this._setStatus('Preview ready. ENTER=read article  BACKSPACE=articles');
+            return preview;
+        }
+        this._imageAnsiErrors[url] = 'Unsupported image response';
+        log('newsreader image preview unsupported response for ' + url);
+    } catch (e) {
+        var msg = (e && e.toString) ? e.toString() : e;
+        this._imageAnsiErrors[url] = msg;
+        this._setStatus('Image preview failed: ' + msg);
+        log('newsreader image preview error for ' + url + ': ' + msg);
+    } finally {
+        if (overlayShown) this._hideLoadingOverlay();
+        if (tempPath) {
+            try { var tmpFile = new File(tempPath); if (tmpFile.exists) tmpFile.remove(); } catch (_eDel) { }
+        }
+    }
+    return null;
 };
 
 NewsReader.prototype._extractArticleImages = function (article) {

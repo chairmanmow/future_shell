@@ -1,3 +1,4 @@
+var USE_UNICODE = false; // set false for strict CP437 bytes
 // --- universal call helpers for unknown signatures ---
 function tryCalls(fn, calls) {
   for (var i = 0; i < calls.length; i++) {
@@ -166,7 +167,7 @@ function ANSICoreFactory() {
         }
         if (bg >= 8) bg -= 8;   // ensure bg in 0..7
         sgr(fg, bg);
-        out += "\u2580";        // upper half block
+        out += (USE_UNICODE ? "\u2580" : "\xDF"); // U+2580 or CP437 0xDF = '▀'       // upper half block
       }
       if (withNewlines) { out += "\x1b[0m\r\n"; curFG = curBG = -1; }
     }

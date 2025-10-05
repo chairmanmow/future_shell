@@ -1,17 +1,30 @@
 // img_loader.js — unified entry point
 
-function here() { return js.exec_dir; }
+function here() {
+    var dir = js.exec_dir || '';
+    if (dir && dir.charAt(dir.length - 1) !== '/' && dir.charAt(dir.length - 1) !== '\\') dir += '/';
+    return dir;
+}
 js.global.__IMG_AS_LIBRARY__ = true; // prevent auto-run in the loaded files
 
-load(here() + "gif2ans/gif2ans.js");
-load(here() + "gif2ans/jpg2ans.js");
-load(here() + "gif2ans/png2ans.js");
-
-try { load(here() + "http.js"); } catch (e) { try { load("/sbbs/exec/http.js"); } catch (_) { } }
+load(here() + "iconshell/lib/util/gif2ans/gif2ans.js");
+log("GIF2ANS loaded" + !!GIF2ANS);
+load(here() + "iconshell/lib/util/gif2ans/jpg2ans.js");
+log("JPG2ANS loaded" + !!JPG2ANS);
+load(here() + "iconshell/lib/util/gif2ans/png2ans.js");
+log("PNG2ANS loaded" + !!PNG2ANS);
+js.global.__IMG_AS_LIBRARY__ = false;
+try { load("http.js"); } catch (e) { try { load("/sbbs/exec/http.js"); } catch (_) { } }
 
 function fetchBytes(pathOrUrl) {
     if (/^https?:\/\//i.test(pathOrUrl)) {
         var http = new HTTPRequest(); http.follow_redirects = 5;
+        try {
+            if (!http.request_headers) http.request_headers = {};
+            http.request_headers['User-Agent'] = http.request_headers['User-Agent'] || 'Mozilla/5.0 (Synchronet NewsReader)';
+            http.request_headers['Accept'] = http.request_headers['Accept'] || 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8';
+            http.request_headers['Referer'] = http.request_headers['Referer'] || pathOrUrl;
+        } catch (e) { }
         var body = http.Get(pathOrUrl);
         if (http.response_code !== 200 || !body) throw "HTTP " + http.response_code + " for " + pathOrUrl;
         return body;
@@ -33,12 +46,19 @@ function sniffType(bytes) {
 
 // Public API
 function convertImageToANSI(filePathOrUrl, width, contiguous, outputPath, debug) {
+    var opts = {};
+    var debugFlag = !!debug;
+    if (debug && typeof debug === 'object') {
+        opts = debug;
+        debugFlag = !!opts.debug;
+    }
+
     var argsObj = {
         in: filePathOrUrl,
         out: outputPath || null,   // null = return bytes instead of write
         w: width || 80,
         contiguous: !!contiguous,
-        debug: !!debug
+        debug: debugFlag
     };
 
     var lower = (filePathOrUrl || "").toLowerCase();
@@ -56,6 +76,33 @@ function convertImageToANSI(filePathOrUrl, width, contiguous, outputPath, debug)
     }
 
     res = converter(argsObj);
+
+    if (opts && opts.returnObject) {
+        if (res && typeof res === 'object') {
+            var ansiText = res.ansi || res.bytes || res.text || null;
+            return {
+                ansi: ansiText,
+                cols: (typeof res.cols === 'number') ? res.cols : ((typeof res.width === 'number') ? res.width : argsObj.w),
+                rows: (typeof res.rows === 'number') ? res.rows : ((typeof res.height === 'number') ? res.height : null),
+                source: res
+            };
+        }
+        if (typeof res === 'string') {
+            return {
+                ansi: res,
+                cols: argsObj.w,
+                rows: null,
+                source: res
+            };
+        }
+        return {
+            ansi: null,
+            cols: argsObj.w,
+            rows: null,
+            source: res
+        };
+    }
+
     if (res && res.ansi) return res.ansi;  // inline mode returns text
     return res;
 }
