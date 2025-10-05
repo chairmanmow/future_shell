@@ -1,6 +1,9 @@
 if (typeof Feed === 'undefined') {
     try { load('rss-atom.js'); } catch (_e) { }
 }
+if (typeof utf8_cp437 === 'undefined') {
+    try { load('utf8_cp437.js'); } catch (_encErr) { }
+}
 load("iconshell/lib/subfunctions/subprogram.js");
 load('iconshell/lib/shell/icon.js');
 
@@ -50,6 +53,21 @@ function NewsReader(opts) {
     this.headerFrame = null;
     this.statusFrame = null;
     this.listFrame = null;
+    this.articleIconFrame = null;
+    this.articleIconLabelFrame = null;
+    this.articleIconObj = null;
+    this.articleTextOffset = 1;
+    this.articleImages = [];
+    this.imageSelection = 0;
+    this.imageScrollOffset = 0;
+    this._currentIconKey = null;
+    this.categoryIconCells = [];
+    this.feedIconCells = [];
+    this._categoryGridItems = [];
+    this._feedGridItems = [];
+    this._hotspotMap = {};
+    this._hotspotChars = null;
+    this._gridLayout = null;
     this._resetState();
 }
 extend(NewsReader, Subprogram);
@@ -60,6 +78,15 @@ NewsReader.prototype._resetState = function () {
     HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_BLUE | WHITE));
     STATUS_ATTR = resolveAttr('FILE_FOOTER', (BG_BLACK | LIGHTGRAY));
 
+    this._destroyArticleIcon();
+    this._destroyCategoryIcons();
+    this._destroyFeedIcons();
+    this._releaseHotspots();
+    this.categoryIconCells = [];
+    this.feedIconCells = [];
+    this._categoryGridItems = [];
+    this._feedGridItems = [];
+    this._gridLayout = null;
     this.categories = this._buildCategories();
     this.state = 'categories';
     this.selectedIndex = 0;
@@ -75,33 +102,19 @@ NewsReader.prototype._resetState = function () {
     this._articleListScroll = 0;
     this.statusMessage = '';
     this.statusMessageTs = 0;
+    this.articleImages = [];
+    this.imageSelection = 0;
+    this.imageScrollOffset = 0;
+    this.articleTextOffset = 1;
+    this._currentIconKey = null;
+    this._categoryGridItems = [];
+    this._feedGridItems = [];
+    this._hotspotMap = {};
 };
 
 NewsReader.prototype.enter = function (done) {
-    log('NewsReader enter');
+    this._resetState();
     Subprogram.prototype.enter.call(this, done);
-    this._resetState();
-    // Subprogram.prototype.enter.call(this, done);
-};
-
-NewsReader.prototype.exit = function (done) {
-    log('NewsReader exit');
-    this._resetState();
-    if (typeof console.clear_hotspots === 'function') {
-        try { console.clear_hotspots(); } catch (e) { }
-    }
-    var shell = this.shell;
-    Subprogram.prototype.exit.call(this);
-    if (shell) {
-        if (shell._pendingSubLaunch && shell._pendingSubLaunch.instance === this) {
-            shell._pendingSubLaunch = null;
-        }
-        if (shell.activeSubprogram === this) {
-            shell.exitSubprogram();
-        }
-    }
-    // this.draw();
-    // Subprogram.prototype.enter.call(this, done);
 };
 
 NewsReader.prototype._buildCategories = function () {
@@ -123,6 +136,380 @@ NewsReader.prototype._buildCategories = function () {
     return categories;
 };
 
+NewsReader.prototype._destroyArticleIcon = function () {
+    if (this.articleIconObj && typeof this.articleIconObj.iconFrame === 'object') {
+        // noop, Icon handles frames we manage below
+    }
+    if (this.articleIconFrame) {
+        try { this.articleIconFrame.close(); } catch (_e1) { }
+        if (this._myFrames) {
+            var idx1 = this._myFrames.indexOf(this.articleIconFrame);
+            if (idx1 !== -1) this._myFrames.splice(idx1, 1);
+        }
+    }
+    if (this.articleIconLabelFrame) {
+        try { this.articleIconLabelFrame.close(); } catch (_e2) { }
+        if (this._myFrames) {
+            var idx2 = this._myFrames.indexOf(this.articleIconLabelFrame);
+            if (idx2 !== -1) this._myFrames.splice(idx2, 1);
+        }
+    }
+    this.articleIconFrame = null;
+    this.articleIconLabelFrame = null;
+    this.articleIconObj = null;
+    this.articleTextOffset = 1;
+    this._currentIconKey = null;
+};
+
+NewsReader.prototype._destroyIconCells = function (cells) {
+    if (!cells || !cells.length) return;
+    for (var i = 0; i < cells.length; i++) {
+        var cell = cells[i];
+        if (!cell) continue;
+        if (cell.icon) {
+            try { cell.icon.close(); } catch (_eA) { }
+            if (this._myFrames) {
+                var idxA = this._myFrames.indexOf(cell.icon);
+                if (idxA !== -1) this._myFrames.splice(idxA, 1);
+            }
+        }
+        if (cell.label) {
+            try { cell.label.close(); } catch (_eB) { }
+            if (this._myFrames) {
+                var idxB = this._myFrames.indexOf(cell.label);
+                if (idxB !== -1) this._myFrames.splice(idxB, 1);
+            }
+        }
+    }
+    cells.length = 0;
+};
+
+NewsReader.prototype._destroyCategoryIcons = function () {
+    this._destroyIconCells(this.categoryIconCells);
+    this.categoryIconCells = [];
+    this._categoryGridItems = [];
+    if (this._gridLayout && this._gridLayout.type === 'categories') {
+        this._releaseHotspots();
+        this._gridLayout = null;
+    }
+};
+
+NewsReader.prototype._destroyFeedIcons = function () {
+    this._destroyIconCells(this.feedIconCells);
+    this.feedIconCells = [];
+    this._feedGridItems = [];
+    if (this._gridLayout && this._gridLayout.type === 'feeds') {
+        this._releaseHotspots();
+        this._gridLayout = null;
+    }
+};
+
+NewsReader.prototype._releaseHotspots = function () {
+    if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
+        try { console.clear_hotspots(); } catch (_e) { }
+    }
+    this._hotspotMap = {};
+};
+
+NewsReader.prototype._ensureHotspotChars = function () {
+    if (this._hotspotChars && this._hotspotChars.length) return this._hotspotChars;
+    var chars = [];
+    var used = {};
+    function add(str) {
+        for (var i = 0; i < str.length; i++) {
+            var ch = str.charAt(i);
+            if (!used[ch]) { chars.push(ch); used[ch] = true; }
+        }
+    }
+    add('1234567890');
+    add('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+    add('abcdefghijklmnopqrstuvwxyz');
+    add('!@#$%^&*()-_=+[]{};:,./?');
+    this._hotspotChars = chars;
+    return chars;
+};
+
+NewsReader.prototype._registerGridHotspots = function (cells) {
+    this._releaseHotspots();
+    if (!cells || !cells.length) return;
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    var chars = this._ensureHotspotChars();
+    var max = Math.min(cells.length, chars.length);
+    var baseX = this.listFrame ? this.listFrame.x : 1;
+    var baseY = this.listFrame ? this.listFrame.y : 1;
+    for (var i = 0; i < max; i++) {
+        var cell = cells[i];
+        if (!cell || !cell.icon) continue;
+        var cmd = chars[i];
+        var iconFrame = cell.icon;
+        var labelFrame = cell.label;
+        var minX = baseX + iconFrame.x - 1;
+        var maxX = minX + iconFrame.width - 1;
+        var minY = baseY + iconFrame.y - 1;
+        var maxY = minY + iconFrame.height - 1;
+        if (labelFrame) {
+            var labelMinY = baseY + labelFrame.y - 1;
+            var labelMaxY = labelMinY + labelFrame.height - 1;
+            if (labelMinY < minY) minY = labelMinY;
+            if (labelMaxY > maxY) maxY = labelMaxY;
+        }
+        if (minX > maxX || minY > maxY) continue;
+        for (var y = minY; y <= maxY; y++) {
+            try { console.add_hotspot(cmd, false, minX, maxX, y); } catch (_e) { }
+        }
+        this._hotspotMap[cmd] = cell.index;
+    }
+};
+
+NewsReader.prototype._getIconMetrics = function () {
+    var w = 12, h = 6;
+    if (typeof ICSH_CONSTANTS === 'object' && ICSH_CONSTANTS) {
+        if (typeof ICSH_CONSTANTS.ICON_W === 'number') w = ICSH_CONSTANTS.ICON_W;
+        if (typeof ICSH_CONSTANTS.ICON_H === 'number') h = ICSH_CONSTANTS.ICON_H;
+    }
+    return { width: Math.max(1, w), height: Math.max(1, h) };
+};
+
+NewsReader.prototype._slugifyLabel = function (label) {
+    if (!label) return '';
+    return label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+};
+
+NewsReader.prototype._iconNameForFeed = function (feed) {
+    if (!feed) return '';
+    if (feed.icon) return feed.icon;
+    if (feed.label) return 'newsfeed_' + this._slugifyLabel(feed.label);
+    return '';
+};
+
+NewsReader.prototype._iconNameForCategory = function (category) {
+    if (!category) return '';
+    if (category.icon) return category.icon;
+    if (category.name) return 'news_cat_' + this._slugifyLabel(category.name);
+    return '';
+};
+
+NewsReader.prototype._renderIconLabel = function (frame, text, isSelected) {
+    if (!frame) return;
+    var attr = isSelected ? LIST_ACTIVE : LIST_INACTIVE;
+    try { frame.clear(attr); frame.home(); } catch (_e) { }
+    var width = frame.width || 0;
+    if (width <= 0) return;
+    var label = this._toDisplayText(text || '');
+    if (label.length > width) label = label.substr(0, width);
+    var padLeft = Math.max(0, Math.floor((width - label.length) / 2));
+    var padRight = Math.max(0, width - padLeft - label.length);
+    if (padLeft) frame.putmsg(new Array(padLeft + 1).join(' '));
+    if (label) frame.putmsg(label);
+    if (padRight) frame.putmsg(new Array(padRight + 1).join(' '));
+};
+
+NewsReader.prototype._adjustGridScroll = function (grid, length) {
+    if (!grid) return;
+    var cols = Math.max(1, grid.cols || 1);
+    var visibleRows = Math.max(1, grid.visibleRows || 1);
+    var totalRows = Math.max(1, Math.ceil((length > 0 ? length : 1) / cols));
+    var currentRow = Math.floor((this.selectedIndex > 0 ? this.selectedIndex : 0) / cols);
+    var maxRowOffset = Math.max(0, totalRows - visibleRows);
+    if (currentRow < this.scrollOffset) this.scrollOffset = currentRow;
+    if (currentRow >= this.scrollOffset + visibleRows) this.scrollOffset = Math.max(0, currentRow - visibleRows + 1);
+    if (this.scrollOffset > maxRowOffset) this.scrollOffset = maxRowOffset;
+    if (this.scrollOffset < 0) this.scrollOffset = 0;
+};
+
+NewsReader.prototype._renderCategoryIcons = function () {
+    this._destroyFeedIcons();
+    this._destroyCategoryIcons();
+    this._gridLayout = null;
+    if (!this.listFrame) return;
+    var items = this.categories ? this.categories.slice(0) : [];
+    items.push({ _type: 'exit', name: 'Exit', icon: 'news_exit' });
+    this._categoryGridItems = items;
+    if (!items.length) {
+        this.listFrame.clear();
+        this.listFrame.gotoxy(1, 1);
+        this.listFrame.putmsg('No categories available.');
+        this._releaseHotspots();
+        return;
+    }
+    if (this.selectedIndex >= items.length) this.selectedIndex = items.length - 1;
+    if (this.selectedIndex < 0) this.selectedIndex = 0;
+
+    var metrics = this._getIconMetrics();
+    var topPadding = 1;
+    var labelHeight = 1;
+    var cellW = metrics.width + 4;
+    var cellH = metrics.height + labelHeight + 2;
+    var frameWidth = this.listFrame.width || (metrics.width + 2);
+    var frameHeight = this.listFrame.height || (metrics.height + labelHeight + 2);
+    var usableHeight = Math.max(1, frameHeight - topPadding);
+    var cols = Math.max(1, Math.floor(frameWidth / cellW));
+    var visibleRows = Math.max(1, Math.floor(usableHeight / cellH));
+    var total = items.length;
+    var totalRows = Math.max(1, Math.ceil(total / cols));
+
+    var maxRowOffset = Math.max(0, totalRows - visibleRows);
+    if (this.scrollOffset > maxRowOffset) this.scrollOffset = maxRowOffset;
+    if (this.scrollOffset < 0) this.scrollOffset = 0;
+    var currentRow = Math.floor(this.selectedIndex / cols);
+    if (currentRow < this.scrollOffset) this.scrollOffset = currentRow;
+    if (currentRow >= this.scrollOffset + visibleRows) this.scrollOffset = Math.max(0, currentRow - visibleRows + 1);
+    maxRowOffset = Math.max(0, totalRows - visibleRows);
+    if (this.scrollOffset > maxRowOffset) this.scrollOffset = maxRowOffset;
+
+    this.listFrame.clear();
+    var startRow = this.scrollOffset;
+    var endRow = Math.min(totalRows, startRow + visibleRows);
+    var cells = [];
+    var bgVal = (typeof BG_BLUE === 'number') ? BG_BLUE : ((typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70) : 0);
+    var fgVal = (typeof WHITE === 'number') ? WHITE : ((typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F) : (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+
+    for (var row = startRow; row < endRow; row++) {
+        for (var col = 0; col < cols; col++) {
+            var index = row * cols + col;
+            if (index >= total) break;
+            var item = items[index];
+            var x = 1 + col * cellW;
+            var y = 1 + topPadding + (row - startRow) * cellH;
+            if (y + metrics.height + labelHeight - 1 > frameHeight) continue;
+
+            var iconFrame = new Frame(x, y, metrics.width, metrics.height, LIST_INACTIVE, this.listFrame);
+            var labelFrame = new Frame(x, y + metrics.height, metrics.width, labelHeight, LIST_INACTIVE, this.listFrame);
+            iconFrame.open();
+            labelFrame.open();
+
+            var iconName = (item && item._type === 'exit') ? 'news_exit' : this._iconNameForCategory(item);
+            var iconData = { iconFile: iconName, label: '', iconBg: bgVal, iconFg: fgVal };
+            var iconObj = new Icon(iconFrame, labelFrame, iconData);
+            try { iconObj.render(); } catch (_eIcon) { }
+            if (typeof this.registerFrame === 'function') {
+                this.registerFrame(iconFrame);
+                this.registerFrame(labelFrame);
+            }
+
+            var labelText = item && item._type === 'exit' ? 'Exit' : (item && item.name ? item.name : 'Category');
+            this._renderIconLabel(labelFrame, labelText, index === this.selectedIndex);
+            cells.push({ icon: iconFrame, label: labelFrame, index: index, labelText: labelText, iconObj: iconObj });
+        }
+    }
+
+    this.categoryIconCells = cells;
+    this._gridLayout = {
+        type: 'categories',
+        cols: cols,
+        visibleRows: visibleRows,
+        total: total,
+        rows: totalRows,
+        cellHeight: cellH,
+        cellWidth: cellW
+    };
+    if (cells.length) this._registerGridHotspots(cells);
+    else this._releaseHotspots();
+};
+
+NewsReader.prototype._renderFeedIcons = function () {
+    this._destroyCategoryIcons();
+    this._destroyFeedIcons();
+    this._gridLayout = null;
+    if (!this.listFrame) return;
+    var items = this.currentFeeds ? this.currentFeeds.slice(0) : [];
+    items.unshift({ _type: 'back', label: 'Back', icon: 'news_back' });
+    this._feedGridItems = items;
+    if (!items.length) {
+        this.listFrame.clear();
+        this.listFrame.gotoxy(1, 1);
+        this.listFrame.putmsg('No feeds available in this category.');
+        this._releaseHotspots();
+        return;
+    }
+    if (this.selectedIndex >= items.length) this.selectedIndex = items.length - 1;
+    if (this.selectedIndex < 0) this.selectedIndex = 0;
+
+    var metrics = this._getIconMetrics();
+    var topPadding = 1;
+    var labelHeight = 1;
+    var cellW = metrics.width + 4;
+    var cellH = metrics.height + labelHeight + 2;
+    var frameWidth = this.listFrame.width || (metrics.width + 2);
+    var frameHeight = this.listFrame.height || (metrics.height + labelHeight + 2);
+    var usableHeight = Math.max(1, frameHeight - topPadding);
+    var cols = Math.max(1, Math.floor(frameWidth / cellW));
+    var visibleRows = Math.max(1, Math.floor(usableHeight / cellH));
+    var total = items.length;
+    var totalRows = Math.max(1, Math.ceil(total / cols));
+
+    var maxRowOffset = Math.max(0, totalRows - visibleRows);
+    if (this.scrollOffset > maxRowOffset) this.scrollOffset = maxRowOffset;
+    if (this.scrollOffset < 0) this.scrollOffset = 0;
+    var currentRow = Math.floor(this.selectedIndex / cols);
+    if (currentRow < this.scrollOffset) this.scrollOffset = currentRow;
+    if (currentRow >= this.scrollOffset + visibleRows) this.scrollOffset = Math.max(0, currentRow - visibleRows + 1);
+    maxRowOffset = Math.max(0, totalRows - visibleRows);
+    if (this.scrollOffset > maxRowOffset) this.scrollOffset = maxRowOffset;
+
+    this.listFrame.clear();
+    var startRow = this.scrollOffset;
+    var endRow = Math.min(totalRows, startRow + visibleRows);
+    var cells = [];
+    var bgVal = (typeof BG_BLUE === 'number') ? BG_BLUE : ((typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70) : 0);
+    var fgVal = (typeof WHITE === 'number') ? WHITE : ((typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F) : (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+
+    for (var row = startRow; row < endRow; row++) {
+        for (var col = 0; col < cols; col++) {
+            var index = row * cols + col;
+            if (index >= total) break;
+            var item = items[index];
+            var x = 1 + col * cellW;
+            var y = 1 + topPadding + (row - startRow) * cellH;
+            if (y + metrics.height + labelHeight - 1 > frameHeight) continue;
+
+            var iconFrame = new Frame(x, y, metrics.width, metrics.height, LIST_INACTIVE, this.listFrame);
+            var labelFrame = new Frame(x, y + metrics.height, metrics.width, labelHeight, LIST_INACTIVE, this.listFrame);
+            iconFrame.open();
+            labelFrame.open();
+
+            var iconName;
+            if (item && item._type === 'back') iconName = 'news_back';
+            else iconName = this._iconNameForFeed(item);
+            var iconData = { iconFile: iconName, label: '', iconBg: bgVal, iconFg: fgVal };
+            var iconObj = new Icon(iconFrame, labelFrame, iconData);
+            try { iconObj.render(); } catch (_eIcon) { }
+            if (typeof this.registerFrame === 'function') {
+                this.registerFrame(iconFrame);
+                this.registerFrame(labelFrame);
+            }
+
+            var labelText = item && item._type === 'back' ? 'Back' : (item && item.label ? item.label : 'Feed');
+            this._renderIconLabel(labelFrame, labelText, index === this.selectedIndex);
+            cells.push({ icon: iconFrame, label: labelFrame, index: index, labelText: labelText, iconObj: iconObj });
+        }
+    }
+
+    this.feedIconCells = cells;
+    this._gridLayout = {
+        type: 'feeds',
+        cols: cols,
+        visibleRows: visibleRows,
+        total: total,
+        rows: totalRows,
+        cellHeight: cellH,
+        cellWidth: cellW
+    };
+    if (cells.length) this._registerGridHotspots(cells);
+    else this._releaseHotspots();
+};
+
+NewsReader.prototype._toDisplayText = function (text) {
+    if (text == null) return '';
+    var str = '' + text;
+    if (typeof utf8_cp437 === 'function') {
+        try {
+            return utf8_cp437(str);
+        } catch (_convErr) { }
+    }
+    return str;
+};
+
 NewsReader.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
     if (!this.headerFrame) {
@@ -142,14 +529,14 @@ NewsReader.prototype._ensureFrames = function () {
         this.listFrame.word_wrap = false;
         if (typeof this.registerFrame === 'function') this.registerFrame(this.listFrame);
     }
-    log('Frames ensured: header ' + (this.headerFrame ? 'yes' : 'no') + ', status ' + (this.statusFrame ? 'yes' : 'no') + ', list ' + (this.listFrame ? 'yes' : 'no'));
 };
 
 NewsReader.prototype.draw = function () {
     this._ensureFrames();
     if (!this.listFrame) return;
-    log('NewsReader draw, state=' + this.state + ', selectedIndex=' + this.selectedIndex + ', scrollOffset=' + this.scrollOffset);
     this._refreshStatus();
+    if (this.state !== 'categories') this._destroyCategoryIcons();
+    if (this.state !== 'feeds') this._destroyFeedIcons();
     switch (this.state) {
         case 'categories':
             this._drawCategories();
@@ -160,40 +547,38 @@ NewsReader.prototype.draw = function () {
         case 'articles':
             this._drawArticles();
             break;
+        case 'article_images':
+            this._drawArticleImages();
+            break;
         case 'article':
             this._drawArticle();
             break;
         default:
-            log('NewsReader in unknown state: ' + this.state);
+            if (typeof log === 'function') log('NewsReader unknown state: ' + this.state);
             break;
     }
-    this.parentFrame.cycle();
-    log('Cycled parent frame');
+    if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
+        try { this.parentFrame.cycle(); } catch (_eCycle) { }
+    }
 };
 
 NewsReader.prototype._drawCategories = function () {
-    this._setHeader('Select News Category');
-    this._renderList(this.categories, function (category) {
-        return category.name + ' (' + category.feeds.length + ')';
-    });
-    this._setStatus('ENTER=view feeds  ESC=exit');
+    this._setHeader('');
+    this._renderCategoryIcons();
+    this._setStatus('Select a news category  |  ENTER=open  ESC=exit  CLICK=select  Exit tile=leave');
 };
 
 NewsReader.prototype._drawFeeds = function () {
-    this._setHeader('Category: ' + (this.currentCategory ? this.currentCategory.name : ''));
-    if (!this.currentCategory || !this.currentFeeds.length) {
-        this.listFrame.clear();
-        this.listFrame.gotoxy(1, 1);
-        this.listFrame.putmsg('No feeds available in this category.');
-        return;
-    }
-    this._renderList(this.currentFeeds, function (feed) {
-        return feed.label;
-    });
-    this._setStatus('ENTER=open feed  BACKSPACE=categories  R=refresh feed cache');
+    var name = this.currentCategory ? this.currentCategory.name : '';
+    this._setHeader('');
+    this._renderFeedIcons();
+    this._setStatus((name ? name + '  |  ' : '') + 'ENTER=open feed  BACKSPACE=categories  R=refresh  CLICK=select  ESC=back  Back tile=return');
 };
 
 NewsReader.prototype._drawArticles = function () {
+    this._destroyCategoryIcons();
+    this._destroyFeedIcons();
+    this._gridLayout = null;
     this._setHeader((this.currentFeed ? this.currentFeed.label : 'Feed') + ' Articles');
     if (!this.currentArticles.length) {
         this.listFrame.clear();
@@ -205,31 +590,76 @@ NewsReader.prototype._drawArticles = function () {
     this._renderList(this.currentArticles, function (article, idx) {
         var prefix = (idx + 1) + '. ';
         var title = article.title || '[untitled]';
-        return prefix + title;
+        if (article && typeof article.__newsImages === 'undefined') {
+            article.__newsImages = self._extractArticleImages(article);
+        }
+        var hasImages = article && article.__newsImages && article.__newsImages.length;
+        var suffix = hasImages ? ' [IMG]' : '';
+        return prefix + title + suffix;
     });
     this._setStatus('ENTER=view article  BACKSPACE=feeds');
 };
 
+NewsReader.prototype._drawArticleImages = function () {
+    this._destroyCategoryIcons();
+    this._destroyFeedIcons();
+    this._gridLayout = null;
+    var title = 'Article Images';
+    if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
+        var articleTitle = this.currentArticles[this.articleIndex].title || 'Article';
+        title = 'Images: ' + articleTitle;
+    }
+    this._setHeader(this._toDisplayText(title));
+    this.listFrame.clear();
+    if (!this.articleImages.length) {
+        this.listFrame.gotoxy(1, 1);
+        this.listFrame.putmsg('No images found.');
+        return;
+    }
+    var height = this.listFrame.height;
+    if (this.imageSelection < this.imageScrollOffset) this.imageScrollOffset = this.imageSelection;
+    if (this.imageSelection >= this.imageScrollOffset + height) {
+        this.imageScrollOffset = Math.max(0, this.imageSelection - height + 1);
+    }
+    for (var row = 0; row < height; row++) {
+        var idx = this.imageScrollOffset + row;
+        if (idx >= this.articleImages.length) break;
+        var url = this._toDisplayText(this.articleImages[idx]);
+        if (url.length > this.listFrame.width) url = url.substr(0, this.listFrame.width);
+        this.listFrame.gotoxy(1, row + 1);
+        this.listFrame.attr = (idx === this.imageSelection) ? LIST_ACTIVE : LIST_INACTIVE;
+        this.listFrame.putmsg(url);
+    }
+    this.listFrame.attr = LIST_INACTIVE;
+    this._setStatus('ENTER=read article  BACKSPACE=articles');
+};
+
 NewsReader.prototype._drawArticle = function () {
+    this._destroyCategoryIcons();
+    this._destroyFeedIcons();
+    this._gridLayout = null;
+    this._ensureArticleIcon();
     var header = 'Article';
     if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
         header = this.currentArticles[this.articleIndex].title || header;
     }
-    this._setHeader(header);
+    this._setHeader(this._toDisplayText(header));
     this.listFrame.clear();
     if (!this.articleLines.length) {
         this.listFrame.gotoxy(1, 1);
         this.listFrame.putmsg('No content available.');
         return;
     }
-    var height = this.listFrame.height;
+    var startRow = Math.max(1, this.articleTextOffset);
+    var height = Math.max(0, this.listFrame.height - (startRow - 1));
+    if (height <= 0) height = this.listFrame.height;
     var offset = Math.max(0, this.articleScroll);
     if (offset > Math.max(0, this.articleLines.length - 1)) offset = Math.max(0, this.articleLines.length - 1);
     for (var row = 0; row < height; row++) {
         var lineIndex = offset + row;
         if (lineIndex >= this.articleLines.length) break;
-        this.listFrame.gotoxy(1, row + 1);
-        this.listFrame.putmsg(this.articleLines[lineIndex]);
+        this.listFrame.gotoxy(1, startRow + row);
+        this.listFrame.putmsg(this._toDisplayText(this.articleLines[lineIndex]));
     }
     this._setStatus('UP/DOWN=scroll  BACKSPACE=articles');
 };
@@ -244,6 +674,7 @@ NewsReader.prototype._renderList = function (items, formatter) {
         var idx = this.scrollOffset + row;
         if (idx >= items.length) break;
         var line = formatter(items[idx], idx) || '';
+        line = this._toDisplayText(line);
         if (line.length > this.listFrame.width) line = line.substr(0, this.listFrame.width);
         this.listFrame.gotoxy(1, row + 1);
         this.listFrame.attr = (idx === this.selectedIndex) ? LIST_ACTIVE : LIST_INACTIVE;
@@ -266,6 +697,7 @@ NewsReader.prototype._cleanup = function () {
         }
         this[key] = null;
     }
+    this._releaseHotspots();
     this._resetState();
 };
 
@@ -274,6 +706,7 @@ NewsReader.prototype._setHeader = function (text) {
     this.headerFrame.clear();
     this.headerFrame.gotoxy(1, 1);
     if (!text) text = 'News';
+    text = this._toDisplayText(text);
     if (text.length > this.headerFrame.width) text = text.substr(0, this.headerFrame.width);
     this.headerFrame.putmsg(text);
 };
@@ -288,6 +721,7 @@ NewsReader.prototype._setStatus = function (text) {
 NewsReader.prototype._refreshStatus = function () {
     if (!this.statusFrame) return;
     var text = this.statusMessage || '';
+    text = this._toDisplayText(text);
     if (text.length > this.statusFrame.width) text = text.substr(0, this.statusFrame.width);
     this.statusFrame.clear();
     this.statusFrame.gotoxy(1, 1);
@@ -335,18 +769,24 @@ NewsReader.prototype._prepareArticleLines = function (article) {
     var title = (this._stringifyField(article.title) || 'Untitled Article');
     var authorValue = this._stringifyField(article.author);
     var dateValue = article.date || article.pubDate || article.published || article.updated || article.updatedAt || '';
-    var body = article.content || article.description || article.summary || article.body || '';
+    var bodyParts = [];
+    if (article.content) bodyParts.push(article.content);
+    if (article.description && bodyParts.indexOf(article.description) === -1) bodyParts.push(article.description);
+    if (article.summary && bodyParts.indexOf(article.summary) === -1) bodyParts.push(article.summary);
+    if (article.body && bodyParts.indexOf(article.body) === -1) bodyParts.push(article.body);
+    var body = bodyParts.join('\n\n');
     var metadata = [];
-    metadata.push(title);
-    if (authorValue) metadata.push('By: ' + authorValue);
-    if (dateValue) metadata.push(this._formatArticleDate(dateValue));
+    metadata.push(this._toDisplayText(title));
+    if (authorValue) metadata.push(this._toDisplayText('By: ' + authorValue));
+    if (dateValue) metadata.push(this._toDisplayText(this._formatArticleDate(dateValue)));
     metadata.push('');
     lines = lines.concat(this._wrapText(metadata.join('\n'), width));
     lines.push('');
-    lines = lines.concat(this._wrapText(this._simplifyText(body) || '[No content]', width));
+    var simplifiedBody = this._simplifyText(body) || '[No content]';
+    lines = lines.concat(this._wrapText(this._toDisplayText(simplifiedBody), width));
     if (article.link) {
         lines.push('');
-        lines.push('Link: ' + article.link);
+        lines.push(this._toDisplayText('Link: ' + article.link));
     }
     return lines;
 };
@@ -408,40 +848,75 @@ NewsReader.prototype.handleKey = function (key) {
     if (!key) return;
 
     switch (this.state) {
-        case 'categories':
-            this._handleListNavigation(key, this.categories.length, function () {
-                if (this.categories.length === 0) return;
-                this.currentCategory = this.categories[this.selectedIndex];
+        case 'categories': {
+            var catItems = (this._categoryGridItems && this._categoryGridItems.length) ? this._categoryGridItems : (this.categories || []);
+            var catLength = catItems.length;
+            var activateCategory = function () {
+                var item = catItems[this.selectedIndex];
+                if (!item) return;
+                if (item._type === 'exit') {
+                    this.exit();
+                    return;
+                }
+                this.currentCategory = item;
+                this.currentFeed = null;
+                this.currentFeedData = null;
                 this.currentFeeds = this._feedsForCategory(this.currentCategory);
                 this.state = 'feeds';
-                this.selectedIndex = 0;
+                this.selectedIndex = (this.currentFeeds && this.currentFeeds.length) ? 1 : 0;
                 this.scrollOffset = 0;
                 this._setStatus('Loading feeds...');
                 this.draw();
-            }.bind(this), this.exit.bind(this));
+            }.bind(this);
+            if (this._hotspotMap && this._hotspotMap[key] !== undefined) {
+                this.selectedIndex = this._hotspotMap[key];
+                this._adjustGridScroll(this._gridLayout, catLength);
+                activateCategory();
+                break;
+            }
+            this._handleListNavigation(key, catLength, activateCategory, this.exit.bind(this));
             break;
-        case 'feeds':
-            this._handleListNavigation(key, this.currentFeeds.length, function () {
-                if (!this.currentFeeds.length) {
-                    this._setStatus('No feeds available.');
+        }
+        case 'feeds': {
+            var feedItems = (this._feedGridItems && this._feedGridItems.length) ? this._feedGridItems : (this.currentFeeds || []);
+            var feedLength = feedItems.length;
+            var feedBack = function () {
+                this.currentFeed = null;
+                this.currentFeedData = null;
+                this.state = 'categories';
+                this.scrollOffset = 0;
+                if (this.currentCategory) {
+                    this.selectedIndex = this.categories.indexOf(this.currentCategory);
+                    if (this.selectedIndex < 0) this.selectedIndex = 0;
+                } else {
+                    this.selectedIndex = 0;
+                }
+                this.draw();
+            }.bind(this);
+            var activateFeed = function () {
+                var item = feedItems[this.selectedIndex];
+                if (!item) return;
+                if (item._type === 'back') {
+                    feedBack();
                     return;
                 }
-                this._openFeed(this.currentFeeds[this.selectedIndex]);
-            }.bind(this), function () {
-                this.state = 'categories';
-                this.selectedIndex = this.categories.indexOf(this.currentCategory);
-                if (this.selectedIndex < 0) this.selectedIndex = 0;
-                this.scrollOffset = 0;
-                this.currentCategory = null;
-                this.currentFeeds = [];
-                this.draw();
-            }.bind(this));
-            if (key === 'R' || key === 'r') {
-                if (this.currentFeeds.length) {
-                    this._openFeed(this.currentFeeds[this.selectedIndex], true);
+                this._openFeed(item);
+            }.bind(this);
+            if (this._hotspotMap && this._hotspotMap[key] !== undefined) {
+                this.selectedIndex = this._hotspotMap[key];
+                this._adjustGridScroll(this._gridLayout, feedLength);
+                activateFeed();
+                break;
+            }
+            this._handleListNavigation(key, feedLength, activateFeed, feedBack);
+            if ((key === 'R' || key === 'r') && feedLength) {
+                var selectedFeed = feedItems[this.selectedIndex];
+                if (selectedFeed && !selectedFeed._type) {
+                    this._openFeed(selectedFeed, true);
                 }
             }
             break;
+        }
         case 'articles':
             this._handleListNavigation(key, this.currentArticles.length, function () {
                 if (!this.currentArticles.length) {
@@ -457,6 +932,9 @@ NewsReader.prototype.handleKey = function (key) {
                 this.draw();
             }.bind(this));
             break;
+        case 'article_images':
+            this._handleImageNavigation(key);
+            break;
         case 'article':
             this._handleArticleNavigation(key);
             break;
@@ -465,13 +943,26 @@ NewsReader.prototype.handleKey = function (key) {
 
 NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onBack) {
     if (typeof length !== 'number' || length < 0) length = 0;
+    var grid = null;
+    if (this._gridLayout) {
+        if ((this.state === 'categories' && this._gridLayout.type === 'categories') ||
+            (this.state === 'feeds' && this._gridLayout.type === 'feeds')) {
+            grid = this._gridLayout;
+        }
+    }
     var pageSize = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
+    if (grid) pageSize = Math.max(1, grid.cols * grid.visibleRows);
     switch (key) {
         case KEY_UP:
         case '\x1B[A':
-        case KEY_LEFT:
-        case '\x1B[D':
             if (length === 0) break;
+            if (grid) {
+                if (this.selectedIndex >= grid.cols) this.selectedIndex -= grid.cols;
+                else this.selectedIndex = this.selectedIndex % grid.cols;
+                this._adjustGridScroll(grid, length);
+                this.draw();
+                break;
+            }
             if (this.selectedIndex > 0) {
                 this.selectedIndex--;
                 if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
@@ -480,9 +971,51 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             break;
         case KEY_DOWN:
         case '\x1B[B':
+            if (length === 0) break;
+            if (grid) {
+                var nextDown = this.selectedIndex + grid.cols;
+                if (nextDown < length) this.selectedIndex = nextDown;
+                else this.selectedIndex = length - 1;
+                this._adjustGridScroll(grid, length);
+                this.draw();
+                break;
+            }
+            if (this.selectedIndex < length - 1) {
+                this.selectedIndex++;
+                if (this.selectedIndex >= this.scrollOffset + pageSize) {
+                    this.scrollOffset = Math.max(0, this.selectedIndex - pageSize + 1);
+                }
+                this.draw();
+            }
+            break;
+        case KEY_LEFT:
+        case '\x1B[D':
+            if (length === 0) break;
+            if (grid) {
+                if (this.selectedIndex > 0) {
+                    this.selectedIndex--;
+                    this._adjustGridScroll(grid, length);
+                    this.draw();
+                }
+                break;
+            }
+            if (this.selectedIndex > 0) {
+                this.selectedIndex--;
+                if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
+                this.draw();
+            }
+            break;
         case KEY_RIGHT:
         case '\x1B[C':
             if (length === 0) break;
+            if (grid) {
+                if (this.selectedIndex < length - 1) {
+                    this.selectedIndex++;
+                    this._adjustGridScroll(grid, length);
+                    this.draw();
+                }
+                break;
+            }
             if (this.selectedIndex < length - 1) {
                 this.selectedIndex++;
                 if (this.selectedIndex >= this.scrollOffset + pageSize) {
@@ -493,12 +1026,24 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             break;
         case KEY_PGUP:
             if (length === 0) break;
+            if (grid) {
+                this.selectedIndex = Math.max(0, this.selectedIndex - pageSize);
+                this._adjustGridScroll(grid, length);
+                this.draw();
+                break;
+            }
             this.selectedIndex = Math.max(0, this.selectedIndex - pageSize);
             this.scrollOffset = Math.max(0, this.scrollOffset - pageSize);
             this.draw();
             break;
         case KEY_PGDN:
             if (length === 0) break;
+            if (grid) {
+                this.selectedIndex = Math.min(length - 1, this.selectedIndex + pageSize);
+                this._adjustGridScroll(grid, length);
+                this.draw();
+                break;
+            }
             this.selectedIndex = Math.min(length - 1, this.selectedIndex + pageSize);
             if (this.selectedIndex >= this.scrollOffset + pageSize) {
                 this.scrollOffset = Math.min(Math.max(0, length - pageSize), this.scrollOffset + pageSize);
@@ -508,13 +1053,19 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
         case KEY_HOME:
             if (length === 0) break;
             this.selectedIndex = 0;
-            this.scrollOffset = 0;
+            if (grid) {
+                this._adjustGridScroll(grid, length);
+            } else {
+                this.scrollOffset = 0;
+            }
             this.draw();
             break;
         case KEY_END:
             if (length === 0) break;
             this.selectedIndex = length - 1;
-            if (this.listFrame) {
+            if (grid) {
+                this._adjustGridScroll(grid, length);
+            } else if (this.listFrame) {
                 var visible = Math.max(1, this.listFrame.height);
                 this.scrollOffset = Math.max(0, length - visible);
             }
@@ -535,6 +1086,14 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             break;
         case 'wheel_up':
             if (length === 0) break;
+            if (grid) {
+                if (this.selectedIndex > 0) {
+                    this.selectedIndex = Math.max(0, this.selectedIndex - grid.cols);
+                    this._adjustGridScroll(grid, length);
+                    this.draw();
+                }
+                break;
+            }
             if (this.selectedIndex > 0) {
                 this.selectedIndex = Math.max(0, this.selectedIndex - 1);
                 if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
@@ -543,6 +1102,16 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             break;
         case 'wheel_down':
             if (length === 0) break;
+            if (grid) {
+                if (this.selectedIndex < length - 1) {
+                    var nextIdx = this.selectedIndex + grid.cols;
+                    if (nextIdx >= length) nextIdx = length - 1;
+                    this.selectedIndex = nextIdx;
+                    this._adjustGridScroll(grid, length);
+                    this.draw();
+                }
+                break;
+            }
             if (this.selectedIndex < length - 1) {
                 this.selectedIndex = Math.min(length - 1, this.selectedIndex + 1);
                 if (this.selectedIndex >= this.scrollOffset + pageSize) {
@@ -551,6 +1120,133 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
                 this.draw();
             }
             break;
+    }
+};
+
+NewsReader.prototype._handleImageNavigation = function (key) {
+    var length = this.articleImages.length;
+    if (length <= 0) {
+        this._enterArticleContent();
+        return;
+    }
+    var pageSize = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
+    switch (key) {
+        case KEY_UP:
+        case '\x1B[A':
+        case KEY_LEFT:
+        case '\x1B[D':
+            if (this.imageSelection > 0) {
+                this.imageSelection--;
+                if (this.imageSelection < this.imageScrollOffset) this.imageScrollOffset = this.imageSelection;
+                this.draw();
+            }
+            break;
+        case KEY_DOWN:
+        case '\x1B[B':
+        case KEY_RIGHT:
+        case '\x1B[C':
+            if (this.imageSelection < length - 1) {
+                this.imageSelection++;
+                if (this.imageSelection >= this.imageScrollOffset + pageSize) {
+                    this.imageScrollOffset = Math.max(0, this.imageSelection - pageSize + 1);
+                }
+                this.draw();
+            }
+            break;
+        case KEY_PGUP:
+            this.imageSelection = Math.max(0, this.imageSelection - pageSize);
+            this.imageScrollOffset = Math.max(0, this.imageScrollOffset - pageSize);
+            this.draw();
+            break;
+        case KEY_PGDN:
+            this.imageSelection = Math.min(length - 1, this.imageSelection + pageSize);
+            if (this.imageSelection >= this.imageScrollOffset + pageSize) {
+                this.imageScrollOffset = Math.min(Math.max(0, length - pageSize), this.imageScrollOffset + pageSize);
+            }
+            this.draw();
+            break;
+        case KEY_HOME:
+            this.imageSelection = 0;
+            this.imageScrollOffset = 0;
+            this.draw();
+            break;
+        case KEY_END:
+            this.imageSelection = length - 1;
+            if (this.listFrame) {
+                var visible = Math.max(1, this.listFrame.height);
+                this.imageScrollOffset = Math.max(0, length - visible);
+            }
+            this.draw();
+            break;
+        case '\r':
+        case '\n':
+            this._enterArticleContent();
+            break;
+        case '\x1B':
+        case '\b':
+        case '\x08':
+        case '\x7F':
+            this._destroyArticleIcon();
+            this.state = 'articles';
+            this.scrollOffset = this._articleListScroll;
+            this.draw();
+            break;
+    }
+};
+
+NewsReader.prototype._enterArticleContent = function () {
+    this.state = 'article';
+    this.articleScroll = 0;
+    this.scrollOffset = 0;
+    this._ensureArticleIcon();
+    var status = this.articleImages && this.articleImages.length ? 'UP/DOWN=scroll  I=images  BACKSPACE=articles' : 'UP/DOWN=scroll  BACKSPACE=articles';
+    this._setStatus(status);
+    this.draw();
+};
+
+NewsReader.prototype._ensureArticleIcon = function () {
+    if (!this.listFrame || !this.currentFeed) {
+        this._destroyArticleIcon();
+        return;
+    }
+    var iconName = this._iconNameForFeed(this.currentFeed);
+    if (!iconName) {
+        this._destroyArticleIcon();
+        return;
+    }
+    if (this.articleIconFrame && this._currentIconKey === iconName) return;
+    this._destroyArticleIcon();
+    var metrics = this._getIconMetrics();
+    if (metrics.height + 1 >= this.listFrame.height) return;
+    var iconAttr = LIST_INACTIVE;
+    var iconFrame;
+    var labelFrame;
+    try {
+        iconFrame = new Frame(1, 1, metrics.width, metrics.height, iconAttr, this.listFrame);
+        iconFrame.open();
+        labelFrame = new Frame(1, metrics.height + 1, metrics.width, 1, iconAttr, this.listFrame);
+        labelFrame.open();
+        labelFrame.clear();
+        var iconBg = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70) : 0;
+        var iconFg = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F) : 0;
+        var iconData = { iconFile: iconName, label: '', iconBg: iconBg, iconFg: iconFg };
+        this.articleIconObj = new Icon(iconFrame, labelFrame, iconData);
+        this.articleIconObj.render();
+        if (typeof this.registerFrame === 'function') {
+            this.registerFrame(iconFrame);
+            this.registerFrame(labelFrame);
+        }
+        this.articleIconFrame = iconFrame;
+        this.articleIconLabelFrame = labelFrame;
+        this.articleTextOffset = metrics.height + 2;
+        this._currentIconKey = iconName;
+    } catch (e) {
+        if (iconFrame) { try { iconFrame.close(); } catch (_e1) { } }
+        if (labelFrame) { try { labelFrame.close(); } catch (_e2) { } }
+        this.articleIconFrame = null;
+        this.articleIconLabelFrame = null;
+        this.articleIconObj = null;
+        this.articleTextOffset = 1;
     }
 };
 
@@ -598,6 +1294,7 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
         case '\x08':
         case '\x7F':
         case '\x1B':
+            this._destroyArticleIcon();
             this.state = 'articles';
             var visible = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
             var maxOffset = Math.max(0, this.currentArticles.length - visible);
@@ -612,6 +1309,16 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
         case 'O':
         case 'o':
             this._setStatus('Link opening not implemented.');
+            break;
+        case 'I':
+        case 'i':
+            if (this.articleImages && this.articleImages.length) {
+                this.state = 'article_images';
+                this.imageSelection = 0;
+                this.imageScrollOffset = 0;
+                this._setStatus('ENTER=read article  BACKSPACE=articles');
+                this.draw();
+            }
             break;
     }
 };
@@ -641,6 +1348,10 @@ NewsReader.prototype._openFeed = function (feed, forceRefresh) {
     }
     var items = data.items || [];
     this.currentArticles = items;
+    for (var ai = 0; ai < this.currentArticles.length; ai++) {
+        var art = this.currentArticles[ai];
+        if (art) art.__newsImages = undefined;
+    }
     this.articleLines = [];
     this.articleIndex = -1;
     this.articleScroll = 0;
@@ -669,11 +1380,19 @@ NewsReader.prototype._openArticle = function (index) {
     this.articleIndex = index;
     this.articleScroll = 0;
     this.articleLines = this._prepareArticleLines(article);
+    if (!article.__newsImages) article.__newsImages = this._extractArticleImages(article);
+    this.articleImages = (article.__newsImages || []).slice(0);
     this._articleListScroll = this.scrollOffset;
-    this.state = 'article';
-    this.scrollOffset = 0;
-    this._setStatus('UP/DOWN=scroll  BACKSPACE=articles');
-    this.draw();
+    if (this.articleImages.length) {
+        this.state = 'article_images';
+        this.imageSelection = 0;
+        this.imageScrollOffset = 0;
+        this.scrollOffset = 0;
+        this._setStatus('ENTER=read article  BACKSPACE=articles');
+        this.draw();
+        return;
+    }
+    this._enterArticleContent();
 };
 
 NewsReader.prototype._simplifyText = function (text) {
@@ -692,6 +1411,82 @@ NewsReader.prototype._simplifyText = function (text) {
     normalized = normalized.replace(/&apos;/gi, "'");
     normalized = normalized.replace(/&#x27;/gi, "'");
     return normalized.trim();
+};
+
+NewsReader.prototype._extractArticleImages = function (article) {
+    var results = [];
+    if (!article) return results;
+    var seen = {};
+    var pushUrl = function (url) {
+        if (!url) return;
+        var key = String(url).trim();
+        if (!key || seen[key]) return;
+        seen[key] = true;
+        results.push(key);
+    };
+    if (article.enclosures && article.enclosures.length) {
+        for (var i = 0; i < article.enclosures.length; i++) {
+            var enclosure = article.enclosures[i];
+            if (!enclosure || !enclosure.url) continue;
+            var type = enclosure.type ? ('' + enclosure.type).toLowerCase() : '';
+            if (type.indexOf('image/') === 0 || /\.(png|jpe?g|gif|webp|bmp)(\?|#|$)/i.test(enclosure.url)) {
+                pushUrl(enclosure.url);
+            }
+        }
+    }
+    var contentSources = [];
+    if (article.content) contentSources.push(article.content);
+    if (article.body) contentSources.push(article.body);
+    for (var s = 0; s < contentSources.length; s++) {
+        var src = contentSources[s];
+        if (!src) continue;
+        var match;
+        var imgRe = /<img[^>]+src=["']([^"'>\s]+)["'][^>]*>/gi;
+        while ((match = imgRe.exec(src)) !== null) {
+            pushUrl(match[1]);
+        }
+    }
+    return results;
+};
+
+NewsReader.prototype._extractArticleImages = function (article) {
+    var results = [];
+    if (!article) return results;
+    var seen = {};
+    var pushUrl = function (url) {
+        if (!url) return;
+        var key = url.trim();
+        if (!key || seen[key]) return;
+        seen[key] = true;
+        results.push(key);
+    };
+    if (article.enclosures && article.enclosures.length) {
+        for (var i = 0; i < article.enclosures.length; i++) {
+            var enclosure = article.enclosures[i];
+            if (!enclosure) continue;
+            var type = enclosure.type ? ('' + enclosure.type).toLowerCase() : '';
+            if (type.indexOf('image/') === 0) {
+                pushUrl(enclosure.url);
+                continue;
+            }
+            if (!type && enclosure.url) {
+                if (/\.(png|jpe?g|gif|webp|bmp)(\?|#|$)/i.test(enclosure.url)) pushUrl(enclosure.url);
+            }
+        }
+    }
+    var contentSources = [];
+    if (article.content) contentSources.push(article.content);
+    if (article.body) contentSources.push(article.body);
+    for (var s = 0; s < contentSources.length; s++) {
+        var src = contentSources[s];
+        if (!src) continue;
+        var match;
+        var imgRe = /<img[^>]+src=["']([^"'>\s]+)["'][^>]*>/gi;
+        while ((match = imgRe.exec(src)) !== null) {
+            pushUrl(match[1]);
+        }
+    }
+    return results;
 };
 
 NewsReader.prototype._formatTimestamp = function (ts) {

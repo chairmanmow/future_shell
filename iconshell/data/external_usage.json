@@ -1,8 +1,8 @@
 {
 	"2025-10": {
 		"totals": {
-			"count": 15,
-			"seconds": 1989
+			"count": 30,
+			"seconds": 3350
 		},
 		"programs": {
 			"chicken": {
@@ -26,19 +26,19 @@
 				"lastTimestamp": 1759470606835
 			},
 			"ansiview": {
-				"count": 1,
-				"seconds": 160,
-				"lastTimestamp": 1759472241793
+				"count": 2,
+				"seconds": 178,
+				"lastTimestamp": 1759592881560
 			},
 			"bordello": {
-				"count": 1,
-				"seconds": 216,
-				"lastTimestamp": 1759475118921
+				"count": 2,
+				"seconds": 274,
+				"lastTimestamp": 1759562895319
 			},
 			"thepit": {
-				"count": 1,
-				"seconds": 357,
-				"lastTimestamp": 1759475488536
+				"count": 4,
+				"seconds": 1552,
+				"lastTimestamp": 1759564105390
 			},
 			"lord-rst": {
 				"count": 1,
@@ -59,12 +59,57 @@
 				"count": 1,
 				"seconds": 2,
 				"lastTimestamp": 1759553307879
+			},
+			"mail:inbox": {
+				"count": 1,
+				"seconds": 9,
+				"lastTimestamp": 1759562383937
+			},
+			"avatchoo": {
+				"count": 1,
+				"seconds": 3,
+				"lastTimestamp": 1759592848090
+			},
+			"sbbslist": {
+				"count": 2,
+				"seconds": 12,
+				"lastTimestamp": 1759593585172
+			},
+			"go-for": {
+				"count": 1,
+				"seconds": 6,
+				"lastTimestamp": 1759592901615
+			},
+			"hamtest": {
+				"count": 1,
+				"seconds": 7,
+				"lastTimestamp": 1759593598636
+			},
+			"ecreader": {
+				"count": 1,
+				"seconds": 2,
+				"lastTimestamp": 1759593604411
+			},
+			"bullseye": {
+				"count": 1,
+				"seconds": 2,
+				"lastTimestamp": 1759593608159
+			},
+			"user_config": {
+				"count": 1,
+				"seconds": 3,
+				"lastTimestamp": 1759593643980
+			},
+			"bcrgames": {
+				"count": 1,
+				"seconds": 46,
+				"lastTimestamp": 1759593712783
 			}
 		},
 		"users": {
 			"Hm Derdoc": {
-				"count": 10,
-				"seconds": 1830,
+				"count": 15,
+				"seconds": 3092,
 				"programs": {
 					"chicken": {
 						"count": 1,
@@ -92,14 +137,14 @@
 						"lastTimestamp": 1759472241793
 					},
 					"bordello": {
-						"count": 1,
-						"seconds": 216,
-						"lastTimestamp": 1759475118921
+						"count": 2,
+						"seconds": 274,
+						"lastTimestamp": 1759562895319
 					},
 					"thepit": {
-						"count": 1,
-						"seconds": 357,
-						"lastTimestamp": 1759475488536
+						"count": 4,
+						"seconds": 1552,
+						"lastTimestamp": 1759564105390
 					},
 					"lord-rst": {
 						"count": 1,
@@ -110,9 +155,14 @@
 						"count": 1,
 						"seconds": 2,
 						"lastTimestamp": 1759553307879
+					},
+					"mail:inbox": {
+						"count": 1,
+						"seconds": 9,
+						"lastTimestamp": 1759562383937
 					}
 				},
-				"lastTimestamp": 1759553307879,
+				"lastTimestamp": 1759564105390,
 				"alias": "Hm Derdoc",
 				"number": 1
 			},
@@ -134,8 +184,62 @@
 				"alias": "Larry Lagomorph",
 				"number": 17,
 				"lastTimestamp": 1759517317784
+			},
+			"Equilibrium": {
+				"count": 10,
+				"seconds": 99,
+				"programs": {
+					"avatchoo": {
+						"count": 1,
+						"seconds": 3,
+						"lastTimestamp": 1759592848090
+					},
+					"ansiview": {
+						"count": 1,
+						"seconds": 18,
+						"lastTimestamp": 1759592881560
+					},
+					"sbbslist": {
+						"count": 2,
+						"seconds": 12,
+						"lastTimestamp": 1759593585172
+					},
+					"go-for": {
+						"count": 1,
+						"seconds": 6,
+						"lastTimestamp": 1759592901615
+					},
+					"hamtest": {
+						"count": 1,
+						"seconds": 7,
+						"lastTimestamp": 1759593598636
+					},
+					"ecreader": {
+						"count": 1,
+						"seconds": 2,
+						"lastTimestamp": 1759593604411
+					},
+					"bullseye": {
+						"count": 1,
+						"seconds": 2,
+						"lastTimestamp": 1759593608159
+					},
+					"user_config": {
+						"count": 1,
+						"seconds": 3,
+						"lastTimestamp": 1759593643980
+					},
+					"bcrgames": {
+						"count": 1,
+						"seconds": 46,
+						"lastTimestamp": 1759593712783
+					}
+				},
+				"alias": "Equilibrium",
+				"number": 21,
+				"lastTimestamp": 1759593712783
 			}
 		},
-		"lastTimestamp": 1759553307879
+		"lastTimestamp": 1759593712783
 	}
 }
