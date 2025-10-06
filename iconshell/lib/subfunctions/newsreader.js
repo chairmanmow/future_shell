@@ -16,7 +16,7 @@ function resolveAttr(key, fallback) {
     return fallback;
 }
 
-var RSS_FEEDS = [
+var NEWSREADER_DEFAULT_FEEDS = [
     { label: "Digital Photography School (png)", url: "https://digital-photography-school.com/feed/", category: "Images", icon: "dps_news" },
     { label: "NASA latest content (png)", url: "https://science.nasa.gov/feed/?science_org=19791%2C20129", category: "Images", icon: "nasa_image_of_the_day" },
     { label: "BBC News - World", url: "http://feeds.bbci.co.uk/news/world/rss.xml", category: "World News", icon: "bbc_world_news" },
@@ -42,6 +42,275 @@ var RSS_FEEDS = [
     { label: "The New York Times - Science", url: "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml", category: "Science", icon: 'nyt_science' },
     { label: "The Guardian - Science", url: "https://www.theguardian.com/science/rss", category: "Science", icon: 'guardian_science' },
 ];
+
+function newsreaderSlugify(label) {
+    if (!label) return '';
+    return String(label).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function newsreaderResolveConfigPath(filename) {
+    if (typeof ICSH_resolveConfigPath === 'function') {
+        try { return ICSH_resolveConfigPath(filename); } catch (_cfgPathErr) { }
+    }
+    var base = '';
+    if (typeof system !== 'undefined' && system && system.mods_dir) base = system.mods_dir;
+    else if (typeof js !== 'undefined' && js && js.exec_dir) base = js.exec_dir;
+    if (base && base.charAt(base.length - 1) !== '/' && base.charAt(base.length - 1) !== '\\') base += '/';
+    return base + 'iconshell/lib/config/' + filename;
+}
+
+function newsreaderReadConfigFile(filename) {
+    if (!filename) return null;
+    var path = newsreaderResolveConfigPath(filename);
+    var file = new File(path);
+    if (!file.exists) return null;
+    if (!file.open('r')) return null;
+    var text = file.readAll().join('\n');
+    file.close();
+    return text;
+}
+
+function newsreaderParseIni(raw) {
+    var data = {};
+    var order = [];
+    if (!raw && raw !== '') return data;
+    var lines = String(raw).split(/\r?\n/);
+    var current = null;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line || line.charAt(0) === ';' || line.charAt(0) === '#') continue;
+        var sectionMatch = line.match(/^\[(.+?)\]$/);
+        if (sectionMatch) {
+            current = sectionMatch[1];
+            if (!data[current]) data[current] = {};
+            order.push(current);
+            continue;
+        }
+        if (!current) continue;
+        var eq = line.indexOf('=');
+        if (eq === -1) continue;
+        var key = line.substring(0, eq).trim();
+        var val = line.substring(eq + 1).trim();
+        data[current][key] = val;
+    }
+    data.__order = order;
+    return data;
+}
+
+function newsreaderGetIniValue(section, key) {
+    if (!section || key === undefined || key === null) return undefined;
+    if (Object.prototype.hasOwnProperty.call(section, key)) return section[key];
+    var target = String(key).toLowerCase();
+    for (var prop in section) {
+        if (!Object.prototype.hasOwnProperty.call(section, prop)) continue;
+        if (prop.toLowerCase() === target) return section[prop];
+    }
+    return undefined;
+}
+
+function newsreaderParseBoolean(value) {
+    if (value === undefined || value === null) return undefined;
+    var str = String(value).trim().toLowerCase();
+    if (!str) return undefined;
+    if (str === 'true' || str === 'yes' || str === 'on' || str === '1') return true;
+    if (str === 'false' || str === 'no' || str === 'off' || str === '0') return false;
+    return undefined;
+}
+
+function newsreaderCloneFeed(feed) {
+    if (!feed) return null;
+    var copy = {};
+    for (var key in feed) {
+        if (Object.prototype.hasOwnProperty.call(feed, key)) copy[key] = feed[key];
+    }
+    return copy;
+}
+
+function newsreaderCloneFeedList(list) {
+    var out = [];
+    if (!list || !list.length) return out;
+    for (var i = 0; i < list.length; i++) {
+        var cloned = newsreaderCloneFeed(list[i]);
+        if (cloned) out.push(cloned);
+    }
+    return out;
+}
+
+function newsreaderCloneCategoryMap(map) {
+    var out = {};
+    if (!map) return out;
+    for (var key in map) {
+        if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+        var src = map[key];
+        var dest = {};
+        for (var prop in src) {
+            if (Object.prototype.hasOwnProperty.call(src, prop)) dest[prop] = src[prop];
+        }
+        out[key] = dest;
+    }
+    return out;
+}
+
+function newsreaderFindSectionName(sections, name) {
+    if (!sections || !sections.length) return null;
+    var target = String(name).toLowerCase();
+    for (var i = 0; i < sections.length; i++) {
+        if (sections[i] && sections[i].toLowerCase() === target) return sections[i];
+    }
+    return null;
+}
+
+function newsreaderGetSection(ini, sections, name) {
+    if (!ini || !name) return null;
+    if (ini[name]) return ini[name];
+    var actual = newsreaderFindSectionName(sections, name);
+    return actual ? ini[actual] : null;
+}
+
+function newsreaderUrlLooksLikeTrackingPixel(url) {
+    if (!url) return false;
+    var lower = String(url).toLowerCase();
+    if (/pixel\.gif(?:$|\?)/.test(lower)) return true;
+    if (/1x1|onepixel|spacer\.gif|beacon|track\.gif|tracking|stats\//.test(lower)) return true;
+    if (/data:image\/(gif|png);base64,/i.test(lower)) {
+        if (lower.indexOf('r0lgodlh') !== -1 || lower.indexOf('iVBORw0KGgo') !== -1) return true;
+    }
+    return false;
+}
+
+function newsreaderExtractNumeric(value) {
+    if (value === undefined || value === null) return null;
+    var num = parseFloat(String(value).replace(/[^0-9.]/g, ''));
+    if (isNaN(num)) return null;
+    return num;
+}
+
+function newsreaderEstimateDimensions(tagHtml) {
+    if (!tagHtml) return {};
+    var dims = {};
+    var widthMatch = tagHtml.match(/\bwidth\s*=\s*['"]?([^'"\s>]+)/i);
+    if (widthMatch) {
+        var w = newsreaderExtractNumeric(widthMatch[1]);
+        if (w !== null) dims.width = w;
+    }
+    var heightMatch = tagHtml.match(/\bheight\s*=\s*['"]?([^'"\s>]+)/i);
+    if (heightMatch) {
+        var h = newsreaderExtractNumeric(heightMatch[1]);
+        if (h !== null) dims.height = h;
+    }
+    var styleMatch = tagHtml.match(/\bstyle\s*=\s*"([^"]*)"|\bstyle\s*=\s*'([^']*)'/i);
+    var styleText = styleMatch ? (styleMatch[1] || styleMatch[2]) : null;
+    if (styleText) {
+        var widthStyle = styleText.match(/width\s*:\s*([0-9.]+)px/i);
+        if (widthStyle) {
+            var ws = newsreaderExtractNumeric(widthStyle[1]);
+            if (ws !== null) dims.width = ws;
+        }
+        var heightStyle = styleText.match(/height\s*:\s*([0-9.]+)px/i);
+        if (heightStyle) {
+            var hs = newsreaderExtractNumeric(heightStyle[1]);
+            if (hs !== null) dims.height = hs;
+        }
+    }
+    return dims;
+}
+
+function newsreaderIsLikelyTrackingPixel(tagHtml, url) {
+    if (newsreaderUrlLooksLikeTrackingPixel(url)) return true;
+    var dims = newsreaderEstimateDimensions(tagHtml);
+    var width = (dims && typeof dims.width === 'number') ? dims.width : null;
+    var height = (dims && typeof dims.height === 'number') ? dims.height : null;
+    if (width !== null && width <= 2 && height !== null && height <= 2) return true;
+    if (width !== null && width <= 2 && height === null) return true;
+    if (height !== null && height <= 2 && width === null) return true;
+    return false;
+}
+
+var _newsreaderConfigCache = null;
+
+function newsreaderLoadConfig() {
+    var raw = newsreaderReadConfigFile('newsreader.ini');
+    if (!raw) return null;
+    var ini = newsreaderParseIni(raw);
+    if (!ini) return null;
+    var sections = ini.__order || [];
+    var config = { feeds: [], categories: {} };
+
+    for (var i = 0; i < sections.length; i++) {
+        var secName = sections[i];
+        if (!secName) continue;
+        var lower = secName.toLowerCase();
+        if (lower.indexOf('category.') !== 0) continue;
+        var catSection = ini[secName];
+        if (!catSection) continue;
+        var matchName = newsreaderGetIniValue(catSection, 'category');
+        if (!matchName) matchName = secName.substring('Category.'.length);
+        var slug = newsreaderSlugify(matchName);
+        if (!slug) continue;
+        var label = newsreaderGetIniValue(catSection, 'label') || newsreaderGetIniValue(catSection, 'name') || matchName.replace(/_/g, ' ');
+        var icon = newsreaderGetIniValue(catSection, 'icon');
+        config.categories[slug] = {};
+        if (label) config.categories[slug].label = label;
+        if (icon) config.categories[slug].icon = icon;
+    }
+
+    var feedSections = [];
+    for (var k = 0; k < sections.length; k++) {
+        var sec = sections[k];
+        if (sec && /^feed\./i.test(sec)) feedSections.push(sec);
+    }
+
+    var seen = {};
+    for (var f = 0; f < feedSections.length; f++) {
+        var sectionName = feedSections[f];
+        if (!sectionName) continue;
+        var lookup = sectionName.toLowerCase();
+        if (seen[lookup]) continue;
+        seen[lookup] = true;
+        var feedSection = newsreaderGetSection(ini, sections, sectionName);
+        if (!feedSection) continue;
+        var enabledVal = newsreaderParseBoolean(newsreaderGetIniValue(feedSection, 'enabled'));
+        if (enabledVal === false) continue;
+        var url = newsreaderGetIniValue(feedSection, 'url');
+        if (!url) continue;
+        var label = newsreaderGetIniValue(feedSection, 'label') || sectionName.substring('Feed.'.length).replace(/_/g, ' ');
+        var category = newsreaderGetIniValue(feedSection, 'category') || 'Misc';
+        var icon = newsreaderGetIniValue(feedSection, 'icon');
+        var categoryIcon = newsreaderGetIniValue(feedSection, 'category_icon');
+        var feedObj = {
+            label: label,
+            url: url,
+            category: category
+        };
+        if (icon) feedObj.icon = icon;
+        if (categoryIcon) feedObj.category_icon = categoryIcon;
+        config.feeds.push(feedObj);
+    }
+
+    return config;
+}
+
+function getNewsreaderConfig(forceReload) {
+    if (forceReload) _newsreaderConfigCache = null;
+    if (!_newsreaderConfigCache) {
+        var loaded = newsreaderLoadConfig();
+        if (!loaded || !loaded.feeds || !loaded.feeds.length) {
+            _newsreaderConfigCache = {
+                feeds: newsreaderCloneFeedList(NEWSREADER_DEFAULT_FEEDS),
+                categories: {}
+            };
+        } else {
+            _newsreaderConfigCache = {
+                feeds: newsreaderCloneFeedList(loaded.feeds),
+                categories: newsreaderCloneCategoryMap(loaded.categories)
+            };
+        }
+    }
+    return {
+        feeds: newsreaderCloneFeedList(_newsreaderConfigCache.feeds),
+        categories: newsreaderCloneCategoryMap(_newsreaderConfigCache.categories)
+    };
+}
 
 var LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_BLUE | WHITE));
 var LIST_INACTIVE = resolveAttr('FILE_LIST_INACTIVE', (BG_BLACK | LIGHTGRAY));
@@ -74,6 +343,9 @@ function NewsReader(opts) {
     this.imageAnsiCache = {};
     this._imageAnsiErrors = {};
     this._loadingOverlayFrame = null;
+    this._iconExistCache = {};
+    this._allFeeds = [];
+    this._categoryOverrides = {};
     this._resetState();
 }
 extend(NewsReader, Subprogram);
@@ -97,6 +369,10 @@ NewsReader.prototype._resetState = function () {
     this._hotspotMap = {};
     this._hotspotChars = null;
     this._imageAnsiErrors = {};
+    this._iconExistCache = {};
+    var feedConfig = getNewsreaderConfig();
+    this._allFeeds = feedConfig.feeds || [];
+    this._categoryOverrides = feedConfig.categories || {};
     this.categories = this._buildCategories();
     this.state = 'categories';
     this.selectedIndex = 0;
@@ -130,10 +406,33 @@ NewsReader.prototype.enter = function (done) {
 
 NewsReader.prototype._buildCategories = function () {
     var map = {};
-    for (var i = 0; i < RSS_FEEDS.length; i++) {
-        var cat = RSS_FEEDS[i].category || 'Misc';
-        if (!map[cat]) map[cat] = { name: cat, feeds: [] };
-        map[cat].feeds.push(RSS_FEEDS[i]);
+    var feeds = this._allFeeds || [];
+    var overrides = this._categoryOverrides || {};
+    for (var i = 0; i < feeds.length; i++) {
+        var feed = feeds[i];
+        if (!feed || !feed.url) continue;
+        var categoryName = feed.category || 'Misc';
+        var slug = newsreaderSlugify(categoryName);
+        if (!map[categoryName]) {
+            var override = overrides[slug];
+            var displayName = categoryName;
+            var categoryIcon = null;
+            if (override) {
+                if (override.label) displayName = override.label;
+                if (override.icon) categoryIcon = override.icon;
+            }
+            if (!categoryIcon && feed.category_icon) categoryIcon = feed.category_icon;
+            map[categoryName] = {
+                name: displayName,
+                feeds: [],
+                icon: categoryIcon || null,
+                _key: categoryName,
+                _slug: slug
+            };
+        } else if (!map[categoryName].icon && feed.category_icon) {
+            map[categoryName].icon = feed.category_icon;
+        }
+        map[categoryName].feeds.push(feed);
     }
     var categories = [];
     for (var key in map) {
@@ -141,7 +440,8 @@ NewsReader.prototype._buildCategories = function () {
         categories.push(map[key]);
     }
     categories.sort(function (a, b) {
-        var A = a.name.toLowerCase(), B = b.name.toLowerCase();
+        var A = (a.name || '').toLowerCase();
+        var B = (b.name || '').toLowerCase();
         return A > B ? 1 : (A < B ? -1 : 0);
     });
     return categories;
@@ -170,6 +470,29 @@ NewsReader.prototype._destroyArticleIcon = function () {
     this.articleIconObj = null;
     this.articleTextOffset = 1;
     this._currentIconKey = null;
+};
+
+NewsReader.prototype._iconExists = function (iconName) {
+    if (!iconName) return false;
+    this._iconExistCache = this._iconExistCache || {};
+    if (this._iconExistCache.hasOwnProperty(iconName)) {
+        return this._iconExistCache[iconName];
+    }
+    var baseDir = '';
+    if (typeof system !== 'undefined' && system && system.mods_dir) baseDir = system.mods_dir;
+    else if (typeof js !== 'undefined' && js && js.exec_dir) baseDir = js.exec_dir;
+    // if (baseDir && baseDir.charAt(baseDir.length - 1) !== '/' && baseDir.charAt(baseDir.length - 1) !== '\') baseDir += '/';
+    var pathBase = baseDir + 'iconshell/lib/icons/' + iconName;
+    var exists = false;
+    if (typeof file_exists === 'function') {
+        try {
+            exists = file_exists(pathBase + '.bin') || file_exists(pathBase + '.ans');
+        } catch (_iconExistsErr) {
+            exists = false;
+        }
+    }
+    this._iconExistCache[iconName] = exists;
+    return exists;
 };
 
 NewsReader.prototype._destroyLoadingOverlay = function () {
@@ -640,21 +963,29 @@ NewsReader.prototype._getIconMetrics = function () {
 };
 
 NewsReader.prototype._slugifyLabel = function (label) {
-    if (!label) return '';
-    return label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    return newsreaderSlugify(label);
 };
 
 NewsReader.prototype._iconNameForFeed = function (feed) {
     if (!feed) return '';
-    if (feed.icon) return feed.icon;
-    if (feed.label) return 'newsfeed_' + this._slugifyLabel(feed.label);
+    if (feed.icon && this._iconExists(feed.icon)) return feed.icon;
+    if (feed.label) {
+        var slugIcon = 'newsfeed_' + this._slugifyLabel(feed.label);
+        if (this._iconExists(slugIcon)) return slugIcon;
+    }
+    if (this._iconExists('newsitem')) return 'newsitem';
+    if (this._iconExists('newsitems')) return 'newsitems';
     return '';
 };
 
 NewsReader.prototype._iconNameForCategory = function (category) {
     if (!category) return '';
-    if (category.icon) return category.icon;
-    if (category.name) return 'news_cat_' + this._slugifyLabel(category.name);
+    if (category.icon && this._iconExists(category.icon)) return category.icon;
+    if (category.name) {
+        var slugCat = 'news_cat_' + this._slugifyLabel(category.name);
+        if (this._iconExists(slugCat)) return slugCat;
+    }
+    if (this._iconExists('rssfeed')) return 'rssfeed';
     return '';
 };
 
@@ -692,7 +1023,7 @@ NewsReader.prototype._renderCategoryIcons = function () {
     this._gridLayout = null;
     if (!this.listFrame) return;
     var items = this.categories ? this.categories.slice(0) : [];
-    items.push({ _type: 'exit', name: 'Exit', icon: 'news_exit' });
+    items.unshift({ _type: 'exit', name: 'Exit', icon: 'exit' });
     this._categoryGridItems = items;
     if (!items.length) {
         this.listFrame.clear();
@@ -703,6 +1034,9 @@ NewsReader.prototype._renderCategoryIcons = function () {
     }
     if (this.selectedIndex >= items.length) this.selectedIndex = items.length - 1;
     if (this.selectedIndex < 0) this.selectedIndex = 0;
+    if (items.length > 1 && this.selectedIndex === 0 && items[0] && items[0]._type === 'exit') {
+        this.selectedIndex = 1;
+    }
 
     var metrics = this._getIconMetrics();
     var topPadding = 1;
@@ -747,7 +1081,7 @@ NewsReader.prototype._renderCategoryIcons = function () {
             iconFrame.open();
             labelFrame.open();
 
-            var iconName = (item && item._type === 'exit') ? 'news_exit' : this._iconNameForCategory(item);
+            var iconName = this._iconNameForCategory(item);
             var iconData = { iconFile: iconName, label: '', iconBg: bgVal, iconFg: fgVal };
             var iconObj = new Icon(iconFrame, labelFrame, iconData);
             try { iconObj.render(); } catch (_eIcon) { }
@@ -838,7 +1172,7 @@ NewsReader.prototype._renderFeedIcons = function () {
             labelFrame.open();
 
             var iconName;
-            if (item && item._type === 'back') iconName = 'news_back';
+            if (item && item._type === 'back') iconName = 'back';
             else iconName = this._iconNameForFeed(item);
             var iconData = { iconFile: iconName, label: '', iconBg: bgVal, iconFg: fgVal };
             var iconObj = new Icon(iconFrame, labelFrame, iconData);
@@ -1191,7 +1525,7 @@ NewsReader.prototype._getFeedData = function (feed, forceRefresh) {
     if (!forceRefresh && this.feedCache[feed.url]) return this.feedCache[feed.url];
     var result;
     try {
-        var rss = new Feed(feed.url);
+        var rss = new Feed(feed.url, 5);
         var channel = rss.channels && rss.channels.length ? rss.channels[0] : null;
         var items = channel && channel.items ? channel.items : [];
         result = {
@@ -1578,7 +1912,6 @@ NewsReader.prototype._handleImageNavigation = function (key) {
         return;
     }
     var pageSize = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
-    var previewPage = Math.max(1, this._imagePreviewVisibleRows || 1);
     switch (key) {
         case KEY_UP:
         case '\x1B[A': {
@@ -1599,14 +1932,14 @@ NewsReader.prototype._handleImageNavigation = function (key) {
         }
         case 'wheel_up': {
             var prevWheelUp = this.imagePreviewScroll;
-            this.imagePreviewScroll = Math.max(0, prevWheelUp - previewPage);
+            this.imagePreviewScroll = Math.max(0, prevWheelUp - 1);
             if (this.imagePreviewScroll !== prevWheelUp) this.draw();
             break;
         }
         case 'wheel_down': {
             var prevWheelDown = this.imagePreviewScroll;
             var maxWheelScroll = Math.max(0, this._imagePreviewScrollMax || 0);
-            var wheelCandidate = prevWheelDown + previewPage;
+            var wheelCandidate = prevWheelDown + 1;
             if (wheelCandidate > maxWheelScroll) wheelCandidate = maxWheelScroll;
             this.imagePreviewScroll = wheelCandidate;
             if (this.imagePreviewScroll !== prevWheelDown) this.draw();
@@ -1907,6 +2240,7 @@ NewsReader.prototype._extractArticleImages = function (article) {
             var enclosure = article.enclosures[i];
             if (!enclosure || !enclosure.url) continue;
             var type = enclosure.type ? ('' + enclosure.type).toLowerCase() : '';
+            if (newsreaderIsLikelyTrackingPixel('', enclosure.url)) continue;
             if (type.indexOf('image/') === 0 || /\.(png|jpe?g|gif|webp|bmp)(\?|#|$)/i.test(enclosure.url)) {
                 pushUrl(enclosure.url);
             }
@@ -1921,7 +2255,10 @@ NewsReader.prototype._extractArticleImages = function (article) {
         var match;
         var imgRe = /<img[^>]+src=["']([^"'>\s]+)["'][^>]*>/gi;
         while ((match = imgRe.exec(src)) !== null) {
-            pushUrl(match[1]);
+            var tagHtml = match[0] || '';
+            var imageUrl = match[1];
+            if (newsreaderIsLikelyTrackingPixel(tagHtml, imageUrl)) continue;
+            pushUrl(imageUrl);
         }
     }
     return results;
@@ -1962,7 +2299,7 @@ NewsReader.prototype._getImageAnsi = function (url) {
         }
     }
 
-    var width = this.listFrame ? Math.max(20, Math.min(this.listFrame.width || 80, 120)) : 80;
+    var width = this.listFrame ? Math.max(20, this.listFrame.width || 80) : 80;
     var tempPath = null;
     var overlayShown = false;
     try {
@@ -1974,7 +2311,7 @@ NewsReader.prototype._getImageAnsi = function (url) {
             var ext = mime.indexOf('png') !== -1 ? '.png' : (mime.indexOf('gif') !== -1 ? '.gif' : '.jpg');
             var data = base64_decode(match[2]);
             var tempDir = (typeof system !== 'undefined' && system.temp_dir) ? system.temp_dir : (js.exec_dir || '.');
-            if (tempDir.charAt(tempDir.length - 1) !== '/' && tempDir.charAt(tempDir.length - 1) !== '\\') tempDir += '/';
+            // if (tempDir.charAt(tempDir.length - 1) !== '/' && tempDir.charAt(tempDir.length - 1) !== '\') tempDir += ' / ';
             var fileName = 'news_img_' + Date.now() + '_' + Math.floor(Math.random() * 100000) + ext;
             tempPath = tempDir + fileName;
             var f = new File(tempPath);
@@ -1984,7 +2321,7 @@ NewsReader.prototype._getImageAnsi = function (url) {
             source = tempPath;
         }
 
-        if (!overlayShown) overlayShown = this._showLoadingOverlay('Converting image from :\n' + url);
+        if (!overlayShown) overlayShown = this._showLoadingOverlay('Converting image from :' + url);
         this._setStatus('Rendering image preview...');
         var ansiResult = convertImageToANSI(source, width, true, null, { returnObject: true });
         var preview = this._normalizeAnsiPreview(ansiResult);
@@ -2003,11 +2340,17 @@ NewsReader.prototype._getImageAnsi = function (url) {
     } finally {
         if (overlayShown) this._hideLoadingOverlay();
         if (tempPath) {
-            try { var tmpFile = new File(tempPath); if (tmpFile.exists) tmpFile.remove(); } catch (_eDel) { }
+            try {
+                var tmpFile = new File(tempPath);
+                if (tmpFile.exists) tmpFile.remove();
+            } catch (_eDel) { }
         }
     }
     return null;
 };
+
+
+
 
 NewsReader.prototype._extractArticleImages = function (article) {
     var results = [];
@@ -2025,6 +2368,7 @@ NewsReader.prototype._extractArticleImages = function (article) {
             var enclosure = article.enclosures[i];
             if (!enclosure) continue;
             var type = enclosure.type ? ('' + enclosure.type).toLowerCase() : '';
+            if (newsreaderIsLikelyTrackingPixel('', enclosure.url)) continue;
             if (type.indexOf('image/') === 0) {
                 pushUrl(enclosure.url);
                 continue;
@@ -2043,7 +2387,10 @@ NewsReader.prototype._extractArticleImages = function (article) {
         var match;
         var imgRe = /<img[^>]+src=["']([^"'>\s]+)["'][^>]*>/gi;
         while ((match = imgRe.exec(src)) !== null) {
-            pushUrl(match[1]);
+            var tagHtml = match[0] || '';
+            var imageUrl = match[1];
+            if (newsreaderIsLikelyTrackingPixel(tagHtml, imageUrl)) continue;
+            pushUrl(imageUrl);
         }
     }
     return results;
@@ -2061,7 +2408,7 @@ NewsReader.prototype._formatTimestamp = function (ts) {
 };
 
 NewsReader.prototype._renderCategories = function () {
-    // TODO: iterate through RSS_FEEDS and render a grid of icons. fallback to colored frame if no icon
+    // TODO: iterate through configured feeds and render a grid of icons. fallback to colored frame if no icon
     // for our icon naming format, let's create a concatenated lowercase version prefixed by newsfeed_
     // e.g. newsfeed_bbc_world_news
     // icons should be the same size as everywhere else in the app (e.g. 12 x 6) [don't hardcode, use constants in shelllib.js or maybe config.js where we define it]
@@ -2071,7 +2418,7 @@ NewsReader.prototype._renderCategories = function () {
 }
 
 NewsReader.prototype._renderCategory = function (category) {
-    // TODO: iterate through RSS_FEEDS and filter by category, then render a list of feeds in that category, showing the icons
+    // TODO: iterate through configured feeds and filter by category, then render a list of feeds in that category, showing the icons
     // user can select a feed to view articles from that feed
     // use a fallback for icons
     // icons should be the same size as everywhere else in the app (e.g. 12 x 6) [don't hardcode, use constants in shelllib.js or maybe config.js where we define it]

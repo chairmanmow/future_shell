@@ -186,6 +186,37 @@ function readIniFile(path) {
 	return text;
 }
 
+function _ensureTrailingSlash(path) {
+	if(!path) return '';
+	var last = path.charAt(path.length - 1);
+	if(last === '/' || last === '\\') return path;
+	return path + '/';
+}
+
+var ICSH_CONFIG_DIR = (function(){
+	var base = '';
+	try {
+		if (typeof system !== 'undefined' && system && system.mods_dir) base = system.mods_dir;
+		else if (typeof js !== 'undefined' && js && js.exec_dir) base = js.exec_dir;
+	} catch(_cfgDirErr) {}
+	base = _ensureTrailingSlash(base);
+	return base + 'iconshell/lib/config/';
+})();
+
+this.ICSH_CONFIG_DIR = ICSH_CONFIG_DIR;
+
+function resolveConfigPath(filename) {
+	if(!filename) return ICSH_CONFIG_DIR;
+	return ICSH_CONFIG_DIR + filename;
+}
+
+this.ICSH_resolveConfigPath = resolveConfigPath;
+
+function readConfigIni(filename) {
+	if(!filename) return null;
+	return readIniFile(resolveConfigPath(filename));
+}
+
 // Very small INI parser sufficient for our sections/keys (case-insensitive section names)
 function parseIni(raw) {
 	var data = {};
@@ -381,7 +412,7 @@ function _buildItemRecursive(key, ini, ancestry) {
 }
 
 function buildDynamicConfig() {
-	var iniRaw = readIniFile(system.mods_dir + 'guishell.ini');
+	var iniRaw = readConfigIni('guishell.ini');
 	if(!iniRaw) { _icsh_warn('guishell.ini not found – using static config'); return null; }
 	var ini = parseIni(iniRaw);
 	if(!ini.Menu || !ini.Menu.items) { _icsh_warn('No [Menu]/items in guishell.ini'); return null; }
@@ -439,7 +470,7 @@ var ICSH_SETTINGS = (function(){
 		return String(name || '').trim().toLowerCase().replace(/[^a-z0-9_\-]+/g,'').replace(/-/g,'_');
 	}
 	try {
-		var iniRaw = readIniFile(system.mods_dir + 'guishell.ini');
+		var iniRaw = readConfigIni('guishell.ini');
 		if(iniRaw){
 			var ini = parseIni(iniRaw);
 			// Allow either [Shell]/[Idle]/[GuiShell] sections with inactivity_seconds or inactivity_minutes (legacy)
@@ -660,7 +691,8 @@ function ICSH_ATTR(key){
 //   - Invalid tokens are logged and ignored.
 function applyColorOverrides(vals){
 	try {
-		var iniRaw = readIniFile(system.mods_dir + 'guishell.ini');
+		var iniRaw = readConfigIni('theme.ini');
+		if(!iniRaw) iniRaw = readConfigIni('guishell.ini');
 		if(!iniRaw) return; // no file
 		var ini = parseIni(iniRaw);
 		if(!ini || (!ini.Colors && !ini.colors)) return; // no section

@@ -217,6 +217,9 @@ function JPGLoaderFactory() {
             var q = new Int32Array(64);
             for (var i = 0; i < 64; i++) q[zig[i]] = bs.u8();
             st.DQT[tq] = q;
+            for (var ci = 0; ci < st.comps.length; ci++) {
+                if (st.comps[ci].tq === tq) st.comps[ci].q = q;
+            }
         }
     }
     function readDHT(bs, len, st) {
@@ -256,20 +259,9 @@ function JPGLoaderFactory() {
             comps.push({ cs: cs, td: td, ta: ta });
         }
         var Ss = bs.u8(), Se = bs.u8(), AhAl = bs.u8(), Ah = (AhAl >> 4) & 15, Al = AhAl & 15;
-        var scan = [], dcNeeded = (Ss === 0 && Se === 0), acNeeded = (Ss >= 1);
+        var scan = [];
         for (var j = 0; j < comps.length; j++) {
-            var cs = comps[j].cs, td = comps[j].td, ta = comps[j].ta;
-            var htd = dcNeeded ? st.DHT_dc[td] : null;
-            var hta = acNeeded ? st.DHT_ac[ta] : null;
-            if (dcNeeded && !htd) {
-                htd = st.DHT_dc[0] || st.DHT_dc[1] || makeZeroDCTable();
-                dbg("DHT-fallback", "DC", "comp=" + cs, "wanted=" + td, "using=" + (st.DHT_dc[0] ? "0" : st.DHT_dc[1] ? "1" : "stub"));
-            }
-            if (acNeeded && !hta) {
-                hta = st.DHT_ac[ta] || st.DHT_ac[(ta ^ 1)] || st.DHT_ac[0] || makeEOBOnlyACTable();
-                dbg("DHT-fallback", "AC", "comp=" + cs, "wanted=" + ta, "using=" + (st.DHT_ac[ta] ? ta : st.DHT_ac[(ta ^ 1)] ? (ta ^ 1) : st.DHT_ac[0] ? 0 : "stub"));
-            }
-            scan.push({ cs: cs, htd: htd, hta: hta });
+            scan.push({ cs: comps[j].cs, td: comps[j].td, ta: comps[j].ta });
         }
         return { scan: scan, Ss: Ss, Se: Se, Ah: Ah, Al: Al };
     }
@@ -319,12 +311,18 @@ function JPGLoaderFactory() {
         for (i = 0; i < st.comps.length; i++) {
             var c = st.comps[i];
             compIndexById[c.id] = i;
-            var bw = Math.ceil((st.width * c.h) / (8 * Hmax));
-            var bh = Math.ceil((st.height * c.v) / (8 * Vmax));
-            blocksPerComp[i] = { bw: bw, bh: bh, count: bw * bh };
+            // Derive block grid from MCU geometry so padding-driven blocks stay addressable.
+            var blocksAcross = mcuCols * c.h;
+            var blocksDown = mcuRows * c.v;
+            blocksPerComp[i] = {
+                bw: blocksAcross,
+                bh: blocksDown,
+                stride: blocksAcross,
+                count: blocksAcross * blocksDown
+            };
         }
 
-        var coeffs = []; for (i = 0; i < st.comps.length; i++) coeffs[i] = new Int16Array(blocksPerComp[i].count * 64);
+        var coeffs = []; for (i = 0; i < st.comps.length; i++) coeffs[i] = new Int32Array(blocksPerComp[i].count * 64);
         var dcPred = {}; for (i = 0; i < st.comps.length; i++) dcPred[st.comps[i].id] = 0;
         var eobrun = 0;
         function rstReset() { for (var id in dcPred) dcPred[id] = 0; eobrun = 0; }
@@ -333,52 +331,176 @@ function JPGLoaderFactory() {
 
         function receive(s) { var v = 0; while (s--) v = (v << 1) | bs.u8bit(); return v; }
         function receiveExt(s) { var v = receive(s); if (s && (v >> (s - 1)) === 0) v -= (1 << s) - 1; return v; }
-        function blockNumber(ci, mx, my, hx, vy) { return ((my * st.comps[ci].v + vy) * (mcuCols * st.comps[ci].h) + (mx * st.comps[ci].h + hx)); }
+        function blockNumber(ci, mx, my, hx, vy) {
+            var comp = st.comps[ci];
+            var stride = blocksPerComp[ci].stride;
+            var row = (my * comp.v) + vy;
+            return row * stride + (mx * comp.h + hx);
+        }
 
         /* --------- Baseline (single scan) ---------- */
         function decodeBaselineScan(scan) {
             bs.n = 0;
-            var HTdc = {}, HTac = {};
-            for (var k = 0; k < scan.scan.length; k++) { HTdc[scan.scan[k].cs] = scan.scan[k].htd; HTac[scan.scan[k].cs] = scan.scan[k].hta; }
-            rstCountdown = st.restartInterval || 0;
-            for (var my = 0; my < mcuRows; my++) {
-                for (var mx = 0; mx < mcuCols; mx++) {
-                    for (var ci = 0; ci < st.comps.length; ci++) {
-                        var c = st.comps[ci];
-                        for (var vy = 0; vy < c.v; vy++) for (var hx = 0; hx < c.h; hx++) {
-                            var bn = blockNumber(ci, mx, my, hx, vy), off = bn * 64, q = c.q;
-                            for (var t = 0; t < 64; t++) coeffs[ci][off + t] = 0;
-                            var tdc, diff = 0;
-                            try { tdc = HTdc[c.id].decode(bs, { Ss: 0, Se: 63, Ah: 0, Al: 0, compId: c.id, mx: mx, my: my, h: c.h, v: c.v }); diff = (tdc === 0) ? 0 : receiveExt(tdc); }
-                            catch (e) { if (e === "__MARKER__") return; stats.huffSoftDC++; }
-                            dcPred[c.id] += diff; coeffs[ci][off] = dcPred[c.id];
-                            var kpos = 1;
-                            while (kpos < 64) {
-                                var rs;
-                                try { rs = HTac[c.id].decode(bs, { Ss: 1, Se: 63, Ah: 0, Al: 0, compId: c.id, mx: mx, my: my, h: c.h, v: c.v, k: kpos }); }
-                                catch (e) { if (e === "__MARKER__") return; stats.huffSoftAC++; break; }
-                                if (rs === 0) break;
-                                if (rs === 0xF0) { kpos += 16; continue; }
-                                var r = rs >> 4, s = rs & 15;
-                                kpos += r; if (kpos >= 64) break;
-                                coeffs[ci][off + zig[kpos]] = receiveExt(s);
-                                kpos++;
+            var compsInScan = [];
+            for (var k = 0; k < scan.scan.length; k++) {
+                var cs = scan.scan[k].cs;
+                var ci = compIndexById[cs];
+                if (ci == null || ci < 0) throw "SOS references unknown component";
+                compsInScan.push({
+                    id: cs,
+                    ci: ci,
+                    H: st.comps[ci].h,
+                    V: st.comps[ci].v,
+                    td: scan.scan[k].td,
+                    ta: scan.scan[k].ta
+                });
+            }
+
+            function getDC(entry) {
+                var ht = st.DHT_dc[entry.td];
+                if (!ht) { ht = st.DHT_dc[0] || st.DHT_dc[1] || makeZeroDCTable(); }
+                return ht;
+            }
+            function getAC(entry) {
+                var ht = st.DHT_ac[entry.ta];
+                if (!ht) { ht = st.DHT_ac[entry.ta ^ 1] || st.DHT_ac[0] || makeEOBOnlyACTable(); }
+                return ht;
+            }
+
+            function handleMarkerDuringBaseline() {
+                var mk = nextMarker(bs);
+                if (mk >= 0xD0 && mk <= 0xD7) {
+                    rstReset();
+                    bs.n = 0;
+                    return 'restart';
+                }
+                if (mk === 0xD9) return 'eoi';
+                if (mk === 0xDA) return 'sos';
+                if (mk === 0xDD) { var len = bs.u16(); bs.p += len - 2; return 'skip'; }
+                if (mk === 0xDB) { var ldb = bs.u16(); readDQT(bs, ldb, st); return 'skip'; }
+                if (mk === 0xC4) { var lc4 = bs.u16(); readDHT(bs, lc4, st); return 'skip'; }
+                if (mk === 0xE1) { var le1 = bs.u16(); parseAPP1Exif(bs, le1, st); return 'skip'; }
+                if (mk === 0xEE) { var lee = bs.u16(); parseAPP14Adobe(bs, lee, st); return 'skip'; }
+                var len = bs.u16(); bs.p += len - 2; return 'skip';
+            }
+
+            var rstInt = st.restartInterval | 0;
+            var rstCount = rstInt ? rstInt : 0;
+            var totalMCU = mcuRows * mcuCols;
+
+            function readHuff(ht, ctx) {
+                return ht.decode(bs, ctx);
+            }
+
+            function decodeBlock(entry, mx, my, hx, vy) {
+                var ci = entry.ci;
+                var comp = st.comps[ci];
+                var coeff = coeffs[ci];
+                var off = blockNumber(ci, mx, my, hx, vy) * 64;
+                for (var i = 0; i < 64; i++) coeff[off + i] = 0;
+
+                var ctx = { Ss: 0, Se: 0, Ah: 0, Al: 0, compId: entry.id, mx: mx, my: my, h: entry.H, v: entry.V, k: 0 };
+                var s, diff = 0;
+                while (true) {
+                    try {
+                        s = readHuff(getDC(entry), ctx);
+                        diff = (s === 0) ? 0 : receiveExt(s);
+                        break;
+                    } catch (e) {
+                        if (e === '__MARKER__') {
+                            var action = handleMarkerDuringBaseline();
+                            if (action === 'restart') return 'restart';
+                            if (action === 'eoi' || action === 'sos') return action;
+                            continue;
+                        }
+                        stats.huffSoftDC++; diff = 0; break;
+                    }
+                }
+                dcPred[entry.id] += diff;
+                coeff[off] = dcPred[entry.id];
+
+                var k = 1;
+                while (k < 64) {
+                    ctx.k = k;
+                    var rs;
+                    try {
+                        rs = readHuff(getAC(entry), ctx);
+                    } catch (e) {
+                        if (e === '__MARKER__') {
+                            var action2 = handleMarkerDuringBaseline();
+                            if (action2 === 'restart') return 'restart';
+                            if (action2 === 'eoi' || action2 === 'sos') return action2;
+                            continue;
+                        }
+                        stats.huffSoftAC++;
+                        break;
+                    }
+                    if (rs === 0) break;
+                    if (rs === 0xF0) { k += 16; continue; }
+                    var r = rs >> 4;
+                    var sz = rs & 15;
+                    k += r;
+                    if (k >= 64) break;
+                    coeff[off + zig[k]] = receiveExt(sz);
+                    k++;
+                }
+
+                var q = comp.q;
+                if (!q) throw "Quant table missing for comp id=" + entry.id;
+                for (var ii = 0; ii < 64; ii++) coeff[off + ii] *= q[ii];
+                return 'ok';
+            }
+
+            var mcu = 0;
+            MCU_LOOP: while (mcu < totalMCU) {
+                if (rstInt) {
+                    if (rstCount === 0 && mcu !== 0) {
+                        bs.n = 0;
+                        var mk = nextMarker(bs);
+                        if (mk < 0xD0 || mk > 0xD7) throw "Missing restart marker";
+                        rstReset();
+                        rstCount = rstInt;
+                    }
+                    rstCount--;
+                }
+
+                var mx = mcu % mcuCols;
+                var my = (mcu / mcuCols) | 0;
+
+                for (var ssi = 0; ssi < compsInScan.length; ssi++) {
+                    var entry = compsInScan[ssi];
+                    for (var vy = 0; vy < entry.V; vy++) {
+                        for (var hx = 0; hx < entry.H; hx++) {
+                            var res = decodeBlock(entry, mx, my, hx, vy);
+                            if (res === 'restart') {
+                                if (rstInt) rstCount = rstInt;
+                                continue MCU_LOOP;
                             }
-                            for (t = 0; t < 64; t++) coeffs[ci][off + t] *= q[t];
+                            if (res === 'eoi' || res === 'sos') {
+                                bs.n = 0;
+                                return res;
+                            }
                         }
                     }
-                    if (st.restartInterval) { if (--rstCountdown === 0) { rstReset(); rstSync(); rstCountdown = st.restartInterval; } }
                 }
-            }
-        }
 
+                mcu++;
+            }
+            bs.n = 0;
+            return 'ok';
+        }
         /* --------- Progressive scans (all cases) ---- */
         function decodeProgressiveScan(scan) {
             var Ss = scan.Ss, Se = scan.Se, Ah = scan.Ah, Al = scan.Al;
             bs.n = 0;
             dbg("scan begin", "Ss=" + Ss, "Se=" + Se, "Ah=" + Ah, "Al=" + Al, "rstInt=" + (st.restartInterval || 0));
             var HTdc = {}, HTac = {}, inScanById = {};
-            for (var k = 0; k < scan.scan.length; k++) { var cs = scan.scan[k].cs; HTdc[cs] = scan.scan[k].htd || null; HTac[cs] = scan.scan[k].hta || null; inScanById[cs] = true; }
+            for (var k = 0; k < scan.scan.length; k++) {
+                var cs = scan.scan[k].cs;
+                HTdc[cs] = st.DHT_dc[scan.scan[k].td] || st.DHT_dc[0] || st.DHT_dc[1] || makeZeroDCTable();
+                HTac[cs] = st.DHT_ac[scan.scan[k].ta] || st.DHT_ac[scan.scan[k].ta ^ 1] || st.DHT_ac[0] || makeEOBOnlyACTable();
+                inScanById[cs] = true;
+            }
             rstCountdown = st.restartInterval || 0;
             var bit = 1 << Al;
 
@@ -605,7 +727,35 @@ function JPGLoaderFactory() {
 
         // entropy loop
         if (!st.progressive) {
-            decodeBaselineScan(scans[0]);
+            var scanIdx = 0;
+            while (scanIdx < scans.length) {
+                var status = decodeBaselineScan(scans[scanIdx]);
+                if (status === 'eoi') break;
+                if (status === 'sos') {
+                    var len = bs.u16();
+                    scans.push(readSOS(bs, len, st));
+                    scanIdx = scans.length - 1;
+                    continue;
+                }
+
+                scanIdx++;
+
+                var mk = nextMarker(bs);
+                if (mk === 0xDA) {
+                    var l = bs.u16();
+                    scans.push(readSOS(bs, l, st));
+                    scanIdx = scans.length - 1;
+                    continue;
+                }
+                if (mk === 0xD9) break;
+                var l2 = bs.u16();
+                if (mk === 0xDD) readDRI(bs, l2, st);
+                else if (mk === 0xC4) readDHT(bs, l2, st);
+                else if (mk === 0xDB) readDQT(bs, l2, st);
+                else if (mk === 0xE1) parseAPP1Exif(bs, l2, st);
+                else if (mk === 0xEE) parseAPP14Adobe(bs, l2, st);
+                else { bs.p += l2 - 2; }
+            }
         } else {
             while (true) {
                 decodeProgressiveScan(scans[scans.length - 1]);

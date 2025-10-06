@@ -2,13 +2,13 @@
 // Exports: PNGLoader.decode(bytes) -> { rgba: Uint8Array, width, height }
 //
 // Supported:
-//  - Bit depth: 8
-//  - Color types: 6 (RGBA), 2 (RGB), 0 (Gray), 4 (Gray+Alpha)
+//  - Color types: 6 (RGBA), 2 (RGB), 0 (Gray), 4 (Gray+Alpha), 3 (Indexed)
+//  - Bit depth: 8 for 6/2/0/4; 1/2/4/8 for 3 (Indexed)
 //  - Interlace: 0 (none)
 //  - Filters: 0..4 (None/Sub/Up/Average/Paeth)
 //  - zlib/DEFLATE: stored, fixed Huffman, dynamic Huffman (no preset dict)
 //
-// Not supported: palette (type 3), 1/2/4 bit depths, interlace=1 (Adam7), ICC/gAMA/cHRM, etc.
+// Not supported: interlace=1 (Adam7), ICC/gAMA/cHRM, 16-bit sample depth, etc.
 
 (function (global) {
     // ===== Utilities =====
@@ -25,6 +25,7 @@
         return b;
     }
     function be32(u8, o) { return ((u8[o] << 24) | (u8[o + 1] << 16) | (u8[o + 2] << 8) | u8[o + 3]) >>> 0; }
+    function be16(u8, o) { return ((u8[o] << 8) | u8[o + 1]) & 0xFFFF; }
 
     // ====== Inflate (zlib + DEFLATE) ======
     function Inflate(u8, off) {
@@ -68,7 +69,6 @@
     }
 
     function readCode(h, inf) {
-        // bit-by-bit decode (kept simple for clarity)
         var code = 0;
         for (var len = 1; len <= h.maxBits; len++) {
             code |= (inf.readBits(1) << (len - 1));
@@ -82,7 +82,7 @@
     var LEN_BASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
     var LEN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
 
-    // Distance codes (0..29) — **must be 30 entries**
+    // Distance codes (0..29)
     var DST_BASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25,
         33, 49, 65, 97, 129, 193, 257, 385, 513, 769,
         1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
@@ -91,7 +91,6 @@
         9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
 
     function fixedLitHuff() {
-        // 0-287 with fixed lengths
         var len = [];
         for (var i = 0; i <= 287; i++) len[i] = 0;
         for (i = 0; i <= 143; i++) len[i] = 8;
@@ -164,7 +163,7 @@
                         if (lidx < 0 || lidx >= LEN_BASE.length) throw "bad length symbol";
                         var length = LEN_BASE[lidx] + (LEN_EXTRA[lidx] ? inf.readBits(LEN_EXTRA[lidx]) : 0);
                         var dsym = readCode(dist, inf);
-                        if (dsym < 0 || dsym >= 30) throw "bad distance symbol " + dsym;  // 0..29 valid
+                        if (dsym < 0 || dsym >= 30) throw "bad distance symbol " + dsym;
                         var distance = DST_BASE[dsym] + (DST_EXTRA[dsym] ? inf.readBits(DST_EXTRA[dsym]) : 0);
 
                         var base = out.length - distance;
@@ -175,7 +174,6 @@
             }
             if (BFINAL) done = true;
         }
-        // to Uint8Array
         var u = new Uint8Array(out.length);
         for (var q = 0; q < out.length; q++) u[q] = out[q];
         return u;
@@ -185,16 +183,9 @@
         var p = off || 0;
         var CMF = u8[p++], FLG = u8[p++];
         if ((CMF & 0x0F) !== 8) throw "zlib CM not deflate";
-        var cinfo = CMF >> 4;
-        if (((CMF << 8) | FLG) % 31 !== 0) {
-            // Non-compliant, but keep going (some encoders set FLEVEL oddly)
-        }
-        if (FLG & 0x20) { // preset dict
-            p += 4; // skip DICTID
-        }
-        var inflated = inflateRaw(u8, p);
-        // Adler32 present at end; we’ll skip verification for speed.
-        return inflated;
+        // if (((CMF << 8) | FLG) % 31 !== 0) { /* tolerate */ }
+        if (FLG & 0x20) { p += 4; } // preset dictionary: skip DICTID
+        return inflateRaw(u8, p);
     }
 
     // ====== PNG filter reconstruct ======
@@ -206,42 +197,44 @@
         return (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
     }
 
-    function unfilterScanlines(raw, w, h, bpp) {
-        var stride = w * bpp;
-        var out = new Uint8Array(h * stride);
+    // raw: concatenated rows each prefixed with filter byte
+    // rowBytes: byte length of a single row AFTER filter byte
+    // bppBytes: bytes-per-pixel (ceil(bitsPerPixel/8)) used for Sub/Paeth left ref
+    function unfilterScanlines(raw, h, rowBytes, bppBytes) {
+        var out = new Uint8Array(h * rowBytes);
         var rp = 0, op = 0;
         for (var y = 0; y < h; y++) {
             var f = raw[rp++]; // filter byte
             if (f === 0) {
-                for (var i = 0; i < stride; i++) out[op + i] = raw[rp + i];
+                for (var i = 0; i < rowBytes; i++) out[op + i] = raw[rp + i];
             } else if (f === 1) { // Sub
-                for (i = 0; i < stride; i++) {
-                    var left = (i >= bpp) ? out[op + i - bpp] : 0;
+                for (i = 0; i < rowBytes; i++) {
+                    var left = (i >= bppBytes) ? out[op + i - bppBytes] : 0;
                     out[op + i] = (raw[rp + i] + left) & 255;
                 }
             } else if (f === 2) { // Up
-                for (i = 0; i < stride; i++) {
-                    var up = (y > 0) ? out[op - stride + i] : 0;
+                for (i = 0; i < rowBytes; i++) {
+                    var up = (y > 0) ? out[op - rowBytes + i] : 0;
                     out[op + i] = (raw[rp + i] + up) & 255;
                 }
             } else if (f === 3) { // Average
-                for (i = 0; i < stride; i++) {
-                    var l = (i >= bpp) ? out[op + i - bpp] : 0;
-                    var u = (y > 0) ? out[op - stride + i] : 0;
+                for (i = 0; i < rowBytes; i++) {
+                    var l = (i >= bppBytes) ? out[op + i - bppBytes] : 0;
+                    var u = (y > 0) ? out[op - rowBytes + i] : 0;
                     out[op + i] = (raw[rp + i] + ((l + u) >> 1)) & 255;
                 }
             } else if (f === 4) { // Paeth
-                for (i = 0; i < stride; i++) {
-                    var a = (i >= bpp) ? out[op + i - bpp] : 0;
-                    var b = (y > 0) ? out[op - stride + i] : 0;
-                    var c = (i >= bpp && y > 0) ? out[op - stride + i - bpp] : 0;
+                for (i = 0; i < rowBytes; i++) {
+                    var a = (i >= bppBytes) ? out[op + i - bppBytes] : 0;
+                    var b = (y > 0) ? out[op - rowBytes + i] : 0;
+                    var c = (i >= bppBytes && y > 0) ? out[op - rowBytes + i - bppBytes] : 0;
                     out[op + i] = (raw[rp + i] + paeth(a, b, c)) & 255;
                 }
             } else {
                 throw "Unsupported filter: " + f;
             }
-            rp += stride;
-            op += stride;
+            rp += rowBytes;
+            op += rowBytes;
         }
         return out;
     }
@@ -249,6 +242,7 @@
     // ====== PNG decode ======
     function decodePNG(bytes) {
         var u8 = toU8(bytes);
+        // signature
         if (!(u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4E && u8[3] === 0x47 &&
             u8[4] === 0x0D && u8[5] === 0x0A && u8[6] === 0x1A && u8[7] === 0x0A)) {
             throw "Not a PNG";
@@ -258,76 +252,201 @@
         var width = 0, height = 0, bitDepth = 0, colorType = 0, interlace = 0;
         var idat = []; var idatLen = 0;
 
+        // palette + transparency (for indexed and optional color-key)
+        var palette = null;     // Array of [r,g,b]
+        var palAlpha = null;    // Uint8Array alpha per palette entry
+        var trnsGray = null;    // for type 0 (grayscale) key
+        var trnsRGB = null;     // for type 2 (truecolor) key [r,g,b]
+
+        // parse chunks
         while (p < u8.length) {
             var len = be32(u8, p); p += 4;
             var type = String.fromCharCode(u8[p], u8[p + 1], u8[p + 2], u8[p + 3]); p += 4;
+
             if (type === "IHDR") {
                 width = be32(u8, p); height = be32(u8, p + 4);
                 bitDepth = u8[p + 8]; colorType = u8[p + 9];
                 var comp = u8[p + 10], filter = u8[p + 11]; interlace = u8[p + 12];
-                p += len + 4; // skip data + CRC
-                if (bitDepth !== 8) throw "Only 8-bit PNG supported";
-                if (interlace !== 0) throw "Interlaced PNG not supported";
-                if (colorType !== 6 && colorType !== 2 && colorType !== 0 && colorType !== 4) throw "Unsupported color type: " + colorType;
-                if (comp !== 0 || filter !== 0) throw "Unsupported PNG compression/filter method";
-            } else if (type === "IDAT") {
-                idat.push(u8.subarray(p, p + len)); idatLen += len;
                 p += len + 4; // data + CRC
-            } else if (type === "IEND") {
+                if (interlace !== 0) throw "Interlaced PNG (Adam7) not supported";
+                // We support 8-bit for non-indexed; 1/2/4/8 for indexed
+                if (colorType === 3) {
+                    if (!(bitDepth === 1 || bitDepth === 2 || bitDepth === 4 || bitDepth === 8))
+                        throw "Indexed PNG unsupported bit depth: " + bitDepth;
+                } else {
+                    if (bitDepth !== 8) throw "Only 8-bit per sample supported (non-indexed)";
+                }
+                if (comp !== 0 || filter !== 0) throw "Unsupported PNG compression/filter method";
+            }
+            else if (type === "PLTE") {
+                if (len % 3) throw "PLTE length invalid";
+                var n = len / 3;
+                palette = new Array(n);
+                for (var i = 0; i < n; i++) {
+                    var j = p + i * 3;
+                    palette[i] = [u8[j], u8[j + 1], u8[j + 2]];
+                }
+                p += len + 4;
+            }
+            else if (type === "tRNS") {
+                // Transparency
+                if (colorType === 3) {
+                    if (!palette) throw "tRNS before PLTE";
+                    palAlpha = new Uint8Array(palette.length);
+                    for (var z = 0; z < palAlpha.length; z++) palAlpha[z] = 255;
+                    var m = Math.min(len, palAlpha.length);
+                    for (var k = 0; k < m; k++) palAlpha[k] = u8[p + k];
+                } else if (colorType === 0 && len >= 2) {
+                    trnsGray = be16(u8, p);
+                } else if (colorType === 2 && len >= 6) {
+                    trnsRGB = [be16(u8, p), be16(u8, p + 2), be16(u8, p + 4)];
+                }
+                p += len + 4;
+            }
+            else if (type === "IDAT") {
+                idat.push(u8.subarray(p, p + len)); idatLen += len;
+                p += len + 4;
+            }
+            else if (type === "IEND") {
                 p += len + 4;
                 break;
-            } else {
-                p += len + 4; // skip unknown chunk + CRC
+            }
+            else {
+                // skip unknown/ancillary
+                p += len + 4;
             }
         }
 
         // Concatenate IDAT
         var z = new Uint8Array(idatLen);
         var zpos = 0;
-        for (i = 0; i < idat.length; i++) { z.set(idat[i], zpos); zpos += idat[i].length; }
+        for (var ii = 0; ii < idat.length; ii++) { z.set(idat[ii], zpos); zpos += idat[ii].length; }
 
-        // zlib inflate
+        // zlib inflate -> scanline stream (with 1 filter byte per row)
         var decomp = inflateZlib(z, 0);
 
-        // Bytes-per-pixel for 8-bit PNG (no palette)
-        var channels = (colorType === 6) ? 4 : (colorType === 2) ? 3 : (colorType === 0) ? 1 : 2; // 4 = GA
-        var bpp = channels;
-        var stride = width * bpp;
-        var expected = (stride + 1) * height;   // +1 filter byte per row
+        // Samples per pixel (channels)
+        var channels;
+        if (colorType === 6) channels = 4;        // RGBA
+        else if (colorType === 2) channels = 3;   // RGB
+        else if (colorType === 0) channels = 1;   // Gray
+        else if (colorType === 4) channels = 2;   // Gray+Alpha
+        else if (colorType === 3) channels = 1;   // Indexed
+        else throw "Unsupported color type: " + colorType;
 
-        // Be tolerant: if output is longer, trim; if shorter, fail clearly
-        if (decomp.length < expected) {
-            throw "PNG inflate too short: have=" + decomp.length + " need=" + expected + " (w=" + width + " h=" + height + " ct=" + colorType + " bpp=" + bpp + ")";
-        }
+        // per PNG spec
+        var bitsPerPixel = bitDepth * channels;                              // bits per pixel (not per byte)
+        var rowBytes = Math.ceil((bitsPerPixel * width) / 8);                // bytes per row (no filter)
+        var bppBytes = Math.ceil((bitDepth * channels) / 8) || 1;            // bytes-per-pixel for filter (Sub/Paeth)
+        var expected = (rowBytes + 1) * height;                              // +1 filter byte per row
+
+        if (decomp.length < expected)
+            throw "PNG inflate too short: have=" + decomp.length + " need=" + expected +
+            " (w=" + width + " h=" + height + " ct=" + colorType + " bd=" + bitDepth + " ch=" + channels + ")";
+
         var raw = (decomp.length === expected) ? decomp : decomp.subarray(0, expected);
-        var recon = unfilterScanlines(raw, width, height, bpp);
+        var recon = unfilterScanlines(raw, height, rowBytes, bppBytes);      // length = rowBytes * height
 
         // Expand to RGBA
         var out = new Uint8Array(width * height * 4);
-        var si = 0, di = 0;
-        if (colorType === 6) {
-            for (i = 0; i < width * height; i++) {
-                out[di++] = recon[si++]; // R
-                out[di++] = recon[si++]; // G
-                out[di++] = recon[si++]; // B
-                out[di++] = recon[si++]; // A
+
+        if (colorType === 3) {
+            if (!palette) throw "Indexed PNG missing PLTE";
+            // unpack indices according to bit depth, map to RGBA via palette + palAlpha
+            var pix = 0, ofs = 0;
+            for (var y = 0; y < height; y++) {
+                var iofs = ofs;
+                if (bitDepth === 8) {
+                    for (var x = 0; x < width; x++) {
+                        var idx = recon[iofs++];
+                        var pcol = palette[idx];
+                        if (!pcol) { out[pix] = out[pix + 1] = out[pix + 2] = 0; out[pix + 3] = 0; pix += 4; continue; }
+                        out[pix] = pcol[0];
+                        out[pix + 1] = pcol[1];
+                        out[pix + 2] = pcol[2];
+                        out[pix + 3] = palAlpha ? palAlpha[idx] : 255;
+                        pix += 4;
+                    }
+                } else if (bitDepth === 4) {
+                    for (var x4 = 0; x4 < width; x4++) {
+                        var byte = recon[iofs + (x4 >> 1)];
+                        var idx = (x4 & 1) ? (byte & 0x0F) : (byte >> 4);
+                        var pcol4 = palette[idx];
+                        if (!pcol4) { out[pix] = out[pix + 1] = out[pix + 2] = 0; out[pix + 3] = 0; pix += 4; continue; }
+                        out[pix] = pcol4[0];
+                        out[pix + 1] = pcol4[1];
+                        out[pix + 2] = pcol4[2];
+                        out[pix + 3] = palAlpha ? palAlpha[idx] : 255;
+                        pix += 4;
+                    }
+                    iofs += Math.ceil(width / 2);
+                } else if (bitDepth === 2) {
+                    var bits2 = 0, b2 = 0;
+                    for (var x2 = 0; x2 < width; x2++) {
+                        if (bits2 === 0) { b2 = recon[iofs++]; bits2 = 8; }
+                        bits2 -= 2;
+                        var idx2 = (b2 >> bits2) & 0x03;
+                        var pcol2 = palette[idx2] || [0, 0, 0];
+                        out[pix] = pcol2[0];
+                        out[pix + 1] = pcol2[1];
+                        out[pix + 2] = pcol2[2];
+                        out[pix + 3] = palAlpha ? palAlpha[idx2] : 255;
+                        pix += 4;
+                    }
+                } else { // bitDepth === 1
+                    var bits1 = 0, b1 = 0;
+                    for (var x1 = 0; x1 < width; x1++) {
+                        if (bits1 === 0) { b1 = recon[iofs++]; bits1 = 8; }
+                        bits1 -= 1;
+                        var idx1 = (b1 >> bits1) & 0x01;
+                        var pcol1 = palette[idx1] || [0, 0, 0];
+                        out[pix] = pcol1[0];
+                        out[pix + 1] = pcol1[1];
+                        out[pix + 2] = pcol1[2];
+                        out[pix + 3] = palAlpha ? palAlpha[idx1] : 255;
+                        pix += 4;
+                    }
+                }
+                ofs += rowBytes;
             }
-        } else if (colorType === 2) {
-            for (i = 0; i < width * height; i++) {
-                out[di++] = recon[si++]; // R
-                out[di++] = recon[si++]; // G
-                out[di++] = recon[si++]; // B
-                out[di++] = 255;
-            }
-        } else if (colorType === 0) {
-            for (i = 0; i < width * height; i++) {
-                var g = recon[si++];
-                out[di++] = g; out[di++] = g; out[di++] = g; out[di++] = 255;
-            }
-        } else if (colorType === 4) {
-            for (i = 0; i < width * height; i++) {
-                var gy = recon[si++], a = recon[si++];
-                out[di++] = gy; out[di++] = gy; out[di++] = gy; out[di++] = a;
+        }
+        else {
+            // 8-bit per channel paths (non-indexed)
+            var si = 0, di = 0;
+            if (colorType === 6) {
+                // RGBA
+                for (var i6 = 0, total6 = width * height; i6 < total6; i6++) {
+                    out[di++] = recon[si++]; // R
+                    out[di++] = recon[si++]; // G
+                    out[di++] = recon[si++]; // B
+                    out[di++] = recon[si++]; // A
+                }
+            } else if (colorType === 2) {
+                // RGB (+ optional tRNS color-key)
+                var hasKey2 = (trnsRGB && trnsRGB.length === 3);
+                for (var i2 = 0, total2 = width * height; i2 < total2; i2++) {
+                    var r = recon[si++], g = recon[si++], b = recon[si++];
+                    out[di++] = r; out[di++] = g; out[di++] = b;
+                    if (hasKey2 && r === (trnsRGB[0] & 0xFF) && g === (trnsRGB[1] & 0xFF) && b === (trnsRGB[2] & 0xFF)) {
+                        out[di++] = 0;
+                    } else out[di++] = 255;
+                }
+            } else if (colorType === 0) {
+                // Gray (+ optional tRNS gray-key)
+                var key0 = (trnsGray != null) ? (trnsGray & 0xFF) : null;
+                for (var i0 = 0, total0 = width * height; i0 < total0; i0++) {
+                    var gy = recon[si++];
+                    out[di++] = gy; out[di++] = gy; out[di++] = gy;
+                    out[di++] = (key0 !== null && gy === key0) ? 0 : 255;
+                }
+            } else if (colorType === 4) {
+                // Gray + Alpha
+                for (var i4 = 0, total4 = width * height; i4 < total4; i4++) {
+                    var gya = recon[si++], a4 = recon[si++];
+                    out[di++] = gya; out[di++] = gya; out[di++] = gya; out[di++] = a4;
+                }
+            } else {
+                throw "Unsupported non-indexed color type: " + colorType;
             }
         }
 
@@ -337,7 +456,12 @@
     // Public API
     global.PNGLoader = {
         decode: decodePNG,
-        looksPNG: function (b) { b = toU8(b); return b && b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47 && b[4] === 0x0D && b[5] === 0x0A && b[6] === 0x1A && b[7] === 0x0A; }
+        looksPNG: function (b) {
+            b = toU8(b);
+            return b && b.length >= 8 &&
+                b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47 &&
+                b[4] === 0x0D && b[5] === 0x0A && b[6] === 0x1A && b[7] === 0x0A;
+        }
     };
 
 })(this);

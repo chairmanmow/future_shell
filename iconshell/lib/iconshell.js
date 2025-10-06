@@ -6,7 +6,7 @@
  */
 
 
-load("iconshell/lib/config.js");
+load("iconshell/lib/config/config.js");
 // -------------------- Helpers --------------------
 
 load("iconshell/lib/shell/index.js");
@@ -21,4 +21,3 @@ function IconShell(){
 }
 
    
-
