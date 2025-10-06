@@ -126,6 +126,7 @@ function newsreaderCloneFeed(feed) {
     return copy;
 }
 
+
 function newsreaderCloneFeedList(list) {
     var out = [];
     if (!list || !list.length) return out;
@@ -326,13 +327,22 @@ function NewsReader(opts) {
     this.statusFrame = null;
     this.listFrame = null;
     this.articleIconFrame = null;
-    this.articleIconLabelFrame = null;
+    this.articleCategoryIconFrame = null;
+    this.articleCategoryLabelFrame = null;
+    this.articleHeaderFrame = null;
+    this.articleHeaderTextFrame = null;
+    this.articleHeaderLabelFrame = null;
     this.articleIconObj = null;
+    this.articleCategoryIconObj = null;
     this.articleTextOffset = 1;
     this.articleImages = [];
     this.imageSelection = 0;
     this.imageScrollOffset = 0;
     this._currentIconKey = null;
+    this._articleHeaderIconWidth = null;
+    this._articleHeaderHeight = null;
+    this._articleHeaderHasIcon = null;
+    this._articleHeaderHasCategory = null;
     this.categoryIconCells = [];
     this.feedIconCells = [];
     this._categoryGridItems = [];
@@ -448,28 +458,37 @@ NewsReader.prototype._buildCategories = function () {
 };
 
 NewsReader.prototype._destroyArticleIcon = function () {
-    if (this.articleIconObj && typeof this.articleIconObj.iconFrame === 'object') {
-        // noop, Icon handles frames we manage below
-    }
-    if (this.articleIconFrame) {
-        try { this.articleIconFrame.close(); } catch (_e1) { }
+    var frames = [
+        'articleHeaderTextFrame',
+        'articleHeaderLabelFrame',
+        'articleHeaderFrame',
+        'articleIconFrame',
+        'articleCategoryIconFrame',
+        'articleCategoryLabelFrame'
+    ];
+    for (var i = 0; i < frames.length; i++) {
+        var key = frames[i];
+        var frame = this[key];
+        if (!frame) continue;
+        try { frame.close(); } catch (_eClose) { }
         if (this._myFrames) {
-            var idx1 = this._myFrames.indexOf(this.articleIconFrame);
-            if (idx1 !== -1) this._myFrames.splice(idx1, 1);
+            var idx = this._myFrames.indexOf(frame);
+            if (idx !== -1) this._myFrames.splice(idx, 1);
         }
+        this[key] = null;
     }
-    if (this.articleIconLabelFrame) {
-        try { this.articleIconLabelFrame.close(); } catch (_e2) { }
-        if (this._myFrames) {
-            var idx2 = this._myFrames.indexOf(this.articleIconLabelFrame);
-            if (idx2 !== -1) this._myFrames.splice(idx2, 1);
-        }
-    }
-    this.articleIconFrame = null;
-    this.articleIconLabelFrame = null;
     this.articleIconObj = null;
+    this.articleCategoryIconObj = null;
     this.articleTextOffset = 1;
     this._currentIconKey = null;
+    this._articleHeaderIconWidth = null;
+    this._articleHeaderHeight = null;
+    this._articleHeaderHasIcon = null;
+    this._articleHeaderHasCategory = null;
+    if (this.headerFrame && typeof this._headerDefaultAttr === 'number') {
+        try { this.headerFrame.attr = this._headerDefaultAttr; } catch (_eAttr) { }
+        try { this.headerFrame.clear(this._headerDefaultAttr); } catch (_eClr) { }
+    }
 };
 
 NewsReader.prototype._iconExists = function (iconName) {
@@ -953,6 +972,116 @@ NewsReader.prototype._registerGridHotspots = function (cells) {
     }
 };
 
+NewsReader.prototype._registerListHotspots = function (rows) {
+    this._releaseHotspots();
+    if (!this.listFrame) return;
+    if (!rows || !rows.length) return;
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+
+    var chars = this._ensureHotspotChars();
+    var baseX = this.listFrame.x;
+    var baseY = this.listFrame.y;
+    var width = Math.max(1, this.listFrame.width || 1);
+    var max = Math.min(rows.length, chars.length);
+
+    for (var i = 0; i < max; i++) {
+        var row = rows[i];
+        if (!row || typeof row.index !== 'number' || typeof row.y !== 'number') continue;
+        var cmd = chars[i];
+        var absY = baseY + row.y - 2;
+        var minX = baseX;
+        var maxX = baseX + width - 1;
+        try { console.add_hotspot(cmd, false, minX, maxX, absY); } catch (_e) { }
+        this._hotspotMap[cmd] = row.index;
+    }
+};
+
+NewsReader.prototype._registerImageHotspots = function (sections, listStart, visibleThumbRows) {
+    this._releaseHotspots();
+    if (!this.listFrame) return;
+    if (!sections || !sections.length) return;
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+
+    var chars = this._ensureHotspotChars();
+    var baseX = this.listFrame.x;
+    var baseY = this.listFrame.y;
+    var width = Math.max(1, this.listFrame.width || 1);
+    var charIdx = 0;
+
+    for (var i = 0; i < sections.length && charIdx < chars.length; i++) {
+        var section = sections[i];
+        if (!section) continue;
+
+        if (section.type === 'image') {
+            var rows = Math.max(1, section.rows || 1);
+            for (var ry = 0; ry < rows && charIdx < chars.length; ry++) {
+                var cmdImage = chars[charIdx++];
+                var y = baseY + (section.y - 1) + ry;
+                try { console.add_hotspot(cmdImage, false, baseX, baseX + width - 1, y); } catch (_eImg) { }
+                this._hotspotMap[cmdImage] = { type: 'imageArea' };
+            }
+        } else if (section.type === 'thumb' && typeof section.index === 'number') {
+            var cmdThumb = chars[charIdx++];
+            var thumbY = baseY + section.y - 1;
+            try { console.add_hotspot(cmdThumb, false, baseX, baseX + width - 1, thumbY); } catch (_eT) { }
+            this._hotspotMap[cmdThumb] = { type: 'thumb', index: section.index };
+        }
+    }
+    this._registerArticleHeaderHotspot();
+};
+
+NewsReader.prototype._registerArticleHeaderHotspot = function () {
+    if (!this.articleHeaderFrame) return;
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    if (!this.listFrame) return;
+
+    var chars = this._ensureHotspotChars();
+    if (!chars.length) return;
+
+    var baseX = this.listFrame.x;
+    var baseY = this.listFrame.y;
+    var sections = [];
+
+    if (this.articleCategoryIconFrame) {
+        sections.push({
+            frame: this.articleCategoryIconFrame,
+            type: 'articleHeaderCategory'
+        });
+    }
+    if (this.articleIconFrame) {
+        sections.push({
+            frame: this.articleIconFrame,
+            type: 'articleHeaderBack'
+        });
+    }
+    if (!sections.length) return;
+
+    this._hotspotMap = this._hotspotMap || {};
+
+    function nextChar(map, chars) {
+        for (var i = 0; i < chars.length; i++) {
+            if (!map.hasOwnProperty(chars[i])) return chars[i];
+        }
+        return null;
+    }
+
+    for (var s = 0; s < sections.length; s++) {
+        var entry = sections[s];
+        if (!entry || !entry.frame) continue;
+        var cmd = nextChar(this._hotspotMap, chars);
+        if (!cmd) break;
+        var frame = entry.frame;
+        var minX = baseX + frame.x - 1;
+        var maxX = minX + frame.width - 1;
+        var minY = baseY + frame.y - 1;
+        var maxY = minY + frame.height - 1;
+        this._hotspotMap[cmd] = { type: entry.type };
+        for (var y = minY; y <= maxY; y++) {
+            try { console.add_hotspot(cmd, false, minX, maxX, y); } catch (_eHot) { }
+        }
+    }
+};
+
 NewsReader.prototype._getIconMetrics = function () {
     var w = 12, h = 6;
     if (typeof ICSH_CONSTANTS === 'object' && ICSH_CONSTANTS) {
@@ -1219,6 +1348,7 @@ NewsReader.prototype._ensureFrames = function () {
         this.headerFrame = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width, 1, HEADER_ATTR, this.parentFrame);
         this.headerFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.headerFrame);
+        this._headerDefaultAttr = this.headerFrame.attr;
     }
     if (!this.statusFrame) {
         this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.y + this.parentFrame.height - 1, this.parentFrame.width, 1, STATUS_ATTR, this.parentFrame);
@@ -1307,6 +1437,7 @@ NewsReader.prototype._drawArticleImages = function () {
     this._destroyCategoryIcons();
     this._destroyFeedIcons();
     this._gridLayout = null;
+    this._ensureArticleIcon(false);
     var title = 'Article Images';
     if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
         var articleTitle = this.currentArticles[this.articleIndex].title || 'Article';
@@ -1391,6 +1522,11 @@ NewsReader.prototype._drawArticleImages = function () {
     this._imagePreviewScrollMax = maxPreviewScroll;
     this._imagePreviewVisibleRows = previewDisplayRows;
 
+    var previewHotspots = [];
+    if (listStart > 1) {
+        previewHotspots.push({ type: 'image', y: previewTop, rows: previewDisplayRows });
+    }
+
     if (this.imageSelection < this.imageScrollOffset) this.imageScrollOffset = this.imageSelection;
     var visibleRows = Math.max(1, this.listFrame.height - (listStart - 1));
     if (this.imageSelection >= this.imageScrollOffset + visibleRows) {
@@ -1409,17 +1545,21 @@ NewsReader.prototype._drawArticleImages = function () {
         this.listFrame.gotoxy(1, targetRow);
         this.listFrame.attr = (idx === this.imageSelection) ? LIST_ACTIVE : LIST_INACTIVE;
         this.listFrame.putmsg(display);
+        previewHotspots.push({ type: 'thumb', index: idx, y: targetRow });
     }
     this.listFrame.attr = LIST_INACTIVE;
     var statusIndicator = urls.length ? ('Image ' + (this.imageSelection + 1) + '/' + urls.length + '  ') : '';
     this._setStatus(statusIndicator + 'LEFT/RIGHT=change image  UP/DOWN=scroll preview  ENTER=read article  BACKSPACE=articles');
+
+    this._registerImageHotspots(previewHotspots, listStart, visibleRows);
 };
 
 NewsReader.prototype._drawArticle = function () {
     this._destroyCategoryIcons();
     this._destroyFeedIcons();
     this._gridLayout = null;
-    this._ensureArticleIcon();
+    this._ensureArticleIcon(true);
+    this._releaseHotspots();
     var header = 'Article';
     if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
         header = this.currentArticles[this.articleIndex].title || header;
@@ -1443,15 +1583,20 @@ NewsReader.prototype._drawArticle = function () {
         this.listFrame.putmsg(this._toDisplayText(this.articleLines[lineIndex]));
     }
     this._setStatus('UP/DOWN=scroll  BACKSPACE=articles');
+    this._registerArticleHeaderHotspot();
 };
 
 NewsReader.prototype._renderList = function (items, formatter) {
-    if (!this.listFrame) return;
+    if (!this.listFrame) {
+        this._releaseHotspots();
+        return;
+    }
     if (!items) items = [];
     var height = this.listFrame.height;
     if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
     if (this.selectedIndex >= this.scrollOffset + height) this.scrollOffset = Math.max(0, this.selectedIndex - height + 1);
     this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
+    var rowHotspots = [];
     for (var row = 0; row < height; row++) {
         var idx = this.scrollOffset + row;
         if (idx >= items.length) break;
@@ -1461,8 +1606,10 @@ NewsReader.prototype._renderList = function (items, formatter) {
         this.listFrame.gotoxy(1, row + 1);
         this.listFrame.attr = (idx === this.selectedIndex) ? LIST_ACTIVE : LIST_INACTIVE;
         this.listFrame.putmsg(line);
+        rowHotspots.push({ index: idx, y: row + 1 });
     }
     this.listFrame.attr = LIST_INACTIVE;
+    this._registerListHotspots(rowHotspots);
 };
 
 NewsReader.prototype._cleanup = function () {
@@ -1700,6 +1847,19 @@ NewsReader.prototype.handleKey = function (key) {
             break;
         }
         case 'articles':
+            if (this._hotspotMap && this._hotspotMap[key] !== undefined) {
+                var targetIndex = this._hotspotMap[key];
+                if (typeof targetIndex === 'number' && this.currentArticles[targetIndex]) {
+                    this.selectedIndex = targetIndex;
+                    if (this.listFrame) {
+                        var visibleRows = Math.max(1, this.listFrame.height);
+                        if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
+                        else if (this.selectedIndex >= this.scrollOffset + visibleRows) this.scrollOffset = Math.max(0, this.selectedIndex - visibleRows + 1);
+                    }
+                    this._openArticle(this.selectedIndex);
+                    break;
+                }
+            }
             this._handleListNavigation(key, this.currentArticles.length, function () {
                 if (!this.currentArticles.length) {
                     this._setStatus('No articles to open.');
@@ -1715,9 +1875,81 @@ NewsReader.prototype.handleKey = function (key) {
             }.bind(this));
             break;
         case 'article_images':
+            if (this._hotspotMap && this._hotspotMap[key] !== undefined) {
+                var mapping = this._hotspotMap[key];
+                if (mapping && mapping.type === 'articleHeaderBack') {
+                    this._destroyArticleIcon();
+                    this.state = 'articles';
+                    if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
+                        this.selectedIndex = this.articleIndex;
+                    }
+                    this.scrollOffset = Math.max(0, Math.min(this._articleListScroll || 0, Math.max(0, this.currentArticles.length - 1)));
+                    this.articleIndex = -1;
+                    this.draw();
+                    break;
+                }
+                if (mapping && mapping.type === 'articleHeaderCategory') {
+                    this._returnToFeedsFromArticle();
+                    break;
+                }
+                if (mapping && mapping.type === 'imageArea') {
+                    if (this.imageSelection < this.articleImages.length - 1) {
+                        this.imageSelection++;
+                        this.imagePreviewScroll = 0;
+                        this.imageScrollOffset = Math.max(0, Math.min(this.imageSelection, this.imageScrollOffset));
+                        this.draw();
+                    } else {
+                        this._enterArticleContent();
+                    }
+                    break;
+                }
+                if (mapping && mapping.type === 'thumb' && typeof mapping.index === 'number') {
+                    var target = mapping.index;
+                    if (target >= 0 && target < this.articleImages.length) {
+                        this.imageSelection = target;
+                        if (this.listFrame) {
+                            var visible = Math.max(1, this.listFrame.height - Math.max(0, (this._imagePreviewVisibleRows || 0)));
+                            if (visible > 0) {
+                                var thumbStart = Math.max(0, (this._imagePreviewVisibleRows || 0));
+                                var relativeRow = target - this.imageScrollOffset;
+                                if (relativeRow < 0) this.imageScrollOffset = target;
+                                else if (relativeRow >= visible) this.imageScrollOffset = Math.max(0, target - visible + 1);
+                            } else {
+                                this.imageScrollOffset = Math.max(0, Math.min(target, this.imageScrollOffset));
+                            }
+                        }
+                        this.imagePreviewScroll = 0;
+                        this.draw();
+                    }
+                    break;
+                }
+            }
             this._handleImageNavigation(key);
             break;
         case 'article':
+            if (this._hotspotMap && this._hotspotMap[key]) {
+                var mapEntry = this._hotspotMap[key];
+                if (mapEntry && mapEntry.type === 'articleHeaderBack') {
+                    this._destroyArticleIcon();
+                    this.state = 'articles';
+                    if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
+                        this.selectedIndex = this.articleIndex;
+                    }
+                    this.scrollOffset = Math.max(0, Math.min(this._articleListScroll || 0, Math.max(0, this.currentArticles.length - 1)));
+                    if (this.listFrame) {
+                        var visible = Math.max(1, this.listFrame.height);
+                        if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
+                        else if (this.selectedIndex >= this.scrollOffset + visible) this.scrollOffset = Math.max(0, this.selectedIndex - visible + 1);
+                    }
+                    this.articleIndex = -1;
+                    this.draw();
+                    break;
+                }
+                if (mapEntry && mapEntry.type === 'articleHeaderCategory') {
+                    this._returnToFeedsFromArticle();
+                    break;
+                }
+            }
             this._handleArticleNavigation(key);
             break;
     }
@@ -2008,13 +2240,14 @@ NewsReader.prototype._enterArticleContent = function () {
     this.state = 'article';
     this.articleScroll = 0;
     this.scrollOffset = 0;
-    this._ensureArticleIcon();
+    this._releaseHotspots();
+    this._ensureArticleIcon(true);
     var status = this.articleImages && this.articleImages.length ? 'UP/DOWN=scroll  I=images  BACKSPACE=articles' : 'UP/DOWN=scroll  BACKSPACE=articles';
     this._setStatus(status);
     this.draw();
 };
 
-NewsReader.prototype._ensureArticleIcon = function () {
+NewsReader.prototype._ensureArticleIcon = function (showIcon) {
     if (!this.listFrame || !this.currentFeed) {
         this._destroyArticleIcon();
         return;
@@ -2024,40 +2257,183 @@ NewsReader.prototype._ensureArticleIcon = function () {
         this._destroyArticleIcon();
         return;
     }
-    if (this.articleIconFrame && this._currentIconKey === iconName) return;
-    this._destroyArticleIcon();
+
     var metrics = this._getIconMetrics();
-    if (metrics.height + 1 >= this.listFrame.height) return;
-    var iconAttr = LIST_INACTIVE;
-    var iconFrame;
-    var labelFrame;
-    try {
-        iconFrame = new Frame(1, 1, metrics.width, metrics.height, iconAttr, this.listFrame);
-        iconFrame.open();
-        labelFrame = new Frame(1, metrics.height + 1, metrics.width, 1, iconAttr, this.listFrame);
-        labelFrame.open();
-        labelFrame.clear();
-        var iconBg = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70) : 0;
-        var iconFg = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F) : 0;
-        var iconData = { iconFile: iconName, label: '', iconBg: iconBg, iconFg: iconFg };
-        this.articleIconObj = new Icon(iconFrame, labelFrame, iconData);
-        this.articleIconObj.render();
-        if (typeof this.registerFrame === 'function') {
-            this.registerFrame(iconFrame);
-            this.registerFrame(labelFrame);
+    var useIcon = (showIcon === false) ? false : true;
+    var categoryIconName = '';
+    var categoryObj = this.currentCategory || null;
+    if (!categoryObj && this.currentFeed && this.currentFeed.category) {
+        var targetCat = this.currentFeed.category;
+        if (this.categories && this.categories.length) {
+            for (var ci = 0; ci < this.categories.length; ci++) {
+                var cat = this.categories[ci];
+                if (!cat) continue;
+                if (cat._key === targetCat || cat.name === targetCat) { categoryObj = cat; break; }
+            }
         }
-        this.articleIconFrame = iconFrame;
-        this.articleIconLabelFrame = labelFrame;
-        this.articleTextOffset = metrics.height + 2;
-        this._currentIconKey = iconName;
-    } catch (e) {
-        if (iconFrame) { try { iconFrame.close(); } catch (_e1) { } }
-        if (labelFrame) { try { labelFrame.close(); } catch (_e2) { } }
-        this.articleIconFrame = null;
-        this.articleIconLabelFrame = null;
-        this.articleIconObj = null;
-        this.articleTextOffset = 1;
     }
+    if (categoryObj) {
+        categoryIconName = this._iconNameForCategory(categoryObj);
+    } else if (this.currentFeed && this.currentFeed.category_icon) {
+        categoryIconName = this.currentFeed.category_icon;
+    }
+    var hasCategoryIcon = useIcon && !!categoryIconName;
+    this._articleHeaderIconWidth = useIcon ? metrics.width : 0;
+    var containerHeight = useIcon ? Math.max(metrics.height + 1, 2) : 1;
+    this._articleHeaderHeight = containerHeight;
+    var containerAttr = 0;
+    var bgRed = (typeof BG_RED === 'number') ? BG_RED : ((typeof RED === 'number') ? (RED << 4) : ((typeof LIST_ACTIVE === 'number') ? (LIST_ACTIVE & 0x70) : 0));
+    var fgBlack = (typeof BLACK === 'number') ? BLACK : 0;
+    containerAttr = bgRed | fgBlack;
+
+    var needsRebuild = true;
+    if (this.articleHeaderFrame && this._currentIconKey === iconName && this._articleHeaderHasIcon === useIcon && this._articleHeaderHasCategory === hasCategoryIcon) needsRebuild = false;
+    if (!needsRebuild) {
+        if (this.headerFrame && typeof this.headerFrame.attr === 'number') {
+            try { this.headerFrame.attr = containerAttr; } catch (_eAttrHdr) { }
+        }
+        if (this.headerFrame && typeof this.headerFrame.clear === 'function') {
+            try { this.headerFrame.clear(containerAttr); } catch (_eClrHdr) { }
+        }
+        if (this.headerFrame && typeof this.headerFrame.putmsg === 'function') {
+            try { this.headerFrame.putmsg(''); } catch (_eHdrMsg) { }
+        }
+        if (this.articleHeaderFrame && typeof this.articleHeaderFrame.clear === 'function') {
+            try { this.articleHeaderFrame.clear(containerAttr); } catch (_eClrCont) { }
+        }
+        if (!useIcon) {
+            this.articleIconFrame = null;
+            this.articleIconObj = null;
+            this.articleCategoryIconFrame = null;
+            this.articleCategoryIconObj = null;
+        }
+    } else {
+        this._destroyArticleIcon();
+        try {
+            this.articleHeaderFrame = new Frame(1, 1, this.listFrame.width, containerHeight, containerAttr, this.listFrame);
+            this.articleHeaderFrame.open();
+            this.articleHeaderFrame.clear(containerAttr);
+            if (typeof this.registerFrame === 'function') this.registerFrame(this.articleHeaderFrame);
+
+            var cursorX = 1;
+            if (useIcon && hasCategoryIcon) {
+                this.articleCategoryIconFrame = new Frame(cursorX, 1, metrics.width, metrics.height, containerAttr, this.articleHeaderFrame);
+                this.articleCategoryIconFrame.open();
+                if (typeof this.registerFrame === 'function') this.registerFrame(this.articleCategoryIconFrame);
+                this.articleCategoryLabelFrame = new Frame(cursorX, metrics.height + 1, metrics.width, 1, containerAttr, this.articleHeaderFrame);
+                this.articleCategoryLabelFrame.open();
+                this.articleCategoryLabelFrame.clear(containerAttr);
+                if (typeof this.registerFrame === 'function') this.registerFrame(this.articleCategoryLabelFrame);
+                cursorX += metrics.width + 1;
+            } else {
+                this.articleCategoryIconFrame = null;
+                this.articleCategoryLabelFrame = null;
+            }
+
+            if (useIcon) {
+                this.articleIconFrame = new Frame(cursorX, 1, metrics.width, metrics.height, containerAttr, this.articleHeaderFrame);
+                this.articleIconFrame.open();
+                if (typeof this.registerFrame === 'function') this.registerFrame(this.articleIconFrame);
+                this.articleHeaderLabelFrame = new Frame(cursorX, metrics.height + 1, metrics.width, 1, containerAttr, this.articleHeaderFrame);
+                this.articleHeaderLabelFrame.open();
+                this.articleHeaderLabelFrame.clear(containerAttr);
+                if (typeof this.registerFrame === 'function') this.registerFrame(this.articleHeaderLabelFrame);
+                cursorX += metrics.width + 1;
+            } else {
+                this.articleIconFrame = null;
+                this.articleHeaderLabelFrame = null;
+            }
+
+            var textStart = cursorX;
+            var textWidth = Math.max(1, this.articleHeaderFrame.width - textStart + 1);
+            this.articleHeaderTextFrame = new Frame(textStart, 1, textWidth, containerHeight, containerAttr, this.articleHeaderFrame);
+            this.articleHeaderTextFrame.open();
+            this.articleHeaderTextFrame.clear(containerAttr);
+            if (typeof this.registerFrame === 'function') this.registerFrame(this.articleHeaderTextFrame);
+        } catch (e) {
+            this._destroyArticleIcon();
+            this.articleTextOffset = 1;
+            return;
+        }
+    }
+
+    if (this.headerFrame && typeof this.headerFrame.attr === 'number') {
+        try { this.headerFrame.attr = containerAttr; } catch (_eAttr) { }
+    }
+    if (this.headerFrame && typeof this.headerFrame.clear === 'function') {
+        try { this.headerFrame.clear(containerAttr); } catch (_eClr) { }
+    }
+
+    if (useIcon && this.articleIconFrame) {
+        if (!this.articleIconObj) {
+            var iconData = { iconFile: iconName, label: '', iconBg: bgRed, iconFg: fgBlack };
+            this.articleIconObj = new Icon(this.articleIconFrame, this.articleHeaderLabelFrame, iconData);
+        }
+        if (this.articleIconObj && typeof this.articleIconObj.render === 'function') {
+            try { this.articleIconObj.render(); } catch (_erIco) { }
+        }
+    } else {
+        this.articleIconObj = null;
+        this.articleIconFrame = null;
+        this.articleHeaderLabelFrame = null;
+    }
+
+    if (useIcon && hasCategoryIcon && this.articleCategoryIconFrame) {
+        if (!this.articleCategoryIconObj) {
+            this.articleCategoryIconObj = new Icon(this.articleCategoryIconFrame, this.articleCategoryLabelFrame, { iconFile: categoryIconName, label: '', iconBg: bgRed, iconFg: fgBlack });
+        }
+        if (this.articleCategoryIconObj && typeof this.articleCategoryIconObj.render === 'function') {
+            try { this.articleCategoryIconObj.render(); } catch (_eCatIco) { }
+        }
+    } else {
+        this.articleCategoryIconObj = null;
+        this.articleCategoryIconFrame = null;
+        this.articleCategoryLabelFrame = null;
+    }
+
+    if (this.articleHeaderTextFrame) {
+        try {
+            this.articleHeaderTextFrame.clear(containerAttr);
+            var width = this.articleHeaderTextFrame.width;
+            var height = this.articleHeaderTextFrame.height;
+            var lines = [];
+            var article = (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) ? this.currentArticles[this.articleIndex] : null;
+            var title = '';
+            if (article && article.title) title = article.title;
+            else if (this.currentFeed && this.currentFeed.label) title = this.currentFeed.label;
+            if (title) {
+                lines = lines.concat(this._wrapText(this._toDisplayText(title), width));
+            }
+            var author = this._extractArticleAuthor(article);
+            var dateStr = this._extractArticleDate(article);
+            var metaParts = [];
+            if (author) metaParts.push(author);
+            if (dateStr) metaParts.push(dateStr);
+            if (metaParts.length) lines.push(this._toDisplayText(metaParts.join('  ')));
+            var bgNibble = containerAttr & 0x70;
+            var blinkBit = containerAttr & 0x80;
+            var baseFg = containerAttr & 0x0F;
+            var altFg = (typeof DARKGRAY === 'number') ? DARKGRAY : ((typeof LIGHTGRAY === 'number') ? LIGHTGRAY : baseFg);
+            var altAttr = bgNibble | (altFg & 0x0F) | blinkBit;
+
+            for (var i = 0; i < lines.length && i < height; i++) {
+                var text = lines[i];
+                if (text.length > width) text = text.substr(0, width);
+                this.articleHeaderTextFrame.gotoxy(1, i + 1);
+                this.articleHeaderTextFrame.attr = (i % 2 === 0) ? containerAttr : altAttr;
+                this.articleHeaderTextFrame.putmsg(text);
+            }
+            this.articleHeaderTextFrame.attr = containerAttr;
+        } catch (_eTxt) { }
+    }
+
+    this.articleTextOffset = useIcon ? (containerHeight + 1) : 1;
+    if (this.articleTextOffset < 1) this.articleTextOffset = 1;
+    this._currentIconKey = iconName;
+    this._articleHeaderHasIcon = useIcon;
+    this._articleHeaderHasCategory = hasCategoryIcon;
+
+    this._registerArticleHeaderHotspot();
 };
 
 NewsReader.prototype._handleArticleNavigation = function (key) {
@@ -2194,6 +2570,8 @@ NewsReader.prototype._openArticle = function (index) {
     if (!article.__newsImages) article.__newsImages = this._extractArticleImages(article);
     this.articleImages = (article.__newsImages || []).slice(0);
     this._articleListScroll = this.scrollOffset;
+    this._releaseHotspots();
+    this._ensureArticleIcon(this.articleImages.length === 0);
     if (this.articleImages.length) {
         this.state = 'article_images';
         this.imageSelection = 0;
@@ -2204,6 +2582,21 @@ NewsReader.prototype._openArticle = function (index) {
         return;
     }
     this._enterArticleContent();
+};
+
+NewsReader.prototype._returnToFeedsFromArticle = function () {
+    this._destroyArticleIcon();
+    this.articleIndex = -1;
+    this.state = 'feeds';
+    this.scrollOffset = 0;
+    this._releaseHotspots();
+    if (this.currentFeeds && this.currentFeeds.length) {
+        var idx = this.currentFeeds.indexOf(this.currentFeed);
+        this.selectedIndex = (idx >= 0) ? (idx + 1) : 0;
+    } else {
+        this.selectedIndex = 0;
+    }
+    this.draw();
 };
 
 NewsReader.prototype._simplifyText = function (text) {
@@ -2222,6 +2615,51 @@ NewsReader.prototype._simplifyText = function (text) {
     normalized = normalized.replace(/&apos;/gi, "'");
     normalized = normalized.replace(/&#x27;/gi, "'");
     return normalized.trim();
+};
+
+NewsReader.prototype._extractArticleAuthor = function (article) {
+    if (!article) return '';
+    var fields = ['author', 'creator', 'dc:creator', 'dc_creator', 'author_name'];
+    for (var i = 0; i < fields.length; i++) {
+        var val = article[fields[i]];
+        if (!val) continue;
+        if (typeof val === 'string' && val.trim()) return val.trim();
+        if (val && val.name) return String(val.name);
+    }
+    if (article.authors && article.authors.length) {
+        var first = article.authors[0];
+        if (typeof first === 'string') return first;
+        if (first && first.name) return String(first.name);
+    }
+    return '';
+};
+
+NewsReader.prototype._extractArticleDate = function (article) {
+    if (!article) return '';
+    var fields = ['pubDate', 'published', 'updated', 'date', 'isoDate'];
+    for (var i = 0; i < fields.length; i++) {
+        var val = article[fields[i]];
+        if (!val) continue;
+        var str = this._formatArticleDateShort(val);
+        if (str) return str;
+    }
+    return '';
+};
+
+NewsReader.prototype._formatArticleDateShort = function (value) {
+    try {
+        var d;
+        if (value instanceof Date) d = value;
+        else {
+            var parsed = Date.parse(value);
+            if (!isNaN(parsed)) d = new Date(parsed);
+        }
+        if (!d || isNaN(d.getTime())) return '';
+        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    } catch (e) {
+        return '';
+    }
 };
 
 NewsReader.prototype._extractArticleImages = function (article) {
