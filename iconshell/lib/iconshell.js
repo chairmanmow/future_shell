@@ -6,12 +6,12 @@
  */
 
 
-load("iconshell/lib/config/config.js");
+load("iconshell/config/config.js");
 // -------------------- Helpers --------------------
 
 load("iconshell/lib/shell/index.js");
 
-function IconShell(){
+function IconShell() {
         this.currentView = "view1";  // first set inside init, reset when changing folders
         this.viewHotkeys = {}; // first set inside init, reset when changing folders
         // conio.init("ANSI");
@@ -20,4 +20,4 @@ function IconShell(){
         this.main();
 }
 
-   
+

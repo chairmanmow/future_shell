@@ -14,3 +14,7 @@ rss-ticker.js
 DDFileAreaChooser.js
 ansiedit.js
 iconshell/data/*
+iconshell/settings.json
+customlogoff.js
+customlogin.js
+customlogon.js

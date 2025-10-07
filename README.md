@@ -7,7 +7,7 @@ Provides a configurable home "desktop" with clickable (keyboard/mouse) icons for
 
 - Dynamic INI‑driven menu (`guishell.ini`) with ordering and per‑item configuration
 - Item types: builtin (chat/settings/exit), xtrn_section (external program groups), command (exec_xtrn / inline JS), who (dynamic online users)
-- Auto‑discovery of icon art (`*.ans` / `*.bin`) in `iconshell/lib/icons/`
+- Auto‑discovery of icon art (`*.ans` / `*.bin`) in `iconshell/assets/`
 - Chat subprogram with avatar columns and divider lines
 - Extensible Subprogram base (`subprogram.js`) for future modules
 - Graceful fallback to static menu if INI is missing or invalid
@@ -39,7 +39,7 @@ mods/
 
 1. Copy (or git clone) the contents of this directory into your Synchronet `exec/mods` directory so that `guishell.js` is at:  
 	`sbbs/exec/mods/guishell.js`
-2. Ensure icons are present in `sbbs/exec/mods/iconshell/lib/icons/`. You can add new ones (ANSI art) using the basename referenced by `icon =` in the INI.
+2. Ensure icons are present in `sbbs/exec/mods/iconshell/assets/`. You can add new ones (ANSI art) using the basename referenced by `icon =` in the INI.
 3. Edit `guishell.ini` to taste (see inline comments). Minimal example:
 
 	```ini
@@ -119,7 +119,7 @@ If you want to fall back to the classic interface for low‑speed connections, w
 ## Troubleshooting
 
 - Blank menu / only fallback: Check `guishell.ini` syntax (every `[Item.key]` referenced in `[Menu] items=` must exist).
-- Icon not showing: Ensure `mods/iconshell/lib/icons/<name>.ans` (or .bin) exists and matches `icon =` value.
+- Icon not showing: Ensure `mods/iconshell/assets/<name>.ans` (or .bin) exists and matches `icon =` value.
 - Command item does nothing: Confirm prefix `exec_xtrn:` or `js:` is exact (case-sensitive). Errors in inline JS are logged.
 - Chat not updating: Verify your JSON chat backend object (`jsonchat`) cycles and submit functions are wired.
 

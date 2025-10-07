@@ -635,7 +635,7 @@ NewsReader.prototype._iconExists = function (iconName) {
     if (typeof system !== 'undefined' && system && system.mods_dir) baseDir = system.mods_dir;
     else if (typeof js !== 'undefined' && js && js.exec_dir) baseDir = js.exec_dir;
     // if (baseDir && baseDir.charAt(baseDir.length - 1) !== '/' && baseDir.charAt(baseDir.length - 1) !== '\') baseDir += '/';
-    var pathBase = baseDir + 'iconshell/lib/icons/' + iconName;
+    var pathBase = baseDir + 'iconshell/assets/' + iconName;
     var exists = false;
     if (typeof file_exists === 'function') {
         try {
@@ -1831,8 +1831,8 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
                 attr: buttonAttr,
                 focusAttr: focusAttr,
                 shadowAttr: shadowAttr,
-                backgroundColors: [RED],
-                shadowColors: [BLACK, BG_RED],
+                backgroundColors: [RED, BG_RED],
+                shadowColors: [BLACK, BG_BLACK],
                 onClick: callback
             });
         } catch (_eBtnInit) {
@@ -1844,8 +1844,8 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
         this.articleLinkButton.setLabel('Read Link');
         this.articleLinkButton.setOnClick(callback);
         this.articleLinkButton.parentFrame = this.articleHeaderFrame || null;
-        this.articleLinkButton.backgroundColors = [RED];
-        this.articleLinkButton.shadowColors = [BLACK, BG_RED];
+        this.articleLinkButton.backgroundColors = [RED, BG_RED];
+        this.articleLinkButton.shadowColors = [BLACK, BG_BLACK];
     }
 
     this.articleLinkButton.setFocused(true);
@@ -1894,7 +1894,7 @@ NewsReader.prototype._registerArticleLinkButtonHotspot = function () {
     var baseY = this.listFrame ? this.listFrame.y : 1;
     if (this.articleHeaderFrame) {
         baseX += this.articleHeaderFrame.x - 1;
-        baseY += this.articleHeaderFrame.y - 1;
+        baseY += this.articleHeaderFrame.y - 3;
     }
     var minX = baseX + frame.x - 1;
     var maxX = minX + frame.width - 1;

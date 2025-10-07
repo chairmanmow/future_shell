@@ -90,12 +90,14 @@ Button.prototype.render = function () {
     if (!this.frame) return;
     var baseAttr = this.enabled ? (this.focused ? this.focusAttr : this.attr) : this.disabledAttr;
     var parentAttr = this.parentFrame ? this.parentFrame.attr : baseAttr;
-    var parentFg = parentAttr & 0x0F;
-    var parentBg = parentAttr & 0x70;
-    var buttonBg = baseAttr & 0x70;
-    var backgroundAttr = this._composeAttr(this.backgroundColors, parentAttr);
-    var shadowFallback = (BLACK & 0x0F) | parentBg;
-    var shadowAttr = this._composeAttr(this.shadowColors, shadowFallback);
+    var bgFg = this._resolveFg(this.backgroundColors && this.backgroundColors.length ? this.backgroundColors[0] : undefined, parentAttr);
+    var bgBg = this._resolveBg(this.backgroundColors && this.backgroundColors.length > 1 ? this.backgroundColors[1] : undefined, parentAttr);
+    var shadowFg = this._resolveFg(this.shadowColors && this.shadowColors.length ? this.shadowColors[0] : undefined, BLACK);
+    var shadowBg = this._resolveBg(this.shadowColors && this.shadowColors.length > 1 ? this.shadowColors[1] : undefined, parentAttr);
+    var backgroundAttr = (bgBg & 0x70) | (bgFg & 0x0F);
+    var shadowHalfAttr = (bgBg & 0x70) | (shadowFg & 0x0F);
+    var shadowSolidAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    var cornerAttr = (shadowBg & 0x70) | (bgFg & 0x0F);
     var label = this.label || '';
     if (this.icon) label = this.icon + ' ' + label;
     var availableTop = Math.max(1, this.width - 1);
@@ -117,12 +119,10 @@ Button.prototype.render = function () {
 
     // Shadow column on top row
     var halfUpper = String.fromCharCode(223);
-    var halfLower = String.fromCharCode(220);
     var solidBlock = String.fromCharCode(219);
-    var topCornerAttr = (BLACK | BG_RED);
-    this.frame.attr = topCornerAttr;
+    this.frame.attr = cornerAttr;
     this.frame.gotoxy(this.width, 1);
-    this.frame.putmsg(halfLower);
+    this.frame.putmsg(halfUpper);
 
     // Bottom row shadow trail
     var halfUpperShadow = String.fromCharCode(223);
@@ -130,20 +130,27 @@ Button.prototype.render = function () {
     this.frame.gotoxy(1, 2);
     this.frame.putmsg(solidBlock);
     for (var x = 2; x < this.width + 1; x++) {
-        this.frame.attr = shadowAttr;
+        this.frame.attr = shadowHalfAttr;
         this.frame.gotoxy(x, 2);
         this.frame.putmsg(halfUpperShadow);
     }
+
     this.frame.attr = baseAttr;
 };
 
-Button.prototype._composeAttr = function (pair, fallbackAttr) {
-    var attr = (typeof fallbackAttr === 'number') ? (fallbackAttr & 0x7F) : 0;
-    if (pair && pair.length) {
-        if (typeof pair[0] === 'number') attr = (attr & 0xF0) | (pair[0] & 0x0F);
-        if (pair.length > 1 && typeof pair[1] === 'number') attr = (attr & 0x0F) | (pair[1] & 0x70);
+Button.prototype._resolveFg = function (value, fallbackAttr) {
+    if (typeof value === 'number') return value & 0x0F;
+    if (typeof fallbackAttr === 'number') return fallbackAttr & 0x0F;
+    return 0;
+};
+
+Button.prototype._resolveBg = function (value, fallbackAttr) {
+    if (typeof value === 'number') {
+        if (value & 0x70) return value & 0x70;
+        return (value << 4) & 0x70;
     }
-    return attr;
+    if (typeof fallbackAttr === 'number') return fallbackAttr & 0x70;
+    return 0;
 };
 
 Button.prototype.destroy = function () {

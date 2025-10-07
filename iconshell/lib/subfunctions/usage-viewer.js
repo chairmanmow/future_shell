@@ -1,12 +1,12 @@
 load('iconshell/lib/subfunctions/subprogram.js');
 
 require('sbbsdefs.js',
-    'BG_BLACK','BG_BLUE','BG_CYAN','BG_GREEN','BG_MAGENTA','BG_BROWN','BG_LIGHTGRAY',
-    'LIGHTGRAY','WHITE','YELLOW','CYAN','MAGENTA','GREEN','RED','BLACK',
-    'KEY_UP','KEY_DOWN','KEY_PGUP','KEY_PGDN','KEY_HOME','KEY_END','KEY_LEFT','KEY_RIGHT'
+    'BG_BLACK', 'BG_BLUE', 'BG_CYAN', 'BG_GREEN', 'BG_MAGENTA', 'BG_BROWN', 'BG_LIGHTGRAY',
+    'LIGHTGRAY', 'WHITE', 'YELLOW', 'CYAN', 'MAGENTA', 'GREEN', 'RED', 'BLACK',
+    'KEY_UP', 'KEY_DOWN', 'KEY_PGUP', 'KEY_PGDN', 'KEY_HOME', 'KEY_END', 'KEY_LEFT', 'KEY_RIGHT'
 );
 
-try { if (typeof Icon !== 'function') load('iconshell/lib/shell/icon.js'); } catch (e) {}
+try { if (typeof Icon !== 'function') load('iconshell/lib/shell/icon.js'); } catch (e) { }
 
 if (typeof KEY_UP === 'undefined') var KEY_UP = 0x4800;
 if (typeof KEY_DOWN === 'undefined') var KEY_DOWN = 0x5000;
@@ -58,9 +58,9 @@ UsageViewer.prototype.enter = function (done) {
 
 UsageViewer.prototype._ensureVersion = function (frame) {
     if (this._version === USAGE_VIEWER_VERSION) return;
-    try { this._clearProgramResources(); } catch (e1) {}
-    if (this.listFrame) { try { this.listFrame.close(); } catch (e2) {} }
-    if (this.detailFrame) { try { this.detailFrame.close(); } catch (e3) {} }
+    try { this._clearProgramResources(); } catch (e1) { }
+    if (this.listFrame) { try { this.listFrame.close(); } catch (e2) { } }
+    if (this.detailFrame) { try { this.detailFrame.close(); } catch (e3) { } }
     this.listFrame = null;
     this.detailFrame = null;
     var opts = {
@@ -174,7 +174,7 @@ UsageViewer.prototype.ensureFrames = function () {
         var needsListRebuild = this.listFrame.width !== width || this.listFrame.height !== listHeight
             || this.listFrame.x !== host.x || this.listFrame.y !== host.y;
         if (needsListRebuild) {
-            try { this.listFrame.close(); } catch (eCloseList) {}
+            try { this.listFrame.close(); } catch (eCloseList) { }
             this.listFrame = null;
         }
     }
@@ -187,7 +187,7 @@ UsageViewer.prototype.ensureFrames = function () {
         var needsDetailRebuild = this.detailFrame.width !== width || this.detailFrame.height !== detailHeight
             || this.detailFrame.x !== host.x || this.detailFrame.y !== detailY;
         if (needsDetailRebuild) {
-            try { this.detailFrame.close(); } catch (eCloseDetail) {}
+            try { this.detailFrame.close(); } catch (eCloseDetail) { }
             this.detailFrame = null;
         }
     }
@@ -426,7 +426,7 @@ UsageViewer.prototype._clearProgramResources = function () {
 UsageViewer.prototype._ensureIconLookup = function () {
     if (this._iconLookup) return;
     this._iconLookup = {};
-    var dirBase = system.mods_dir + 'iconshell/lib/icons/';
+    var dirBase = system.mods_dir + 'iconshell/assets/';
     var patterns = ['*.bin', '*.ans'];
     for (var p = 0; p < patterns.length; p++) {
         var list;
@@ -573,9 +573,9 @@ UsageViewer.prototype._renderProgramIcon = function (frame, info) {
     var loaded = false;
     var width = frame.width || 0;
     var height = frame.height || 0;
-    try { frame.open(); } catch (openErr) {}
+    try { frame.open(); } catch (openErr) { }
     if (info.iconFile && width > 0 && height > 0) {
-        var basePath = system.mods_dir + 'iconshell/lib/icons/' + info.iconFile;
+        var basePath = system.mods_dir + 'iconshell/assets/' + info.iconFile;
         var binPath = basePath + '.bin';
         var ansPath = basePath + '.ans';
         try {
@@ -599,7 +599,7 @@ UsageViewer.prototype._renderProgramIcon = function (frame, info) {
             frame.transparent = true;
         }
     }
-    try { frame.cycle(); } catch (e4) {}
+    try { frame.cycle(); } catch (e4) { }
 };
 
 UsageViewer.prototype._drawProgramBlocks = function (df, month) {
@@ -645,7 +645,7 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
 
     var blockFrame = new Frame(1, baseY, width, height, attr, df);
     blockFrame.transparent = false;
-    try { blockFrame.open(); } catch (e) {}
+    try { blockFrame.open(); } catch (e) { }
     blockFrame.clear(attr);
     this._programFrames.push(blockFrame);
 
@@ -697,7 +697,7 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
             blockFrame.putmsg(padded);
         }
     }
-    try { blockFrame.cycle(); } catch (cycleErr) {}
+    try { blockFrame.cycle(); } catch (cycleErr) { }
 
     if (vis < 9 && typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
         var hotKey = String(vis + 49);

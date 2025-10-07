@@ -123,7 +123,7 @@ function _mbFindIconBase(name) {
         key = key.toLowerCase();
         if (aliases.hasOwnProperty(key)) return aliases[key];
     }
-    var iconDir = system.mods_dir + "iconshell/lib/icons/";
+    var iconDir = system.mods_dir + "iconshell/assets/";
     var exts = ['.ans', '.bin'];
     for (var v = 0; v < variants.length; v++) {
         var variant = variants[v];

@@ -49,7 +49,7 @@ Icon.prototype._renderAvatar = function (iconW, iconH) {
 };
 
 Icon.prototype._renderIconFile = function (iconW, iconH) {
-    var iconPathBase = "iconshell/lib/icons/" + this.data.iconFile;
+    var iconPathBase = "iconshell/assets/" + this.data.iconFile;
     var binPath = system.mods_dir + iconPathBase + ".bin";
     var ansPath = system.mods_dir + iconPathBase + ".ans";
     if (file_exists(binPath)) {
