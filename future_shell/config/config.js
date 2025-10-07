@@ -1,6 +1,6 @@
 
 load("future_shell/lib/subprograms/whosonline.js");
-load("future_shell/lib/subprograms/gamesmenu.js");
+load("future_shell/lib/util/xtrnmenu.js");
 // Hello World demo subprogram
 load("future_shell/lib/subprograms/hello-world.js");
 load("future_shell/lib/subprograms/file_area.js");
@@ -9,7 +9,7 @@ load("future_shell/lib/subprograms/clock.js");
 load("future_shell/lib/subprograms/rawgate.js");
 load("future_shell/lib/subprograms/mail.js");
 load("future_shell/lib/subprograms/system_info.js");
-load("future_shell/lib/subprograms/message_boards.js");
+load("future_shell/lib/subprograms/message_boards/message_boards.js");
 load("future_shell/lib/subprograms/users.js");
 load("future_shell/lib/subprograms/sysop_commands.js");
 load("future_shell/lib/subprograms/newsreader.js");
@@ -67,7 +67,7 @@ var BUILTIN_ACTIONS = {
 	hello: function () { if (!this.helloWorld) this.helloWorld = new HelloWorld(); this.queueSubprogramLaunch('hello-world', this.helloWorld); },
 	exit: function () { throw ('Exit Shell'); },
 	msg_boards: function () {
-		try { if (typeof MessageBoard !== 'function') load('future_shell/lib/subprograms/message_boards.js'); } catch (e) { dbug('subprogram', 'Failed loading message_boards.js ' + e); return; }
+		try { if (typeof MessageBoard !== 'function') load('future_shell/lib/subprograms/message_boards/message_boards.js'); } catch (e) { dbug('subprogram', 'Failed loading message_boards.js ' + e); return; }
 		if (typeof MessageBoard !== 'function') { dbug('subprogram', 'MessageBoard class missing after load'); return; }
 		if (!this.msgBoardSub) this.msgBoardSub = new MessageBoard({ parentFrame: this.subFrame, shell: this, timer: this.timer });
 		else {

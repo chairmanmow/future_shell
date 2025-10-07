@@ -1,4 +1,4 @@
-// gamesmenu.js
+// xtrnmenu.js
 // Returns an array of menu items for all accessible games/doors for the current user
 var ICON_LOOKUP = {
 }

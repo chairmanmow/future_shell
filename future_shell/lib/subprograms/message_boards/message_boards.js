@@ -1,8 +1,8 @@
 load('sbbsdefs.js');
 load("future_shell/lib/subprograms/subprogram.js");
 load("future_shell/lib/util/debug.js");
-load('future_shell/lib/subprograms/message_board_ui.js');
-load('future_shell/lib/subprograms/message_board_views.js');
+load('future_shell/lib/subprograms/message_boards/message_board_ui.js');
+load('future_shell/lib/subprograms/message_boards/message_board_views.js');
 if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';
 if (typeof KEY_BACKSPACE === 'undefined') var KEY_BACKSPACE = '\b';
@@ -640,6 +640,9 @@ function MessageBoard(opts) {
     this.blockScreenSaver = false;
     this.frameSet = null;
     this.overlay = null;
+    // Modal-based notice replacements (legacy frame variant removed)
+    this._readNoticeModal = null;
+    this._transitionNoticeModal = null;
     // Lifecycle guards: _alive toggled true between enter() and final exit/cleanup.
     // _epoch increments on each (re)initialization so async callbacks can bail out
     // if they captured stale references (e.g. frame cycle timer firing after post editor).
@@ -1145,15 +1148,14 @@ MessageBoard.prototype._resetState = function () {
     this._readBodyLineCache = null;
     this._readBodyLineCacheWidth = 0;
     this._frameCycleEvent = null;
-    this._readNoticeFrame = null;
-    this._readNoticeEvent = null;
+    // Legacy frame-based notice properties removed; using Modal-only path
+    this._readNoticeModal = null; // spinner modal instance
+    this._readNoticeEvent = null; // timer/callback reference for auto-hide
     this._readNoticeActive = false;
     this._subUnreadCounts = {};
     this._readMessageMetadata = null;
-    this._readNoticeContainer = null;
-    this._transitionNoticeFrame = null;
+    this._transitionNoticeModal = null; // spinner modal instance
     this._transitionNoticeActive = false;
-    this._transitionNoticeContainer = null;
 };
 
 MessageBoard.prototype._releaseHotspots = function () {
@@ -1214,13 +1216,10 @@ MessageBoard.prototype._init = function (reentry) {
     this._threadHeadersCache = {};
     this._subMessageCounts = {};
     this._subUnreadCounts = {};
-    this._readNoticeFrame = null;
+    // Legacy notice frame properties removed; state now tracked via _readNoticeModal/_transitionNoticeModal
     this._readNoticeEvent = null;
     this._readNoticeActive = false;
-    this._readNoticeContainer = null;
-    this._transitionNoticeFrame = null;
     this._transitionNoticeActive = false;
-    this._transitionNoticeContainer = null;
     this._setReadBodyText('');
     this._readScroll = 0;
     this._readGroupIconFrame = null;
@@ -2074,139 +2073,74 @@ MessageBoard.prototype._consumeReadNoticeKey = function (key) {
 MessageBoard.prototype._showReadNotice = function (kind) {
     if (this.view !== 'read') return;
     if (!kind) return;
-    this._hideReadNotice({ skipRepaint: true });
-    var labelMap = {
+    if (typeof Modal === 'undefined') { try { load('future_shell/lib/util/layout/modal.js'); } catch (_mErr) { } }
+    var labelMapModal = {
         'next-message': 'Showing next message',
         'prev-message': 'Showing previous message',
         'next-thread': 'Showing next thread',
         'prev-thread': 'Showing previous thread',
         'end-of-sub': 'All messages read. Returning to sub selection'
     };
-    var text = labelMap[kind] || labelMap['next-message'];
-    var isThread = (kind.indexOf('thread') !== -1);
-    var attr;
-    if (kind === 'end-of-sub') attr = (typeof BG_RED === 'number' ? BG_RED : BG_BLUE) | (typeof WHITE === 'number' ? WHITE : 7);
-    else attr = (isThread ? BG_MAGENTA : BG_BLUE) | WHITE;
-    var host = this.hostFrame || this.rootFrame || this.outputFrame || this.parentFrame || this._readBodyFrame;
-    var frames = this._createNoticeFrames(host, text, attr);
-    if (!frames) {
-        this._readNoticeFrame = null;
-        this._readNoticeContainer = null;
-        this._readNoticeActive = false;
-        return;
-    }
-    this._readNoticeContainer = frames.container;
-    this._readNoticeFrame = frames.dialog;
-    this._readNoticeActive = true;
-    if (this.timer && typeof this.timer.addEvent === 'function') {
-        var self = this;
-        this._readNoticeEvent = this.timer.addEvent(3000, false, function () {
-            self._readNoticeEvent = null;
-            self._hideReadNotice();
-        });
-    }
+    var msg = labelMapModal[kind] || labelMapModal['next-message'];
+    if (this._readNoticeModal) { try { this._readNoticeModal.close(); } catch (_) { } this._readNoticeModal = null; }
+    var hostFrame = this.hostFrame || this.rootFrame || this.outputFrame || this.parentFrame || this._readBodyFrame;
+    // Guard: if hostFrame missing or has invalid dimensions, skip showing notice to avoid coordinate errors
+    if (!hostFrame || !hostFrame.width || !hostFrame.height || hostFrame.width < 4 || hostFrame.height < 3) return;
+    var self = this;
+    this._readNoticeModal = new Modal({
+        type: 'spinner',
+        title: '',
+        message: msg,
+        parentFrame: hostFrame,
+        overlay: false,
+        width: Math.min(40, Math.max(18, msg.length + 8)),
+        height: 7,
+        buttons: [],
+        spinnerFrames: ['.', 'o', 'O', 'o'],
+        spinnerInterval: 130,
+        timeout: 2200,
+        onClose: function () { self._readNoticeModal = null; }
+    });
 };
 
-MessageBoard.prototype._hideReadNotice = function (opts) {
-    opts = opts || {};
-    var skipRepaint = !!opts.skipRepaint;
+MessageBoard.prototype._hideReadNotice = function () {
     if (this._readNoticeEvent) {
         try { this._readNoticeEvent.abort = true; } catch (e) { }
         this._readNoticeEvent = null;
     }
-    if (this._readNoticeFrame) {
-        try { this._readNoticeFrame.close(); } catch (e) { }
-        this._readNoticeFrame = null;
-    }
-    if (this._readNoticeContainer) {
-        try { this._readNoticeContainer.close(); } catch (_ce) { }
-        this._readNoticeContainer = null;
-    }
+    if (this._readNoticeModal) { try { this._readNoticeModal.close(); } catch (_) { } this._readNoticeModal = null; }
     this._readNoticeActive = false;
-    if (!skipRepaint && this.view === 'read' && this._readBodyFrame) {
-        try { this._paintRead(); } catch (_e) { }
-    }
 };
 
-MessageBoard.prototype._createNoticeFrames = function (host, text, attr) {
-    if (!host) return null;
-    if (typeof host.is_open === 'boolean' && !host.is_open) host = host.parent || null;
-    if (!host) return null;
-    var hostWidth = (typeof host.width === 'number' && host.width > 0) ? host.width : ((typeof console !== 'undefined' && console && console.screen_columns) || 80);
-    var hostHeight = (typeof host.height === 'number' && host.height > 0) ? host.height : ((typeof console !== 'undefined' && console && console.screen_rows) || 24);
-    var parent = host.parent || host;
-    var coverX = (parent === host) ? 1 : ((typeof host.x === 'number' ? host.x : 1));
-    var coverY = (parent === host) ? 1 : ((typeof host.y === 'number' ? host.y : 1));
-    var cover;
-    try {
-        cover = new Frame(coverX, coverY, hostWidth, hostHeight, attr || 0, parent);
-        cover.transparent = true;
-        cover.open();
-        cover.transparent = true;
-        try { cover.top(); } catch (_coverTopErr) { }
-        try { cover.cycle(); } catch (_coverCycleErr) { }
-    } catch (_coverErr) {
-        if (cover) {
-            try { cover.close(); } catch (_coverCloseErr) { }
-        }
-        return null;
-    }
-    var textWidth = text.length + 6;
-    var dialogWidth = Math.max(20, Math.min(hostWidth, textWidth));
-    var dialogHeight = 3;
-    var dialogX = Math.max(1, Math.floor((hostWidth - dialogWidth) / 2) + 1);
-    var dialogY = Math.max(1, Math.floor((hostHeight - dialogHeight) / 2) + 1);
-    var dialog;
-    try {
-        dialog = new Frame(dialogX, dialogY, dialogWidth, dialogHeight, attr, cover);
-        dialog.open();
-        dialog.clear(attr);
-        var msgX = Math.max(1, Math.floor((dialogWidth - text.length) / 2) + 1);
-        var msgY = Math.max(1, Math.floor((dialogHeight + 1) / 2));
-        dialog.gotoxy(msgX, msgY);
-        dialog.putmsg(text);
-        try { dialog.top(); } catch (_dialogTopErr) { }
-        try { dialog.cycle(); } catch (_dialogCycleErr) { }
-        try { cover.top(); } catch (_coverTopErr2) { }
-        try { cover.cycle(); } catch (_coverCycleErr2) { }
-    } catch (_dialogErr) {
-        if (dialog) {
-            try { dialog.close(); } catch (_dialogCloseErr) { }
-        }
-        try { cover.close(); } catch (_coverCloseErr2) { }
-        return null;
-    }
-    return { container: cover, dialog: dialog };
-};
+// _createNoticeFrames removed: legacy frame-based notice system fully deprecated in favor of Modal spinner notices.
 
 MessageBoard.prototype._showTransitionNotice = function (text) {
     text = text || 'Loading...';
-    this._hideTransitionNotice({ skipRepaint: true });
-    var attr = (typeof BG_BLUE === 'number' ? BG_BLUE : 0) | (typeof WHITE === 'number' ? WHITE : 7);
-    var host = this.hostFrame || this.rootFrame || this.outputFrame || this.parentFrame || null;
-    var frames = this._createNoticeFrames(host, text, attr);
-    if (!frames) {
-        this._transitionNoticeFrame = null;
-        this._transitionNoticeContainer = null;
-        this._transitionNoticeActive = false;
-        return false;
-    }
-    this._transitionNoticeContainer = frames.container;
-    this._transitionNoticeFrame = frames.dialog;
+    if (typeof Modal === 'undefined') { try { load('future_shell/lib/util/layout/modal.js'); } catch (_mErr2) { } }
+    if (this._transitionNoticeModal) { try { this._transitionNoticeModal.close(); } catch (_) { } this._transitionNoticeModal = null; }
+    var host2 = this.hostFrame || this.rootFrame || this.outputFrame || this.parentFrame || null;
+    if (!host2 || !host2.width || !host2.height || host2.width < 4 || host2.height < 3) return false;
+    var self = this;
+    this._transitionNoticeModal = new Modal({
+        type: 'spinner',
+        title: '',
+        message: text,
+        parentFrame: host2,
+        overlay: true,
+        width: Math.min(50, Math.max(20, text.length + 10)),
+        height: 8,
+        spinnerFrames: ['|', '/', '-', '\\'],
+        spinnerInterval: 120,
+        timeout: 3000,
+        buttons: [],
+        onClose: function () { self._transitionNoticeModal = null; }
+    });
     this._transitionNoticeActive = true;
     return true;
 };
 
-MessageBoard.prototype._hideTransitionNotice = function (opts) {
-    opts = opts || {};
-    if (this._transitionNoticeFrame) {
-        try { this._transitionNoticeFrame.close(); } catch (_e) { }
-    }
-    this._transitionNoticeFrame = null;
-    if (this._transitionNoticeContainer) {
-        try { this._transitionNoticeContainer.close(); } catch (_ce) { }
-    }
-    this._transitionNoticeContainer = null;
+MessageBoard.prototype._hideTransitionNotice = function () {
+    if (this._transitionNoticeModal) { try { this._transitionNoticeModal.close(); } catch (_) { } this._transitionNoticeModal = null; }
     this._transitionNoticeActive = false;
 };
 

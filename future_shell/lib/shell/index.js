@@ -11,7 +11,7 @@ load("future_shell/lib/shell/shell_frame_help.js");
 load("future_shell/lib/shell/grid_nav.js");
 load("future_shell/lib/shell/hotkeys.js");
 load("future_shell/lib/shell/launch.js");
-load("future_shell/lib/util/eye_candy.js");
+load("future_shell/lib/effects/eye_candy.js");
 load("future_shell/lib/util/debug.js");
 
 // subclasses

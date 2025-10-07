@@ -624,51 +624,43 @@ NewsReader.prototype._iconExists = function (iconName) {
 };
 
 NewsReader.prototype._destroyLoadingOverlay = function () {
-    if (!this._loadingOverlayFrame) return;
-    try { this._loadingOverlayFrame.close(); } catch (_overlayCloseErr) { }
-    if (this._myFrames) {
-        var idx = this._myFrames.indexOf(this._loadingOverlayFrame);
-        if (idx !== -1) this._myFrames.splice(idx, 1);
+    if (this._loadingModal) {
+        try { this._loadingModal.close(); } catch (_e) { }
+        this._loadingModal = null;
     }
-    this._loadingOverlayFrame = null;
 };
 
 NewsReader.prototype._showLoadingOverlay = function (message) {
     if (!this.listFrame || !this.parentFrame) return false;
     this._destroyLoadingOverlay();
-    var overlayAttr = LIST_ACTIVE;
-    var frame = new Frame(this.listFrame.x, this.listFrame.y, this.listFrame.width, this.listFrame.height, overlayAttr, this.parentFrame);
-    frame.open();
-    frame.clear();
-    frame.attr = overlayAttr;
-    var text = this._toDisplayText(message || 'Converting Image');
-    var lines = ('' + text).split(/\r?\n/);
-    var blockHeight = lines.length;
-    var startY = Math.max(1, Math.floor((frame.height - blockHeight) / 2) + 1);
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        if (!line) line = '';
-        if (line.length > frame.width) line = line.substr(0, frame.width);
-        var lineX = Math.max(1, Math.floor((frame.width - line.length) / 2) + 1);
-        var lineY = startY + i;
-        if (lineY > frame.height) break;
-        frame.gotoxy(lineX, lineY);
-        frame.putmsg(line);
+    // Lazy load Modal if not already loaded in environment
+    if (typeof Modal === 'undefined') {
+        try { load('future_shell/lib/util/layout/modal.js'); } catch (_mErr) { return false; }
     }
-    this._loadingOverlayFrame = frame;
-    if (typeof this.registerFrame === 'function') this.registerFrame(frame);
-    if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
-        try { this.parentFrame.cycle(); } catch (_overlayShowCycleErr) { }
-    }
+    var self = this;
+    this._loadingModal = new Modal({
+        type: 'spinner',
+        title: '',
+        message: this._toDisplayText(message || 'Working...'),
+        parentFrame: this.parentFrame,
+        overlay: true,
+        attr: LIST_ACTIVE,
+        contentAttr: LIST_ACTIVE,
+        buttonAttr: LIST_ACTIVE,
+        autoOpen: true,
+        spinnerFrames: ['|', '/', '-', '\\'],
+        spinnerInterval: 120,
+        // custom size to cover listFrame roughly
+        width: Math.max(30, Math.min(this.listFrame.width, 60)),
+        height: Math.max(6, Math.min(this.listFrame.height, 10)),
+        onClose: function () { self._loadingModal = null; }
+    });
     return true;
 };
 
 NewsReader.prototype._hideLoadingOverlay = function () {
-    if (!this._loadingOverlayFrame) return;
+    if (!this._loadingModal) return;
     this._destroyLoadingOverlay();
-    if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
-        try { this.parentFrame.cycle(); } catch (_overlayHideCycleErr) { }
-    }
 };
 
 NewsReader.prototype._destroyIconCells = function (cells) {
