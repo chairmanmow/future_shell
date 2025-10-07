@@ -13,8 +13,8 @@ SlyEdit_Misc.js
 rss-ticker.js
 DDFileAreaChooser.js
 ansiedit.js
-iconshell/data/*
-iconshell/settings.json
+future_shell/data/*
+future_shell/settings.json
 customlogoff.js
 customlogin.js
 customlogon.js
