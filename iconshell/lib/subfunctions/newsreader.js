@@ -7,6 +7,7 @@ if (typeof utf8_cp437 === 'undefined') {
 load("iconshell/lib/subfunctions/subprogram.js");
 load('iconshell/lib/shell/icon.js');
 load('iconshell/lib/util/gif2ans/img_loader.js')
+load('iconshell/lib/util/layout/button.js');
 
 function resolveAttr(key, fallback) {
     if (typeof fallback === 'undefined') fallback = 0;
@@ -317,6 +318,45 @@ var LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_BLUE | WHITE));
 var LIST_INACTIVE = resolveAttr('FILE_LIST_INACTIVE', (BG_BLACK | LIGHTGRAY));
 var HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_BLUE | WHITE));
 var STATUS_ATTR = resolveAttr('FILE_FOOTER', (BG_BLACK | LIGHTGRAY));
+var IMAGE_CACHE_LIMIT = 6;
+var NEWSREADER_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+var NEWSREADER_ASCII_ENTITY_MAP = {
+    160: ' ',
+    169: '(c)',
+    174: '(R)',
+    215: 'x',
+    8211: '-',
+    8212: '-',
+    8216: "'",
+    8217: "'",
+    8218: ',',
+    8220: '"',
+    8221: '"',
+    8222: '"',
+    8224: '+',
+    8226: '*',
+    8230: '...',
+    8482: '(TM)',
+    8722: '-',
+    188: '1/4',
+    189: '1/2',
+    190: '3/4'
+};
+var NEWSREADER_UNICODE_PUNCT_MAP = {
+    '\u00A0': ' ',
+    '\u2018': "'",
+    '\u2019': "'",
+    '\u201A': ',',
+    '\u201C': '"',
+    '\u201D': '"',
+    '\u201E': '"',
+    '\u2013': '-',
+    '\u2014': '-',
+    '\u2022': '*',
+    '\u2026': '...',
+    '\u2122': '(TM)'
+};
+
 
 function NewsReader(opts) {
     opts = opts || {};
@@ -334,6 +374,7 @@ function NewsReader(opts) {
     this.articleHeaderLabelFrame = null;
     this.articleIconObj = null;
     this.articleCategoryIconObj = null;
+    this.articleImagePreviewFrame = null;
     this.articleTextOffset = 1;
     this.articleImages = [];
     this.imageSelection = 0;
@@ -354,6 +395,7 @@ function NewsReader(opts) {
     this._imageAnsiErrors = {};
     this._loadingOverlayFrame = null;
     this._iconExistCache = {};
+    this._imageAnsiOrder = [];
     this._allFeeds = [];
     this._categoryOverrides = {};
     this._resetState();
@@ -380,6 +422,7 @@ NewsReader.prototype._resetState = function () {
     this._hotspotChars = null;
     this._imageAnsiErrors = {};
     this._iconExistCache = {};
+    this._clearImageAnsiCache();
     var feedConfig = getNewsreaderConfig();
     this._allFeeds = feedConfig.feeds || [];
     this._categoryOverrides = feedConfig.categories || {};
@@ -407,6 +450,23 @@ NewsReader.prototype._resetState = function () {
     this._currentPreviewUrl = null;
     this._imagePreviewScrollMax = 0;
     this._imagePreviewVisibleRows = 0;
+    this.articleLinkButton = null;
+    this.articleLinkButtonFrame = null;
+    this._articleContentStartRow = null;
+    this._articleButtonHotkey = null;
+    this._articleListVisibleRows = null;
+    this._currentArticleLink = '';
+    this._articleContentVisibleRows = null;
+    this._articleHeaderTextStart = null;
+    this._articleHeaderTextWidth = null;
+    this._articleHeaderBaseline = null;
+    this._articleHeaderAttr = null;
+    this._articleLinkButtonWidth = null;
+    this._articleLinkButtonX = null;
+    this._articleLinkButtonY = null;
+    this._articleLinkButtonWidth = null;
+    this._articleLinkButtonX = null;
+    this._articleLinkButtonY = null;
 };
 
 NewsReader.prototype.enter = function (done) {
@@ -458,6 +518,7 @@ NewsReader.prototype._buildCategories = function () {
 };
 
 NewsReader.prototype._destroyArticleIcon = function () {
+    this._destroyArticlePreviewFrame();
     var frames = [
         'articleHeaderTextFrame',
         'articleHeaderLabelFrame',
@@ -485,11 +546,84 @@ NewsReader.prototype._destroyArticleIcon = function () {
     this._articleHeaderHeight = null;
     this._articleHeaderHasIcon = null;
     this._articleHeaderHasCategory = null;
+    this._articleHeaderTextStart = null;
+    this._articleHeaderTextWidth = null;
+    this._articleHeaderBaseline = null;
+    this._articleHeaderAttr = null;
     if (this.headerFrame && typeof this._headerDefaultAttr === 'number') {
         try { this.headerFrame.attr = this._headerDefaultAttr; } catch (_eAttr) { }
         try { this.headerFrame.clear(this._headerDefaultAttr); } catch (_eClr) { }
     }
 };
+
+NewsReader.prototype._destroyArticlePreviewFrame = function () {
+    if (this.articleImagePreviewFrame) {
+        try { this.articleImagePreviewFrame.close(); } catch (_ePrev) { }
+        if (this._myFrames) {
+            var idx = this._myFrames.indexOf(this.articleImagePreviewFrame);
+            if (idx !== -1) this._myFrames.splice(idx, 1);
+        }
+        this.articleImagePreviewFrame = null;
+    }
+};
+
+NewsReader.prototype._destroyArticleLinkButton = function () {
+    if (this.articleLinkButton && typeof this.articleLinkButton.destroy === 'function') {
+        try { this.articleLinkButton.destroy(); } catch (_eBtn) { }
+    }
+    this.articleLinkButton = null;
+    if (this.articleLinkButtonFrame) {
+        try { this.articleLinkButtonFrame.close(); } catch (_eBtnFrame) { }
+        if (this._myFrames) {
+            var idx = this._myFrames.indexOf(this.articleLinkButtonFrame);
+            if (idx !== -1) this._myFrames.splice(idx, 1);
+        }
+    }
+    this.articleLinkButtonFrame = null;
+    if (this.articleHeaderFrame) {
+        var clearX = Math.max(1, this._articleLinkButtonX || this._articleHeaderTextStart || 1);
+        var clearY = Math.max(1, this._articleLinkButtonY || (this._articleHeaderBaseline || 1) + 1);
+        var clearWidth = this._articleLinkButtonWidth || this._articleHeaderTextWidth || 0;
+        this._clearArticleHeaderButtonArea(clearX, clearY, clearWidth, 2);
+    }
+    this._articleContentStartRow = this.articleTextOffset;
+    if (this._articleButtonHotkey && this._hotspotMap) {
+        delete this._hotspotMap[this._articleButtonHotkey];
+    }
+    this._articleButtonHotkey = null;
+    this._currentArticleLink = '';
+    this._articleContentVisibleRows = null;
+    this._articleLinkButtonWidth = null;
+    this._articleLinkButtonX = null;
+    this._articleLinkButtonY = null;
+};
+NewsReader.prototype._clearImageAnsiCache = function () {
+    this.imageAnsiCache = {};
+    this._imageAnsiOrder = [];
+    this._imageAnsiErrors = {};
+};
+
+NewsReader.prototype._touchImageCacheKey = function (url) {
+    if (!url) return;
+    this._imageAnsiOrder = this._imageAnsiOrder || [];
+    var idx = this._imageAnsiOrder.indexOf(url);
+    if (idx !== -1) this._imageAnsiOrder.splice(idx, 1);
+    this._imageAnsiOrder.push(url);
+};
+
+NewsReader.prototype._cacheImagePreview = function (url, preview) {
+    if (!url || !preview) return;
+    this.imageAnsiCache = this.imageAnsiCache || {};
+    this._imageAnsiOrder = this._imageAnsiOrder || [];
+    this.imageAnsiCache[url] = preview;
+    this._touchImageCacheKey(url);
+    while (this._imageAnsiOrder.length > IMAGE_CACHE_LIMIT) {
+        var evict = this._imageAnsiOrder.shift();
+        if (evict) delete this.imageAnsiCache[evict];
+    }
+};
+
+
 
 NewsReader.prototype._iconExists = function (iconName) {
     if (!iconName) return false;
@@ -1058,17 +1192,10 @@ NewsReader.prototype._registerArticleHeaderHotspot = function () {
 
     this._hotspotMap = this._hotspotMap || {};
 
-    function nextChar(map, chars) {
-        for (var i = 0; i < chars.length; i++) {
-            if (!map.hasOwnProperty(chars[i])) return chars[i];
-        }
-        return null;
-    }
-
     for (var s = 0; s < sections.length; s++) {
         var entry = sections[s];
         if (!entry || !entry.frame) continue;
-        var cmd = nextChar(this._hotspotMap, chars);
+        var cmd = this._reserveHotspotChar();
         if (!cmd) break;
         var frame = entry.frame;
         var minX = baseX + frame.x - 1;
@@ -1412,6 +1539,7 @@ NewsReader.prototype._drawArticles = function () {
     this._destroyCategoryIcons();
     this._destroyFeedIcons();
     this._gridLayout = null;
+    this._destroyArticleLinkButton();
     this._setHeader((this.currentFeed ? this.currentFeed.label : 'Feed') + ' Articles');
     if (!this.currentArticles.length) {
         this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
@@ -1419,161 +1547,183 @@ NewsReader.prototype._drawArticles = function () {
         this.listFrame.putmsg('No articles available.');
         return;
     }
-    var self = this;
-    this._renderList(this.currentArticles, function (article, idx) {
-        var prefix = (idx + 1) + '. ';
-        var title = article.title || '[untitled]';
-        if (article && typeof article.__newsImages === 'undefined') {
-            article.__newsImages = self._extractArticleImages(article);
+    for (var i = 0; i < this.currentArticles.length; i++) {
+        var art = this.currentArticles[i];
+        if (art && typeof art.__newsImages === 'undefined') {
+            art.__newsImages = this._extractArticleImages(art);
         }
-        var hasImages = article && article.__newsImages && article.__newsImages.length;
-        var suffix = hasImages ? ' [IMG]' : '';
-        return prefix + title + suffix;
-    });
+    }
+    this._renderArticleListWithDates();
     this._setStatus('ENTER=view article  BACKSPACE=feeds');
 };
+
 
 NewsReader.prototype._drawArticleImages = function () {
     this._destroyCategoryIcons();
     this._destroyFeedIcons();
     this._gridLayout = null;
-    this._ensureArticleIcon(false);
-    var title = 'Article Images';
-    if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
-        var articleTitle = this.currentArticles[this.articleIndex].title || 'Article';
-        title = 'Images: ' + articleTitle;
-    }
-    this._setHeader(this._toDisplayText(title));
+    this._destroyArticleLinkButton();
+
+    var images = this.articleImages || [];
+    var article = (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) ? this.currentArticles[this.articleIndex] : null;
+    var articleTitle = article ? (article.title || '') : '';
+
+    this._setHeader(this._toDisplayText(articleTitle ? 'Images: ' + articleTitle : 'Article Images'));
     this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
-    var urls = this.articleImages || [];
-    if (!urls.length) {
-        this.listFrame.gotoxy(1, 1);
+
+    if (!images.length) {
+        this._ensureArticleIcon({ showIcon: false, headerLines: ['No images available'], forceHeight: 1 });
+        this._destroyArticlePreviewFrame();
+        this.listFrame.gotoxy(1, this._articleHeaderHeight || 1);
         this.listFrame.putmsg('No images found.');
         this._setStatus('ENTER=read article  BACKSPACE=articles');
         return;
     }
-    if (this.imageSelection >= urls.length) this.imageSelection = urls.length - 1;
+
+    if (this.imageSelection >= images.length) this.imageSelection = images.length - 1;
     if (this.imageSelection < 0) this.imageSelection = 0;
 
-    var previewTop = 1;
-    var selectedUrl = urls[this.imageSelection];
+    var selectedImage = images[this.imageSelection];
+    var selectedUrl = selectedImage.url;
     var previousPreviewUrl = this._currentPreviewUrl;
     var previewData = this._getImageAnsi(selectedUrl);
-    if (!previewData && urls.length > 1) {
-        var originalIndex = this.imageSelection;
-        for (var attempt = 1; attempt < urls.length; attempt++) {
-            var nextIndex = (originalIndex + attempt) % urls.length;
-            if (nextIndex === originalIndex) break;
-            var candidateUrl = urls[nextIndex];
-            var candidateAnsi = this._getImageAnsi(candidateUrl);
-            if (candidateAnsi) {
-                this.imageSelection = nextIndex;
-                selectedUrl = candidateUrl;
-                previewData = candidateAnsi;
-                this._setStatus('Preview failed on primary image, showing alternate.');
-                break;
-            }
-        }
-    }
     if (selectedUrl !== previousPreviewUrl) this.imagePreviewScroll = 0;
     this._currentPreviewUrl = selectedUrl;
 
-    var totalPreviewLines = previewData ? Math.max(1, this._countAnsiLines(previewData)) : 2;
-    var listStart = Math.min(this.listFrame.height, totalPreviewLines + 1);
-    if (listStart < 1) listStart = 1;
-    var previewDisplayRows = Math.max(1, listStart - 1);
-    var maxPreviewScroll = previewData ? Math.max(0, totalPreviewLines - previewDisplayRows) : 0;
 
-    if (!previewData) this.imagePreviewScroll = 0;
+    var headerWidth = this.listFrame.width || 80;
+    var headerLines = [];
+    var caption = selectedImage.caption || '';
+    function pushWrapped(text) {
+        if (!text) return;
+        var wrapped = this._wrapText(this._toDisplayText(text), headerWidth);
+        for (var wi = 0; wi < wrapped.length; wi++) {
+            if (headerLines.indexOf(wrapped[wi]) === -1) headerLines.push(wrapped[wi]);
+        }
+    }
+    pushWrapped = pushWrapped.bind(this);
+    if (images.length <= 1) {
+        if (articleTitle) pushWrapped(articleTitle);
+        if (caption) pushWrapped(caption);
+    } else {
+        if (caption) pushWrapped(caption);
+        else if (articleTitle) pushWrapped(articleTitle);
+    }
+    if (!headerLines.length) headerLines.push(this._toDisplayText(articleTitle || ''));
+    headerLines = headerLines.slice(0, 2);
+    var headerHeight = Math.max(1, Math.min(2, headerLines.length));
+    this._ensureArticleIcon({ showIcon: false, headerLines: headerLines, forceHeight: headerHeight });
+
+    var headerRows = Math.max(1, this._articleHeaderHeight || headerHeight);
+    var availableRows = Math.max(1, this.listFrame.height - headerRows);
+
+    var totalPreviewLines = previewData ? Math.max(1, this._countAnsiLines(previewData)) : 2;
+    var needThumbnails = images.length > 1;
+    var previewRows;
+    if (needThumbnails && availableRows > 1) previewRows = Math.max(1, Math.min(availableRows - 1, totalPreviewLines));
+    else previewRows = Math.max(1, Math.min(availableRows, totalPreviewLines));
+    var maxPreviewScroll = previewData ? Math.max(0, totalPreviewLines - previewRows) : 0;
     if (this.imagePreviewScroll < 0) this.imagePreviewScroll = 0;
     if (this.imagePreviewScroll > maxPreviewScroll) this.imagePreviewScroll = maxPreviewScroll;
 
+    this._destroyArticlePreviewFrame();
+    var previewFrame = new Frame(1, headerRows + 1, this.listFrame.width, previewRows, LIST_INACTIVE, this.listFrame);
+    previewFrame.open();
+    previewFrame.clear(LIST_INACTIVE);
+    if (typeof this.registerFrame === 'function') this.registerFrame(previewFrame);
+    this.articleImagePreviewFrame = previewFrame;
+
     if (previewData) {
-        var previewRendered = false;
         try {
-            previewRendered = this._renderAnsiPreview(this.listFrame, previewData, {
+            this._renderAnsiPreview(previewFrame, previewData, {
                 startRow: this.imagePreviewScroll,
-                maxRows: previewDisplayRows
+                maxRows: previewRows
             });
         } catch (_renderErr) {
-            previewRendered = false;
-            log('NewsReader image preview render error: ' + _renderErr);
-        }
-        if (!previewRendered) {
             previewData = null;
+            previewFrame.clear(LIST_INACTIVE);
+            previewFrame.gotoxy(1, 1);
+            previewFrame.putmsg('Preview not available.');
         }
     }
-
     if (!previewData) {
-        this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
         this.imagePreviewScroll = 0;
-        totalPreviewLines = 2;
-        listStart = Math.min(this.listFrame.height, totalPreviewLines + 1);
-        if (listStart < 1) listStart = 1;
-        previewDisplayRows = Math.max(1, listStart - 1);
-        maxPreviewScroll = 0;
-        this.listFrame.attr = LIST_INACTIVE;
-        this.listFrame.gotoxy(1, previewTop);
+        previewFrame.clear(LIST_INACTIVE);
+        previewFrame.gotoxy(1, 1);
         var errMsg = this._imageAnsiErrors ? this._imageAnsiErrors[selectedUrl] : null;
-        if (errMsg) this.listFrame.putmsg('Preview failed: ' + errMsg);
-        else this.listFrame.putmsg('Preview not available.');
+        previewFrame.putmsg(errMsg ? ('Preview failed: ' + errMsg) : 'Preview not available.');
+        maxPreviewScroll = 0;
     }
 
     this._imagePreviewScrollMax = maxPreviewScroll;
-    this._imagePreviewVisibleRows = previewDisplayRows;
+    this._imagePreviewVisibleRows = previewRows;
+
+    var thumbStartRow = headerRows + previewRows + 1;
+    if (thumbStartRow > this.listFrame.height) thumbStartRow = this.listFrame.height;
 
     var previewHotspots = [];
-    if (listStart > 1) {
-        previewHotspots.push({ type: 'image', y: previewTop, rows: previewDisplayRows });
+    previewHotspots.push({ type: 'image', y: headerRows + 1, rows: previewRows });
+
+    var visibleRows = 0;
+    if (images.length > 1) {
+        if (this.imageSelection < this.imageScrollOffset) this.imageScrollOffset = this.imageSelection;
+        visibleRows = Math.max(1, this.listFrame.height - (thumbStartRow - 1));
+        if (this.imageSelection >= this.imageScrollOffset + visibleRows) {
+            this.imageScrollOffset = Math.max(0, this.imageSelection - visibleRows + 1);
+        }
+
+        for (var row = 0; row < visibleRows; row++) {
+            var idx = this.imageScrollOffset + row;
+            if (idx >= images.length) break;
+            var targetRow = thumbStartRow + row;
+            if (targetRow > this.listFrame.height) break;
+            var prefix = '[' + (idx + 1) + '/' + images.length + '] ';
+            var lineText = images[idx].caption ? images[idx].caption : images[idx].url;
+            var display = prefix + this._toDisplayText(lineText);
+            if (display.length > this.listFrame.width) display = display.substr(0, this.listFrame.width);
+            this.listFrame.gotoxy(1, targetRow);
+            this.listFrame.attr = (idx === this.imageSelection) ? LIST_ACTIVE : LIST_INACTIVE;
+            this.listFrame.putmsg(display);
+            previewHotspots.push({ type: 'thumb', index: idx, y: targetRow });
+        }
+        this.listFrame.attr = LIST_INACTIVE;
+    } else {
+        this.imageScrollOffset = 0;
+        this.listFrame.attr = LIST_INACTIVE;
     }
 
-    if (this.imageSelection < this.imageScrollOffset) this.imageScrollOffset = this.imageSelection;
-    var visibleRows = Math.max(1, this.listFrame.height - (listStart - 1));
-    if (this.imageSelection >= this.imageScrollOffset + visibleRows) {
-        this.imageScrollOffset = Math.max(0, this.imageSelection - visibleRows + 1);
-    }
-
-    for (var row = 0; row < visibleRows; row++) {
-        var idx = this.imageScrollOffset + row;
-        var targetRow = listStart + row;
-        if (row === 0) { this.listFrame.attr = LIST_INACTIVE; }
-        if (targetRow > this.listFrame.height) break;
-        if (idx >= urls.length) break;
-        var prefix = '[' + (idx + 1) + '/' + urls.length + '] ';
-        var display = prefix + this._toDisplayText(urls[idx]);
-        if (display.length > this.listFrame.width) display = display.substr(0, this.listFrame.width);
-        this.listFrame.gotoxy(1, targetRow);
-        this.listFrame.attr = (idx === this.imageSelection) ? LIST_ACTIVE : LIST_INACTIVE;
-        this.listFrame.putmsg(display);
-        previewHotspots.push({ type: 'thumb', index: idx, y: targetRow });
-    }
-    this.listFrame.attr = LIST_INACTIVE;
-    var statusIndicator = urls.length ? ('Image ' + (this.imageSelection + 1) + '/' + urls.length + '  ') : '';
+    var statusIndicator = 'Image ' + (this.imageSelection + 1) + '/' + images.length + '  ';
     this._setStatus(statusIndicator + 'LEFT/RIGHT=change image  UP/DOWN=scroll preview  ENTER=read article  BACKSPACE=articles');
 
-    this._registerImageHotspots(previewHotspots, listStart, visibleRows);
+    this._registerImageHotspots(previewHotspots, thumbStartRow, visibleRows);
 };
-
 NewsReader.prototype._drawArticle = function () {
     this._destroyCategoryIcons();
     this._destroyFeedIcons();
     this._gridLayout = null;
-    this._ensureArticleIcon(true);
+    this._destroyArticlePreviewFrame();
+    this._destroyArticleLinkButton();
+    this._ensureArticleIcon({ showIcon: true });
     this._releaseHotspots();
     var header = 'Article';
-    if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
-        header = this.currentArticles[this.articleIndex].title || header;
+    var article = (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) ? this.currentArticles[this.articleIndex] : null;
+    if (article && article.title) {
+        header = article.title;
     }
     this._setHeader(this._toDisplayText(header));
     this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
     if (!this.articleLines.length) {
         this.listFrame.gotoxy(1, 1);
         this.listFrame.putmsg('No content available.');
+        this._articleContentVisibleRows = 0;
         return;
     }
-    var startRow = Math.max(1, this.articleTextOffset);
+    this._renderArticleLinkButton(article);
+    var contentStart = this._articleContentStartRow || this.articleTextOffset;
+    var startRow = Math.max(1, contentStart);
     var height = Math.max(0, this.listFrame.height - (startRow - 1));
     if (height <= 0) height = this.listFrame.height;
+    this._articleContentVisibleRows = height;
     var offset = Math.max(0, this.articleScroll);
     if (offset > Math.max(0, this.articleLines.length - 1)) offset = Math.max(0, this.articleLines.length - 1);
     for (var row = 0; row < height; row++) {
@@ -1582,8 +1732,384 @@ NewsReader.prototype._drawArticle = function () {
         this.listFrame.gotoxy(1, startRow + row);
         this.listFrame.putmsg(this._toDisplayText(this.articleLines[lineIndex]));
     }
-    this._setStatus('UP/DOWN=scroll  BACKSPACE=articles');
+    this._setStatus(this._composeArticleStatus(article));
     this._registerArticleHeaderHotspot();
+};
+
+NewsReader.prototype._composeArticleStatus = function (article) {
+    var parts = ['UP/DOWN=scroll', 'LEFT/RIGHT=change'];
+    var pageSize = (typeof this._articleContentVisibleRows === 'number' && this._articleContentVisibleRows > 0)
+        ? this._articleContentVisibleRows
+        : (this.listFrame ? Math.max(1, this.listFrame.height - 1) : 1);
+    var maxScroll = Math.max(0, this.articleLines.length - pageSize);
+    if (this.articleScroll < maxScroll) parts.push('ENTER=jump to end');
+    else parts.push('ENTER=next');
+    parts.push('BACKSPACE=previous');
+    parts.push('ESC=articles');
+    if (this.articleImages && this.articleImages.length) parts.push('I/i=images');
+    var link = article && article.link ? String(article.link).trim() : '';
+    if (link || this._articleButtonHotkey) {
+        parts.push('R=read link');
+    }
+    return parts.join('  ');
+};
+
+NewsReader.prototype._renderArticleLinkButton = function (article) {
+    if (!this.listFrame) {
+        this._destroyArticleLinkButton();
+        return;
+    }
+    var link = article && article.link ? String(article.link).trim() : '';
+    if (!link) {
+        this._destroyArticleLinkButton();
+        this._articleContentStartRow = this.articleTextOffset;
+        return;
+    }
+    if (!this.articleHeaderFrame) {
+        this._destroyArticleLinkButton();
+        return;
+    }
+    var textStart = (typeof this._articleHeaderTextStart === 'number') ? this._articleHeaderTextStart : 1;
+    var baseline = (typeof this._articleHeaderBaseline === 'number' && this._articleHeaderBaseline > 0) ? this._articleHeaderBaseline : 1;
+    var maxTextWidth = (typeof this._articleHeaderTextWidth === 'number' && this._articleHeaderTextWidth > 0) ? this._articleHeaderTextWidth : (this.articleHeaderFrame.width - textStart + 1);
+    if (!maxTextWidth || maxTextWidth <= 0) {
+        this._destroyArticleLinkButton();
+        return;
+    }
+    var buttonWidth = Math.min(Math.max(10, maxTextWidth), 24);
+    if (buttonWidth > maxTextWidth) buttonWidth = maxTextWidth;
+    if (buttonWidth < 4) buttonWidth = Math.max(4, maxTextWidth);
+    var buttonX = textStart + 28;
+    if (buttonX + buttonWidth - 1 > this.articleHeaderFrame.width) buttonX = Math.max(textStart, this.articleHeaderFrame.width - buttonWidth + 1);
+    if (buttonX < textStart) buttonX = textStart;
+    var buttonY = baseline - 1;
+    if (buttonY < 1) buttonY = 1;
+    if (buttonY + 1 > this.articleHeaderFrame.height) buttonY = Math.max(1, this.articleHeaderFrame.height - 1);
+    var baseAttr = LIST_INACTIVE;
+    var focusAttr = LIST_ACTIVE;
+    var fgRead = (typeof WHITE === 'number') ? WHITE : null;
+    var buttonAttr = this._composeAttrWithFg(baseAttr, fgRead);
+    var shadowFg = (typeof DARKGRAY === 'number') ? DARKGRAY : null;
+    var shadowAttr = this._composeAttrWithFg(baseAttr, shadowFg);
+
+    this._clearArticleHeaderButtonArea(buttonX, buttonY, buttonWidth, 2);
+
+    if (!this.articleLinkButtonFrame) {
+        try {
+            this.articleLinkButtonFrame = new Frame(buttonX, buttonY, buttonWidth, 2, buttonAttr, this.articleHeaderFrame);
+            this.articleLinkButtonFrame.open();
+            if (typeof this.registerFrame === 'function') this.registerFrame(this.articleLinkButtonFrame);
+        } catch (_eBtnFrameCreate) {
+            this.articleLinkButtonFrame = null;
+        }
+    } else {
+        try {
+            if (typeof this.articleLinkButtonFrame.moveTo === 'function') {
+                this.articleLinkButtonFrame.moveTo(buttonX, buttonY);
+            }
+            if (typeof this.articleLinkButtonFrame.resize === 'function') {
+                this.articleLinkButtonFrame.resize(buttonWidth, 2);
+            }
+            if (typeof this.articleLinkButtonFrame.clear === 'function') {
+                this.articleLinkButtonFrame.clear(buttonAttr);
+            }
+        } catch (_eBtnFrameMove) { }
+    }
+
+    if (!this.articleLinkButtonFrame) {
+        this._articleContentStartRow = this.articleTextOffset;
+        return;
+    }
+
+    var callback = this._createArticleLinkButtonHandler(link);
+    if (!this.articleLinkButton) {
+        try {
+            this.articleLinkButton = new Button({
+                frame: this.articleLinkButtonFrame,
+                parentFrame: this.articleHeaderFrame,
+                label: 'Read Link',
+                attr: buttonAttr,
+                focusAttr: focusAttr,
+                shadowAttr: shadowAttr,
+                backgroundColors: [RED],
+                shadowColors: [BLACK, BG_RED],
+                onClick: callback
+            });
+        } catch (_eBtnInit) {
+            this._destroyArticleLinkButton();
+            this._articleContentStartRow = this.articleTextOffset;
+            return;
+        }
+    } else {
+        this.articleLinkButton.setLabel('Read Link');
+        this.articleLinkButton.setOnClick(callback);
+        this.articleLinkButton.parentFrame = this.articleHeaderFrame || null;
+        this.articleLinkButton.backgroundColors = [RED];
+        this.articleLinkButton.shadowColors = [BLACK, BG_RED];
+    }
+
+    this.articleLinkButton.setFocused(true);
+    this.articleLinkButton.render();
+
+    this._articleContentStartRow = this.articleTextOffset;
+
+    this._registerArticleLinkButtonHotspot();
+    this._currentArticleLink = link;
+    this._articleLinkButtonWidth = buttonWidth;
+    this._articleLinkButtonX = buttonX;
+    this._articleLinkButtonY = buttonY;
+};
+
+NewsReader.prototype._clearArticleHeaderButtonArea = function (startX, startY, width, height) {
+    if (!this.articleHeaderFrame) return;
+    if (!width || width <= 0) return;
+    var attr = (typeof this._articleHeaderAttr === 'number') ? this._articleHeaderAttr : this.articleHeaderFrame.attr;
+    var clampedWidth = Math.max(1, Math.min(width, this.articleHeaderFrame.width - startX + 1));
+    var spaces = new Array(clampedWidth + 1).join(' ');
+    var beginY = Math.max(1, startY);
+    var endY = Math.min(this.articleHeaderFrame.height, beginY + Math.max(1, height) - 1);
+    var x = Math.max(1, Math.min(startX, this.articleHeaderFrame.width));
+    for (var y = beginY; y <= endY; y++) {
+        try {
+            this.articleHeaderFrame.attr = attr;
+            this.articleHeaderFrame.gotoxy(x, y);
+            this.articleHeaderFrame.putmsg(spaces);
+        } catch (_eClrArea) { }
+    }
+    this.articleHeaderFrame.attr = attr;
+};
+
+NewsReader.prototype._registerArticleLinkButtonHotspot = function () {
+    if (!this.articleLinkButtonFrame || typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    this._hotspotMap = this._hotspotMap || {};
+    if (this._articleButtonHotkey && this._hotspotMap[this._articleButtonHotkey]) {
+        delete this._hotspotMap[this._articleButtonHotkey];
+    }
+    this._articleButtonHotkey = null;
+    var cmd = this._reserveHotspotChar();
+    if (!cmd) return;
+    var frame = this.articleLinkButtonFrame;
+    if (!frame) return;
+    var baseX = this.listFrame ? this.listFrame.x : 1;
+    var baseY = this.listFrame ? this.listFrame.y : 1;
+    if (this.articleHeaderFrame) {
+        baseX += this.articleHeaderFrame.x - 1;
+        baseY += this.articleHeaderFrame.y - 1;
+    }
+    var minX = baseX + frame.x - 1;
+    var maxX = minX + frame.width - 1;
+    var minY = baseY + frame.y - 1;
+    var maxY = minY + frame.height - 1;
+    for (var y = minY; y <= maxY; y++) {
+        try { console.add_hotspot(cmd, false, minX, maxX, y); } catch (_eHotBtn) { }
+    }
+    this._hotspotMap[cmd] = { type: 'articleLinkButton' };
+    this._articleButtonHotkey = cmd;
+};
+
+NewsReader.prototype._reserveHotspotChar = function () {
+    var chars = this._ensureHotspotChars();
+    if (!chars || !chars.length) return null;
+    this._hotspotMap = this._hotspotMap || {};
+    for (var i = 0; i < chars.length; i++) {
+        if (!this._hotspotMap.hasOwnProperty(chars[i])) return chars[i];
+    }
+    return null;
+};
+
+NewsReader.prototype._createArticleLinkButtonHandler = function (link) {
+    var self = this;
+    return function () {
+        self._handleArticleButtonActivation(link);
+    };
+};
+
+NewsReader.prototype._handleArticleButtonActivation = function (link) {
+    if (!link && this._currentArticleLink) link = this._currentArticleLink;
+    if (!link) {
+        this._setStatus('No link available for this article.');
+        return;
+    }
+    var message = 'TODO: fetch link and sanitize it -> ' + link;
+    if (typeof log === 'function') {
+        try { log(message); } catch (_eLog) { }
+    }
+    if (typeof console !== 'undefined' && typeof console.putmsg === 'function') {
+        try { console.putmsg('\r\n' + message + '\r\n'); } catch (_eCon) { }
+    }
+    this._setStatus('Logged link (TODO sanitize): ' + this._toDisplayText(link));
+};
+
+NewsReader.prototype._renderArticleListWithDates = function () {
+    if (!this.listFrame) {
+        this._releaseHotspots();
+        return;
+    }
+    var articles = this.currentArticles || [];
+    var frame = this.listFrame;
+    var height = frame.height || 0;
+
+    this._articleListVisibleRows = height;
+
+    this._ensureArticleScrollVisibility(height);
+    this._resetFrameSurface(frame, LIST_INACTIVE);
+
+    var rowHotspots = [];
+    if (!articles.length || height <= 0) {
+        this._registerListHotspots(rowHotspots);
+        return;
+    }
+
+    var startIndex = Math.max(0, Math.min(this.scrollOffset, articles.length - 1));
+    var idx = startIndex;
+    var row = 0;
+    var prevInfo = (startIndex > 0) ? this._getArticleDateInfo(articles[startIndex - 1]) : null;
+    var lastKey = prevInfo && prevInfo.dateKey ? prevInfo.dateKey : null;
+    var forceDateLine = true;
+
+    while (row < height && idx < articles.length) {
+        var article = articles[idx];
+        var info = this._getArticleDateInfo(article);
+        var dateKey = (info && info.dateKey) ? info.dateKey : '__unknown';
+        var dateLabel = (info && info.displayDate) ? info.displayDate : 'Unknown Date';
+
+        var shouldRenderDate = forceDateLine || dateKey !== lastKey;
+        var rowsRemaining = height - row;
+        if (shouldRenderDate && rowsRemaining === 1) shouldRenderDate = false;
+
+        if (shouldRenderDate && rowsRemaining > 0) {
+            frame.gotoxy(1, row + 1);
+            var dividerAttr = this._composeAttrWithFg(LIST_INACTIVE, (typeof LIGHTMAGENTA === 'number') ? LIGHTMAGENTA : null);
+            frame.attr = dividerAttr;
+            var dividerText = this._toDisplayText(dateLabel);
+            if (dividerText.length > frame.width) dividerText = dividerText.substr(0, frame.width);
+            frame.putmsg(dividerText);
+            row++;
+            if (row >= height) break;
+            lastKey = dateKey;
+        }
+
+        forceDateLine = false;
+
+        var baseAttr = (idx === this.selectedIndex) ? LIST_ACTIVE : LIST_INACTIVE;
+        var prefix = (idx + 1) + '. ';
+        var numberText = this._toDisplayText(prefix);
+        var titleSource = article && article.title ? article.title : '[untitled]';
+        var titleText = this._toDisplayText(titleSource);
+        var hasImages = article && article.__newsImages && article.__newsImages.length;
+        var timeSegment = this._formatArticleTimeSegment(info);
+
+        var frameWidth = frame.width || 0;
+        var remaining = frameWidth;
+
+        frame.gotoxy(1, row + 1);
+
+        var writeSegment = function (text, attr) {
+            if (!text || !text.length || remaining <= 0) return;
+            var output = text;
+            if (output.length > remaining) output = output.substr(0, remaining);
+            var effectiveAttr = (typeof attr === 'number') ? attr : baseAttr;
+            frame.attr = effectiveAttr;
+            frame.putmsg(output);
+            remaining -= output.length;
+        };
+
+        if (timeSegment && timeSegment.length) {
+            var timeAttr = this._composeAttrWithFg(baseAttr, (typeof MAGENTA === 'number') ? MAGENTA : null);
+            writeSegment(timeSegment, timeAttr);
+        }
+        if (timeSegment && timeSegment.length && remaining > 0) {
+            writeSegment(' ', baseAttr);
+        }
+
+        var numberAttr = this._composeAttrWithFg(baseAttr, (typeof DARKGRAY === 'number') ? DARKGRAY : null);
+        var titleAttr = this._composeAttrWithFg(baseAttr, (typeof WHITE === 'number') ? WHITE : null);
+        writeSegment(numberText, numberAttr);
+        writeSegment(titleText, titleAttr);
+
+        if (hasImages && remaining > 0) {
+            var bracketAttr = this._composeAttrWithFg(baseAttr, (typeof YELLOW === 'number') ? YELLOW : null);
+            var imgAttr = this._composeAttrWithFg(baseAttr, (typeof LIGHTCYAN === 'number') ? LIGHTCYAN : null);
+            writeSegment(' ', baseAttr);
+            writeSegment('[', bracketAttr);
+            writeSegment('IMG', imgAttr);
+            writeSegment(']', bracketAttr);
+        }
+
+        frame.attr = LIST_INACTIVE;
+
+        rowHotspots.push({ index: idx, y: row + 1 });
+        row++;
+        idx++;
+        lastKey = dateKey;
+    }
+
+    frame.attr = LIST_INACTIVE;
+    this._registerListHotspots(rowHotspots);
+};
+
+NewsReader.prototype._ensureArticleScrollVisibility = function (height) {
+    var articles = this.currentArticles || [];
+    if (!articles.length) {
+        this.scrollOffset = 0;
+        if (this.selectedIndex !== 0) this.selectedIndex = 0;
+        return;
+    }
+    if (this.selectedIndex < 0) this.selectedIndex = 0;
+    if (this.selectedIndex >= articles.length) this.selectedIndex = articles.length - 1;
+    if (this.scrollOffset < 0) this.scrollOffset = 0;
+    if (this.scrollOffset >= articles.length) this.scrollOffset = Math.max(0, articles.length - 1);
+    if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
+
+    if (height <= 0) height = 1;
+
+    while (this.scrollOffset < this.selectedIndex) {
+        var rowsNeeded = this._countArticleRowsInRange(this.scrollOffset, this.selectedIndex);
+        if (rowsNeeded <= height) break;
+        this.scrollOffset++;
+    }
+
+    while (this.scrollOffset > 0) {
+        var projected = this.scrollOffset - 1;
+        var projectedRows = this._countArticleRowsInRange(projected, this.selectedIndex);
+        if (projectedRows > height) break;
+        this.scrollOffset = projected;
+    }
+};
+
+NewsReader.prototype._countArticleRowsInRange = function (startIndex, endIndex) {
+    var articles = this.currentArticles || [];
+    if (!articles.length) return 0;
+    if (typeof startIndex !== 'number') startIndex = 0;
+    if (typeof endIndex !== 'number') endIndex = 0;
+    if (startIndex < 0) startIndex = 0;
+    if (endIndex < 0) endIndex = 0;
+    if (startIndex >= articles.length) startIndex = articles.length - 1;
+    if (endIndex >= articles.length) endIndex = articles.length - 1;
+    var min = Math.min(startIndex, endIndex);
+    var max = Math.max(startIndex, endIndex);
+    var count = 0;
+    var lastKey = null;
+    for (var i = min; i <= max; i++) {
+        var info = this._getArticleDateInfo(articles[i]);
+        var key = (info && info.dateKey) ? info.dateKey : '__unknown';
+        if (i === min) {
+            count++;
+        } else if (key !== lastKey) {
+            count++;
+        }
+        lastKey = key;
+        count++;
+    }
+    return count;
+};
+
+NewsReader.prototype._composeAttrWithFg = function (baseAttr, fgAttr) {
+    if (typeof baseAttr !== 'number') baseAttr = 0;
+    if (typeof fgAttr !== 'number') return baseAttr;
+    var blinkBit = baseAttr & 0x80;
+    var bgBits = baseAttr & 0x70;
+    return (fgAttr & 0x0F) | bgBits | blinkBit;
 };
 
 NewsReader.prototype._renderList = function (items, formatter) {
@@ -1627,6 +2153,7 @@ NewsReader.prototype._cleanup = function () {
         this[key] = null;
     }
     this._releaseHotspots();
+    this._destroyArticleLinkButton();
     this._resetState();
 };
 
@@ -1717,7 +2244,7 @@ NewsReader.prototype._prepareArticleLines = function (article) {
         lines.push('');
         lines.push(this._toDisplayText('Link: ' + article.link));
     }
-    return lines;
+    return this._collapseBlankLines(lines);
 };
 
 NewsReader.prototype._stringifyField = function (value) {
@@ -1771,6 +2298,63 @@ NewsReader.prototype._wrapText = function (text, width) {
         result.push(line);
     }
     return result;
+};
+
+NewsReader.prototype._collapseBlankLines = function (lines) {
+    if (!Array.isArray(lines)) return [];
+    var out = [];
+    var blankSeen = false;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var isBlank = !line || !String(line).trim();
+        if (isBlank) {
+            if (!blankSeen && out.length) {
+                out.push('');
+            }
+            blankSeen = true;
+        } else {
+            out.push(line);
+            blankSeen = false;
+        }
+    }
+    while (out.length && !String(out[0]).trim()) out.shift();
+    while (out.length && !String(out[out.length - 1]).trim()) out.pop();
+    return out;
+};
+
+NewsReader.prototype._asciiCharForCode = function (code) {
+    if (code == null || isNaN(code)) return '';
+    if (Object.prototype.hasOwnProperty.call(NEWSREADER_ASCII_ENTITY_MAP, code)) {
+        return NEWSREADER_ASCII_ENTITY_MAP[code];
+    }
+    if (code >= 32 && code <= 126) return String.fromCharCode(code);
+    if (code === 10) return '\n';
+    if (code === 13) return '\r';
+    return '';
+};
+
+NewsReader.prototype._replaceNumericEntities = function (text) {
+    if (!text) return '';
+    var self = this;
+    return String(text).replace(/&#(x?[0-9a-fA-F]+);/g, function (_match, value) {
+        var code;
+        if (!value) return '';
+        if (value.charAt(0).toLowerCase() === 'x') code = parseInt(value.substr(1), 16);
+        else code = parseInt(value, 10);
+        if (isNaN(code)) return '';
+        return self._asciiCharForCode(code);
+    });
+};
+
+NewsReader.prototype._replaceUnicodePunctuation = function (text) {
+    if (!text) return '';
+    var self = this;
+    return String(text).replace(/[\u00A0\u2018\u2019\u201A\u201C\u201D\u201E\u2013\u2014\u2022\u2026\u2122]/g, function (ch) {
+        if (Object.prototype.hasOwnProperty.call(NEWSREADER_UNICODE_PUNCT_MAP, ch)) {
+            return NEWSREADER_UNICODE_PUNCT_MAP[ch];
+        }
+        return self._asciiCharForCode(ch.charCodeAt(0));
+    });
 };
 
 NewsReader.prototype.handleKey = function (key) {
@@ -1930,23 +2514,17 @@ NewsReader.prototype.handleKey = function (key) {
             if (this._hotspotMap && this._hotspotMap[key]) {
                 var mapEntry = this._hotspotMap[key];
                 if (mapEntry && mapEntry.type === 'articleHeaderBack') {
-                    this._destroyArticleIcon();
-                    this.state = 'articles';
-                    if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
-                        this.selectedIndex = this.articleIndex;
-                    }
-                    this.scrollOffset = Math.max(0, Math.min(this._articleListScroll || 0, Math.max(0, this.currentArticles.length - 1)));
-                    if (this.listFrame) {
-                        var visible = Math.max(1, this.listFrame.height);
-                        if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
-                        else if (this.selectedIndex >= this.scrollOffset + visible) this.scrollOffset = Math.max(0, this.selectedIndex - visible + 1);
-                    }
-                    this.articleIndex = -1;
-                    this.draw();
+                    this._returnToArticlesFromHeaderBack();
                     break;
                 }
                 if (mapEntry && mapEntry.type === 'articleHeaderCategory') {
                     this._returnToFeedsFromArticle();
+                    break;
+                }
+                if (mapEntry && mapEntry.type === 'articleLinkButton') {
+                    if (!this._triggerArticleLinkButton()) {
+                        this._setStatus('No link available for this article.');
+                    }
                     break;
                 }
             }
@@ -2224,6 +2802,10 @@ NewsReader.prototype._handleImageNavigation = function (key) {
         case '\n':
             this._enterArticleContent();
             break;
+        case 'I':
+        case 'i':
+            this._enterArticleContent();
+            break;
         case '\x1B':
         case '\b':
         case '\x08':
@@ -2241,53 +2823,62 @@ NewsReader.prototype._enterArticleContent = function () {
     this.articleScroll = 0;
     this.scrollOffset = 0;
     this._releaseHotspots();
-    this._ensureArticleIcon(true);
-    var status = this.articleImages && this.articleImages.length ? 'UP/DOWN=scroll  I=images  BACKSPACE=articles' : 'UP/DOWN=scroll  BACKSPACE=articles';
-    this._setStatus(status);
+    this._destroyArticlePreviewFrame();
+    this._ensureArticleIcon({ showIcon: true });
+    this._setStatus('Loading article...');
     this.draw();
 };
 
-NewsReader.prototype._ensureArticleIcon = function (showIcon) {
+
+NewsReader.prototype._ensureArticleIcon = function (options) {
     if (!this.listFrame || !this.currentFeed) {
         this._destroyArticleIcon();
         return;
     }
-    var iconName = this._iconNameForFeed(this.currentFeed);
-    if (!iconName) {
-        this._destroyArticleIcon();
-        return;
-    }
+    if (typeof options === 'boolean') options = { showIcon: options };
+    options = options || {};
+
+    var useIcon = (options.showIcon !== false);
+    var headerOverride = Array.isArray(options.headerLines) ? options.headerLines.slice() : null;
+    var forcedHeight = (typeof options.forceHeight === 'number') ? options.forceHeight : null;
 
     var metrics = this._getIconMetrics();
-    var useIcon = (showIcon === false) ? false : true;
-    var categoryIconName = '';
+    var headerWidth = this.listFrame.width || 80;
+
     var categoryObj = this.currentCategory || null;
-    if (!categoryObj && this.currentFeed && this.currentFeed.category) {
-        var targetCat = this.currentFeed.category;
-        if (this.categories && this.categories.length) {
-            for (var ci = 0; ci < this.categories.length; ci++) {
-                var cat = this.categories[ci];
-                if (!cat) continue;
-                if (cat._key === targetCat || cat.name === targetCat) { categoryObj = cat; break; }
-            }
+    if (!categoryObj && this.categories && this.categories.length && this.currentFeed && this.currentFeed.category) {
+        for (var ci = 0; ci < this.categories.length; ci++) {
+            var cat = this.categories[ci];
+            if (!cat) continue;
+            if (cat._key === this.currentFeed.category || cat.name === this.currentFeed.category) { categoryObj = cat; break; }
         }
     }
-    if (categoryObj) {
-        categoryIconName = this._iconNameForCategory(categoryObj);
-    } else if (this.currentFeed && this.currentFeed.category_icon) {
-        categoryIconName = this.currentFeed.category_icon;
-    }
+
+    var iconName = this._iconNameForFeed(this.currentFeed) || '';
+    if (!iconName) useIcon = false;
+    var categoryIconName = categoryObj ? this._iconNameForCategory(categoryObj) : '';
     var hasCategoryIcon = useIcon && !!categoryIconName;
+
+    var containerHeight;
+    if (useIcon) containerHeight = Math.max(metrics.height + 1, 2);
+    else {
+        if (forcedHeight != null) containerHeight = Math.max(1, Math.min(2, forcedHeight));
+        else if (headerOverride && headerOverride.length) containerHeight = Math.max(1, Math.min(2, headerOverride.length));
+        else containerHeight = 1;
+    }
+    if (containerHeight > 1) containerHeight -= 1;
+    var minHeight = (this.state === 'article') ? 4 : 2;
+    containerHeight = Math.max(containerHeight, minHeight);
     this._articleHeaderIconWidth = useIcon ? metrics.width : 0;
-    var containerHeight = useIcon ? Math.max(metrics.height + 1, 2) : 1;
     this._articleHeaderHeight = containerHeight;
-    var containerAttr = 0;
+
     var bgRed = (typeof BG_RED === 'number') ? BG_RED : ((typeof RED === 'number') ? (RED << 4) : ((typeof LIST_ACTIVE === 'number') ? (LIST_ACTIVE & 0x70) : 0));
     var fgBlack = (typeof BLACK === 'number') ? BLACK : 0;
-    containerAttr = bgRed | fgBlack;
+    var containerAttr = bgRed | fgBlack;
 
     var needsRebuild = true;
     if (this.articleHeaderFrame && this._currentIconKey === iconName && this._articleHeaderHasIcon === useIcon && this._articleHeaderHasCategory === hasCategoryIcon) needsRebuild = false;
+
     if (!needsRebuild) {
         if (this.headerFrame && typeof this.headerFrame.attr === 'number') {
             try { this.headerFrame.attr = containerAttr; } catch (_eAttrHdr) { }
@@ -2304,8 +2895,10 @@ NewsReader.prototype._ensureArticleIcon = function (showIcon) {
         if (!useIcon) {
             this.articleIconFrame = null;
             this.articleIconObj = null;
+            this.articleHeaderLabelFrame = null;
             this.articleCategoryIconFrame = null;
             this.articleCategoryIconObj = null;
+            this.articleCategoryLabelFrame = null;
         }
     } else {
         this._destroyArticleIcon();
@@ -2366,8 +2959,7 @@ NewsReader.prototype._ensureArticleIcon = function (showIcon) {
 
     if (useIcon && this.articleIconFrame) {
         if (!this.articleIconObj) {
-            var iconData = { iconFile: iconName, label: '', iconBg: bgRed, iconFg: fgBlack };
-            this.articleIconObj = new Icon(this.articleIconFrame, this.articleHeaderLabelFrame, iconData);
+            this.articleIconObj = new Icon(this.articleIconFrame, this.articleHeaderLabelFrame, { iconFile: iconName, label: '', iconBg: bgRed, iconFg: fgBlack });
         }
         if (this.articleIconObj && typeof this.articleIconObj.render === 'function') {
             try { this.articleIconObj.render(); } catch (_erIco) { }
@@ -2391,33 +2983,45 @@ NewsReader.prototype._ensureArticleIcon = function (showIcon) {
         this.articleCategoryLabelFrame = null;
     }
 
+    var headerLines = [];
+    if (headerOverride) {
+        for (var ho = 0; ho < headerOverride.length; ho++) {
+            var wrapped = this._wrapText(this._toDisplayText(headerOverride[ho]), headerWidth);
+            headerLines = headerLines.concat(wrapped);
+        }
+    } else {
+        var article = (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) ? this.currentArticles[this.articleIndex] : null;
+        var title = '';
+        if (article && article.title) title = article.title;
+        else if (this.currentFeed && this.currentFeed.label) title = this.currentFeed.label;
+        if (title) headerLines = headerLines.concat(this._wrapText(this._toDisplayText(title), headerWidth));
+        var author = this._extractArticleAuthor(article);
+        var dateStr = this._extractArticleDate(article);
+        var metaParts = [];
+        if (author) metaParts.push(author);
+        if (dateStr) metaParts.push(dateStr);
+        if (metaParts.length) headerLines.push(this._toDisplayText(metaParts.join('  ')));
+    }
+    if (!headerLines.length) headerLines.push('');
+    var effectiveHeight = useIcon ? containerHeight : Math.max(1, Math.min(2, containerHeight));
+    var reservedRows = (this.state === 'article') ? 1 : 0;
+    var maxTextRows = Math.max(1, containerHeight - reservedRows);
+    if (headerLines.length > maxTextRows) headerLines = headerLines.slice(0, maxTextRows);
+    while (headerLines.length < maxTextRows) headerLines.push('');
+
     if (this.articleHeaderTextFrame) {
         try {
             this.articleHeaderTextFrame.clear(containerAttr);
             var width = this.articleHeaderTextFrame.width;
             var height = this.articleHeaderTextFrame.height;
-            var lines = [];
-            var article = (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) ? this.currentArticles[this.articleIndex] : null;
-            var title = '';
-            if (article && article.title) title = article.title;
-            else if (this.currentFeed && this.currentFeed.label) title = this.currentFeed.label;
-            if (title) {
-                lines = lines.concat(this._wrapText(this._toDisplayText(title), width));
-            }
-            var author = this._extractArticleAuthor(article);
-            var dateStr = this._extractArticleDate(article);
-            var metaParts = [];
-            if (author) metaParts.push(author);
-            if (dateStr) metaParts.push(dateStr);
-            if (metaParts.length) lines.push(this._toDisplayText(metaParts.join('  ')));
             var bgNibble = containerAttr & 0x70;
             var blinkBit = containerAttr & 0x80;
             var baseFg = containerAttr & 0x0F;
             var altFg = (typeof DARKGRAY === 'number') ? DARKGRAY : ((typeof LIGHTGRAY === 'number') ? LIGHTGRAY : baseFg);
             var altAttr = bgNibble | (altFg & 0x0F) | blinkBit;
 
-            for (var i = 0; i < lines.length && i < height; i++) {
-                var text = lines[i];
+            for (var i = 0; i < headerLines.length && i < height; i++) {
+                var text = headerLines[i];
                 if (text.length > width) text = text.substr(0, width);
                 this.articleHeaderTextFrame.gotoxy(1, i + 1);
                 this.articleHeaderTextFrame.attr = (i % 2 === 0) ? containerAttr : altAttr;
@@ -2427,23 +3031,28 @@ NewsReader.prototype._ensureArticleIcon = function (showIcon) {
         } catch (_eTxt) { }
     }
 
-    this.articleTextOffset = useIcon ? (containerHeight + 1) : 1;
+    this.articleTextOffset = useIcon ? (containerHeight + 1) : (containerHeight + 1);
+    if (!useIcon && containerHeight === 1) this.articleTextOffset = 1;
     if (this.articleTextOffset < 1) this.articleTextOffset = 1;
     this._currentIconKey = iconName;
     this._articleHeaderHasIcon = useIcon;
     this._articleHeaderHasCategory = hasCategoryIcon;
+    this._articleHeaderTextStart = textStart;
+    this._articleHeaderTextWidth = Math.max(1, textWidth);
+    this._articleHeaderBaseline = Math.min(containerHeight, maxTextRows);
+    this._articleHeaderAttr = containerAttr;
 
     this._registerArticleHeaderHotspot();
 };
-
 NewsReader.prototype._handleArticleNavigation = function (key) {
     var totalLines = this.articleLines.length;
-    var pageSize = this.listFrame ? Math.max(1, this.listFrame.height - 1) : 1;
+    var pageSize = (typeof this._articleContentVisibleRows === 'number' && this._articleContentVisibleRows > 0)
+        ? this._articleContentVisibleRows
+        : (this.listFrame ? Math.max(1, this.listFrame.height - 1) : 1);
+    var maxScroll = Math.max(0, totalLines - pageSize);
     switch (key) {
         case KEY_UP:
         case '\x1B[A':
-        case KEY_LEFT:
-        case '\x1B[D':
         case 'wheel_up':
             if (this.articleScroll > 0) {
                 this.articleScroll--;
@@ -2452,10 +3061,8 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
             break;
         case KEY_DOWN:
         case '\x1B[B':
-        case KEY_RIGHT:
-        case '\x1B[C':
         case 'wheel_down':
-            if (this.articleScroll < Math.max(0, totalLines - pageSize)) {
+            if (this.articleScroll < maxScroll) {
                 this.articleScroll++;
                 this.draw();
             }
@@ -2465,7 +3072,7 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
             this.draw();
             break;
         case KEY_PGDN:
-            this.articleScroll = Math.min(Math.max(0, totalLines - pageSize), this.articleScroll + pageSize);
+            this.articleScroll = Math.min(maxScroll, this.articleScroll + pageSize);
             this.draw();
             break;
         case KEY_HOME:
@@ -2476,25 +3083,44 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
             this.articleScroll = Math.max(0, totalLines - pageSize);
             this.draw();
             break;
+        case KEY_LEFT:
+        case '\x1B[D':
+            if (!this._openAdjacentArticle(-1, { skipImagePreview: true })) {
+                this._setStatus('Already at earliest article.');
+            }
+            break;
+        case KEY_RIGHT:
+        case '\x1B[C':
+            if (!this._openAdjacentArticle(1, { skipImagePreview: true })) {
+                this._setStatus('Already at latest article.');
+            }
+            break;
+        case '\r':
+        case '\n':
+            if (this.articleScroll < maxScroll) {
+                this.articleScroll = maxScroll;
+                this.draw();
+            } else if (!this._openAdjacentArticle(1, { skipImagePreview: false })) {
+                this._setStatus('Already at latest article.');
+            }
+            break;
         case '\b':
         case '\x08':
         case '\x7F':
-        case '\x1B':
-            this._destroyArticleIcon();
-            this.state = 'articles';
-            var visible = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
-            var maxOffset = Math.max(0, this.currentArticles.length - visible);
-            var desiredOffset = typeof this._articleListScroll === 'number' ? this._articleListScroll : 0;
-            if (this.selectedIndex < desiredOffset) desiredOffset = this.selectedIndex;
-            if (this.selectedIndex >= desiredOffset + visible) desiredOffset = Math.max(0, this.selectedIndex - visible + 1);
-            this.scrollOffset = Math.max(0, Math.min(maxOffset, desiredOffset));
-            this.articleIndex = -1;
-            this.articleScroll = 0;
-            this.draw();
+            if (!this._openAdjacentArticle(-1, { skipImagePreview: true })) {
+                this._setStatus('Already at earliest article.');
+            }
             break;
+        case '\x1B':
+            this._returnToArticleListFromContent();
+            break;
+        case 'R':
+        case 'r':
         case 'O':
         case 'o':
-            this._setStatus('Link opening not implemented.');
+            if (!this._triggerArticleLinkButton()) {
+                this._setStatus('No link available for this article.');
+            }
             break;
         case 'I':
         case 'i':
@@ -2509,12 +3135,83 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
     }
 };
 
+NewsReader.prototype._returnToArticleListFromContent = function () {
+    this._destroyArticleIcon();
+    this._destroyArticleLinkButton();
+    this.state = 'articles';
+    var visible = this._articleListVisibleRows || (this.listFrame ? Math.max(1, this.listFrame.height) : 1);
+    if (visible <= 0) visible = 1;
+    var desiredOffset = (typeof this._articleListScroll === 'number') ? this._articleListScroll : 0;
+    if (this.selectedIndex < desiredOffset) desiredOffset = this.selectedIndex;
+    if (this.selectedIndex >= desiredOffset + visible) desiredOffset = Math.max(0, this.selectedIndex - visible + 1);
+    this.scrollOffset = Math.max(0, desiredOffset);
+    this._articleListScroll = this.scrollOffset;
+    this.articleIndex = -1;
+    this.articleScroll = 0;
+    this._articleContentVisibleRows = null;
+    this.draw();
+};
+
+NewsReader.prototype._returnToArticlesFromHeaderBack = function () {
+    this._destroyArticleLinkButton();
+    this._destroyArticleIcon();
+    this.state = 'articles';
+    if (this.articleIndex >= 0 && this.articleIndex < this.currentArticles.length) {
+        this.selectedIndex = this.articleIndex;
+    }
+    this.scrollOffset = Math.max(0, Math.min(this._articleListScroll || 0, Math.max(0, this.currentArticles.length - 1)));
+    if (this.listFrame) {
+        var visible = Math.max(1, this.listFrame.height);
+        if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
+        else if (this.selectedIndex >= this.scrollOffset + visible) this.scrollOffset = Math.max(0, this.selectedIndex - visible + 1);
+    }
+    this.articleIndex = -1;
+    this._articleContentVisibleRows = null;
+    this.draw();
+};
+
+NewsReader.prototype._triggerArticleLinkButton = function () {
+    if (this.articleLinkButton && typeof this.articleLinkButton.press === 'function') {
+        return this.articleLinkButton.press();
+    }
+    if (this._currentArticleLink) {
+        this._handleArticleButtonActivation(this._currentArticleLink);
+        return true;
+    }
+    return false;
+};
+
+NewsReader.prototype._openAdjacentArticle = function (delta, opts) {
+    if (!delta || !this.currentArticles || !this.currentArticles.length) return false;
+    var currentIndex = (typeof this.articleIndex === 'number' && this.articleIndex >= 0) ? this.articleIndex : this.selectedIndex;
+    if (typeof currentIndex !== 'number' || isNaN(currentIndex)) currentIndex = 0;
+    var targetIndex = currentIndex + delta;
+    if (targetIndex < 0 || targetIndex >= this.currentArticles.length) return false;
+
+    this.selectedIndex = targetIndex;
+    var newScroll = this._computeArticleListScrollForIndex(targetIndex);
+    this.scrollOffset = newScroll;
+    var skipImages = !(opts && opts.skipImagePreview === false);
+    this._openArticle(targetIndex, { skipImagePreview: skipImages });
+    return true;
+};
+
+NewsReader.prototype._computeArticleListScrollForIndex = function (index) {
+    var visible = this._articleListVisibleRows || (this.listFrame ? Math.max(1, this.listFrame.height) : 1);
+    if (visible <= 0) visible = 1;
+    var scroll = (typeof this._articleListScroll === 'number') ? this._articleListScroll : 0;
+    if (index < scroll) scroll = index;
+    else if (index >= scroll + visible) scroll = Math.max(0, index - visible + 1);
+    return scroll;
+};
+
 NewsReader.prototype._openFeed = function (feed, forceRefresh) {
     if (!feed) {
         this._setStatus('Invalid feed selection.');
         return;
     }
     this._setStatus('Loading feed...');
+    this._clearImageAnsiCache();
     var data = this._getFeedData(feed, forceRefresh);
     this.currentFeed = feed;
     this.currentFeedData = data;
@@ -2557,7 +3254,7 @@ NewsReader.prototype._openFeed = function (feed, forceRefresh) {
     this._setStatus(statusText);
 };
 
-NewsReader.prototype._openArticle = function (index) {
+NewsReader.prototype._openArticle = function (index, options) {
     if (index < 0 || index >= this.currentArticles.length) {
         this._setStatus('Invalid article selection.');
         return;
@@ -2568,11 +3265,21 @@ NewsReader.prototype._openArticle = function (index) {
     this.articleLines = this._prepareArticleLines(article);
     this._imageAnsiErrors = {};
     if (!article.__newsImages) article.__newsImages = this._extractArticleImages(article);
-    this.articleImages = (article.__newsImages || []).slice(0);
+    this.articleImages = (article.__newsImages || []).reduce(function (list, img) {
+        if (!img) return list;
+        if (typeof img === 'object' && img.url) {
+            list.push({ url: String(img.url), caption: img.caption ? String(img.caption) : '' });
+        } else {
+            var key = String(img).trim();
+            if (key) list.push({ url: key, caption: '' });
+        }
+        return list;
+    }, []);
     this._articleListScroll = this.scrollOffset;
     this._releaseHotspots();
-    this._ensureArticleIcon(this.articleImages.length === 0);
-    if (this.articleImages.length) {
+    this._destroyArticlePreviewFrame();
+    var skipImages = options && options.skipImagePreview;
+    if (this.articleImages.length && !skipImages) {
         this.state = 'article_images';
         this.imageSelection = 0;
         this.imageScrollOffset = 0;
@@ -2586,10 +3293,12 @@ NewsReader.prototype._openArticle = function (index) {
 
 NewsReader.prototype._returnToFeedsFromArticle = function () {
     this._destroyArticleIcon();
+    this._destroyArticleLinkButton();
     this.articleIndex = -1;
     this.state = 'feeds';
     this.scrollOffset = 0;
     this._releaseHotspots();
+    this._clearImageAnsiCache();
     if (this.currentFeeds && this.currentFeeds.length) {
         var idx = this.currentFeeds.indexOf(this.currentFeed);
         this.selectedIndex = (idx >= 0) ? (idx + 1) : 0;
@@ -2614,6 +3323,8 @@ NewsReader.prototype._simplifyText = function (text) {
     normalized = normalized.replace(/&#39;/g, "'");
     normalized = normalized.replace(/&apos;/gi, "'");
     normalized = normalized.replace(/&#x27;/gi, "'");
+    normalized = this._replaceNumericEntities(normalized);
+    normalized = this._replaceUnicodePunctuation(normalized);
     return normalized.trim();
 };
 
@@ -2635,52 +3346,124 @@ NewsReader.prototype._extractArticleAuthor = function (article) {
 };
 
 NewsReader.prototype._extractArticleDate = function (article) {
-    if (!article) return '';
+    var info = this._getArticleDateInfo(article);
+    if (!info || !info.displayDate) return '';
+    return info.displayDate;
+};
+
+NewsReader.prototype._getArticleDateInfo = function (article) {
+    if (!article) return null;
+    if (Object.prototype.hasOwnProperty.call(article, '__newsDateInfo')) {
+        return article.__newsDateInfo;
+    }
     var fields = ['pubDate', 'published', 'updated', 'date', 'isoDate'];
     for (var i = 0; i < fields.length; i++) {
         var val = article[fields[i]];
         if (!val) continue;
-        var str = this._formatArticleDateShort(val);
-        if (str) return str;
+        var info = this._normalizeArticleDateValue(val);
+        if (info) {
+            article.__newsDateInfo = info;
+            return info;
+        }
     }
-    return '';
+    article.__newsDateInfo = {
+        date: null,
+        dateKey: '__unknown',
+        displayDate: 'Unknown Date',
+        timeLabel: '',
+        hasTime: false
+    };
+    return article.__newsDateInfo;
 };
 
-NewsReader.prototype._formatArticleDateShort = function (value) {
-    try {
-        var d;
-        if (value instanceof Date) d = value;
-        else {
-            var parsed = Date.parse(value);
-            if (!isNaN(parsed)) d = new Date(parsed);
-        }
-        if (!d || isNaN(d.getTime())) return '';
-        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
-        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-    } catch (e) {
-        return '';
+NewsReader.prototype._normalizeArticleDateValue = function (value) {
+    if (value === undefined || value === null) return null;
+    var d = null;
+    if (value instanceof Date) {
+        if (!isNaN(value.getTime())) d = new Date(value.getTime());
+    } else if (typeof value === 'number') {
+        d = new Date(value);
+    } else if (typeof value === 'string') {
+        var trimmed = value.trim();
+        if (!trimmed) return null;
+        var parsed = Date.parse(trimmed);
+        if (!isNaN(parsed)) d = new Date(parsed);
     }
+    if (!d || isNaN(d.getTime())) return null;
+    var hasTime = false;
+    if (value instanceof Date || typeof value === 'number') {
+        hasTime = true;
+    } else if (typeof value === 'string') {
+        hasTime = /(\d{1,2}:\d{2})/.test(value) || /(\d{1,2}\s*(am|pm))/i.test(value) || /T\d{2}:\d{2}/i.test(value);
+    }
+    return {
+        date: d,
+        dateKey: this._formatArticleDateKey(d),
+        displayDate: this._formatArticleDateDivider(d),
+        timeLabel: hasTime ? this._formatArticleTime(d) : '',
+        hasTime: hasTime
+    };
 };
+
+NewsReader.prototype._formatArticleTimeSegment = function (info) {
+    var label = (info && info.timeLabel) ? info.timeLabel : '--:--';
+    return '[' + label + ']';
+};
+
+NewsReader.prototype._formatArticleDateKey = function (dateObj) {
+    if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) return '__unknown';
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return dateObj.getFullYear() + '-' + pad(dateObj.getMonth() + 1) + '-' + pad(dateObj.getDate());
+};
+
+NewsReader.prototype._formatArticleDateDivider = function (dateObj) {
+    if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) return 'Unknown Date';
+    var month = NEWSREADER_MONTH_NAMES[dateObj.getMonth()] || '';
+    return (month ? month + ' ' : '') + dateObj.getDate() + ', ' + dateObj.getFullYear();
+};
+
+NewsReader.prototype._formatArticleTime = function (dateObj) {
+    if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) return '--:--';
+    var hours = dateObj.getHours();
+    var minutes = dateObj.getMinutes();
+    var period = hours >= 12 ? 'PM' : 'AM';
+    var displayHour = hours % 12;
+    if (displayHour === 0) displayHour = 12;
+    var minuteStr = minutes < 10 ? '0' + minutes : String(minutes);
+    return displayHour + ':' + minuteStr + ' ' + period;
+};
+
+
 
 NewsReader.prototype._extractArticleImages = function (article) {
     var results = [];
     if (!article) return results;
     var seen = {};
-    var pushUrl = function (url) {
+    function pushImage(url, caption) {
         if (!url) return;
         var key = String(url).trim();
         if (!key || seen[key]) return;
         seen[key] = true;
-        results.push(key);
-    };
+        results.push({ url: key, caption: caption ? String(caption).trim() : '' });
+    }
+    function captionFromEnclosure(enclosure) {
+        if (!enclosure) return '';
+        var fields = ['caption', 'title', 'description', 'summary', 'text'];
+        for (var i = 0; i < fields.length; i++) {
+            if (enclosure[fields[i]]) return enclosure[fields[i]];
+        }
+        if (enclosure['media:description']) return enclosure['media:description'];
+        if (enclosure['media:text']) return enclosure['media:text'];
+        return '';
+    }
     if (article.enclosures && article.enclosures.length) {
-        for (var i = 0; i < article.enclosures.length; i++) {
-            var enclosure = article.enclosures[i];
+        for (var e = 0; e < article.enclosures.length; e++) {
+            var enclosure = article.enclosures[e];
             if (!enclosure || !enclosure.url) continue;
             var type = enclosure.type ? ('' + enclosure.type).toLowerCase() : '';
             if (newsreaderIsLikelyTrackingPixel('', enclosure.url)) continue;
             if (type.indexOf('image/') === 0 || /\.(png|jpe?g|gif|webp|bmp)(\?|#|$)/i.test(enclosure.url)) {
-                pushUrl(enclosure.url);
+                pushImage(enclosure.url, captionFromEnclosure(enclosure));
             }
         }
     }
@@ -2696,7 +3479,14 @@ NewsReader.prototype._extractArticleImages = function (article) {
             var tagHtml = match[0] || '';
             var imageUrl = match[1];
             if (newsreaderIsLikelyTrackingPixel(tagHtml, imageUrl)) continue;
-            pushUrl(imageUrl);
+            var caption = '';
+            var altMatch = tagHtml.match(/alt\s*=\s*["']([^"']+)["']/i);
+            if (altMatch && altMatch[1]) caption = altMatch[1];
+            if (!caption) {
+                var titleMatch = tagHtml.match(/title\s*=\s*["']([^"']+)["']/i);
+                if (titleMatch && titleMatch[1]) caption = titleMatch[1];
+            }
+            pushImage(imageUrl, caption);
         }
     }
     return results;
@@ -2724,7 +3514,10 @@ NewsReader.prototype._getImageAnsi = function (url) {
     if (!url) return null;
     this.imageAnsiCache = this.imageAnsiCache || {};
     this._imageAnsiErrors = this._imageAnsiErrors || {};
-    if (this.imageAnsiCache[url]) return this.imageAnsiCache[url];
+    if (this.imageAnsiCache[url]) {
+        this._touchImageCacheKey(url);
+        return this.imageAnsiCache[url];
+    }
     if (this._imageAnsiErrors[url]) return null;
 
     if (typeof convertImageToANSI !== 'function') {
@@ -2740,22 +3533,26 @@ NewsReader.prototype._getImageAnsi = function (url) {
     var width = this.listFrame ? Math.max(20, this.listFrame.width || 80) : 80;
     var tempPath = null;
     var overlayShown = false;
+    var rawBody = null;
     try {
         var source = url;
+        rawBody = null;
         if (/^data:image\//i.test(url)) {
             var match = url.match(/^data:(image\/[^;]+);base64,(.+)$/i);
             if (!match) throw 'Unsupported data URI format';
             var mime = match[1].toLowerCase();
             var ext = mime.indexOf('png') !== -1 ? '.png' : (mime.indexOf('gif') !== -1 ? '.gif' : '.jpg');
             var data = base64_decode(match[2]);
+            rawBody = data;
             var tempDir = (typeof system !== 'undefined' && system.temp_dir) ? system.temp_dir : (js.exec_dir || '.');
-            // if (tempDir.charAt(tempDir.length - 1) !== '/' && tempDir.charAt(tempDir.length - 1) !== '\') tempDir += ' / ';
             var fileName = 'news_img_' + Date.now() + '_' + Math.floor(Math.random() * 100000) + ext;
             tempPath = tempDir + fileName;
             var f = new File(tempPath);
             if (!f.open('wb')) throw 'Unable to write temp image: ' + tempPath;
             f.write(data);
             f.close();
+            data = null;
+            rawBody = null;
             source = tempPath;
         }
 
@@ -2763,8 +3560,9 @@ NewsReader.prototype._getImageAnsi = function (url) {
         this._setStatus('Rendering image preview...');
         var ansiResult = convertImageToANSI(source, width, true, null, { returnObject: true });
         var preview = this._normalizeAnsiPreview(ansiResult);
+        ansiResult = null;
         if (preview && typeof preview.ansi === 'string' && preview.ansi.length) {
-            this.imageAnsiCache[url] = preview;
+            this._cacheImagePreview(url, preview);
             this._setStatus('Preview ready. ENTER=read article  BACKSPACE=articles');
             return preview;
         }
@@ -2783,6 +3581,9 @@ NewsReader.prototype._getImageAnsi = function (url) {
                 if (tmpFile.exists) tmpFile.remove();
             } catch (_eDel) { }
         }
+        rawBody = null;
+        source = null;
+        try { if (typeof js !== 'undefined' && js && typeof js.gc === 'function') js.gc(true); } catch (_eGc) { }
     }
     return null;
 };
@@ -2790,49 +3591,7 @@ NewsReader.prototype._getImageAnsi = function (url) {
 
 
 
-NewsReader.prototype._extractArticleImages = function (article) {
-    var results = [];
-    if (!article) return results;
-    var seen = {};
-    var pushUrl = function (url) {
-        if (!url) return;
-        var key = url.trim();
-        if (!key || seen[key]) return;
-        seen[key] = true;
-        results.push(key);
-    };
-    if (article.enclosures && article.enclosures.length) {
-        for (var i = 0; i < article.enclosures.length; i++) {
-            var enclosure = article.enclosures[i];
-            if (!enclosure) continue;
-            var type = enclosure.type ? ('' + enclosure.type).toLowerCase() : '';
-            if (newsreaderIsLikelyTrackingPixel('', enclosure.url)) continue;
-            if (type.indexOf('image/') === 0) {
-                pushUrl(enclosure.url);
-                continue;
-            }
-            if (!type && enclosure.url) {
-                if (/\.(png|jpe?g|gif|webp|bmp)(\?|#|$)/i.test(enclosure.url)) pushUrl(enclosure.url);
-            }
-        }
-    }
-    var contentSources = [];
-    if (article.content) contentSources.push(article.content);
-    if (article.body) contentSources.push(article.body);
-    for (var s = 0; s < contentSources.length; s++) {
-        var src = contentSources[s];
-        if (!src) continue;
-        var match;
-        var imgRe = /<img[^>]+src=["']([^"'>\s]+)["'][^>]*>/gi;
-        while ((match = imgRe.exec(src)) !== null) {
-            var tagHtml = match[0] || '';
-            var imageUrl = match[1];
-            if (newsreaderIsLikelyTrackingPixel(tagHtml, imageUrl)) continue;
-            pushUrl(imageUrl);
-        }
-    }
-    return results;
-};
+
 
 NewsReader.prototype._formatTimestamp = function (ts) {
     try {

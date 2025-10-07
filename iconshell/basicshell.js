@@ -5,12 +5,18 @@
 load("sbbsdefs.js"); // LOG_* and K_* constants
 
 function BasicShell(onReloadAdvancedShell) {
+    if (typeof console.mouse_mode !== 'undefined') {
+        console.mouse_mode = true;
+    }
     console.clear();
     header();
 
     while (true) {
         writeln("");
-        writeln(" [W] Who's online   [M] Messages   [F] Files   [X] Doors   [H] Help   [R] Reload IconShell   [Q] Quit");
+        if (typeof console.clear_hotspots === 'function') {
+            try { console.clear_hotspots(); } catch (_eCl) { }
+        }
+        console.mnemonics(" ~W Who's online   ~M Messages   ~F Files   ~X Doors   ~H Help   ~R Reload IconShell   ~Q Quit\r\n");
         write(" Select: ");
         var ch = console.getkey().toUpperCase();
 
@@ -56,6 +62,9 @@ function BasicShell(onReloadAdvancedShell) {
 
             case 'Q':
             case '\x1B': // ESC
+                if (typeof console.clear_hotspots === 'function') {
+                    try { console.clear_hotspots(); } catch (_eQ) { }
+                }
                 bbs.logoff()
                 return; // clean exit
 
