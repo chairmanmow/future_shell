@@ -19,6 +19,6 @@ var Icon = load("iconshell/lib/shell/icon.js");
 load("iconshell/lib/shell/toast.js");
 
 // subprograms
-load("iconshell/lib/subfunctions/chat.js");
+load("iconshell/lib/subprograms/chat.js");
 load("iconshell/lib/util/mouse_hotspot_test.js");
 

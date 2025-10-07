@@ -10,7 +10,7 @@
 //  D          : Download tagged/current file (implemented via external runner)
 //  U          : Upload into current directory
 
-load('iconshell/lib/subfunctions/subprogram.js');
+load('iconshell/lib/subprograms/subprogram.js');
 load('iconshell/lib/shell/icon.js');
 load('frame.js');
 load('file_size.js');

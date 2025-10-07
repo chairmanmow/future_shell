@@ -112,7 +112,7 @@ If you want to fall back to the classic interface for low‑speed connections, w
 
 ## Adding New Subprograms
 
-1. Create a new file under `iconshell/lib/subfunctions/`, e.g. `notes.js`.
+1. Create a new file under `iconshell/lib/subprograms/`, e.g. `notes.js`.
 2. Implement a constructor calling `Subprogram.call(this, { name: 'notes' });` and override `draw`, `handleKey`, etc.
 3. Expose it via a builtin map or a `command = js:` item that constructs and launches it.
 

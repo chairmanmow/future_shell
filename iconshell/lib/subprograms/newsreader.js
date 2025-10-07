@@ -4,7 +4,7 @@ if (typeof Feed === 'undefined') {
 if (typeof utf8_cp437 === 'undefined') {
     try { load('utf8_cp437.js'); } catch (_encErr) { }
 }
-load("iconshell/lib/subfunctions/subprogram.js");
+load("iconshell/lib/subprograms/subprogram.js");
 load('iconshell/lib/shell/icon.js');
 load('iconshell/lib/util/gif2ans/img_loader.js')
 load('iconshell/lib/util/layout/button.js');
@@ -17,32 +17,7 @@ function resolveAttr(key, fallback) {
     return fallback;
 }
 
-var NEWSREADER_DEFAULT_FEEDS = [
-    { label: "Digital Photography School (png)", url: "https://digital-photography-school.com/feed/", category: "Images", icon: "dps_news" },
-    { label: "NASA latest content (png)", url: "https://science.nasa.gov/feed/?science_org=19791%2C20129", category: "Images", icon: "nasa_image_of_the_day" },
-    { label: "BBC News - World", url: "http://feeds.bbci.co.uk/news/world/rss.xml", category: "World News", icon: "bbc_world_news" },
-    { label: "Reuters: World News", url: "http://feeds.reuters.com/Reuters/worldNews", category: "World News", icon: 'reuters_world_news' },
-    { label: "NPR: News", url: "https://www.npr.org/rss/rss.php?id=1001", category: "World News", icon: 'npr_news' },
-    { label: "The New York Times - World News", url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", category: "World News", icon: 'nyt_world_news' },
-    { label: "The Guardian - World News", url: "https://www.theguardian.com/world/rss", category: "World News", icon: 'guardian_world_news' },
-    { label: "Al Jazeera English - News", url: "https://www.aljazeera.com/xml/rss/all.xml", category: "World News", icon: 'aljazeera_news' },
-    { label: "CNN - World", url: "http://rss.cnn.com/rss/edition_world.rss", category: "World News", icon: 'cnn_world' },
-    { label: "Fox News - World", url: "http://feeds.foxnews.com/foxnews/world", category: "World News", icon: 'fox_news' },
-    { label: "NPR: Politics", url: "https://www.npr.org/rss/rss.php?id=1014", category: "Politics", icon: 'npr_politics' },
-    { label: "The New York Times - Politics", url: "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml", category: "Politics", icon: 'nyt_politics' },
-    { label: "The Guardian - Politics", url: "https://www.theguardian.com/politics/rss", category: "Politics", icon: 'guardian_politics' },
-    { label: "Politico - News", url: "https://www.politico.com/rss/politics08.xml", category: "Politics", icon: 'politico_news' },
-    { label: "FiveThirtyEight - Politics", url: "https://fivethirtyeight.com/politics/feed/", category: "Politics", icon: 'fivethirtyeight_politics' },
-    { label: "NPR: Technology", url: "https://www.npr.org/rss/rss.php?id=1019", category: "Technology", icon: 'npr_technology' },
-    { label: "The New York Times - Technology", url: "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml", category: "Technology", icon: 'nyt_technology' },
-    { label: "The Guardian - Technology", url: "https://www.theguardian.com/uk/technology/rss", category: "Technology", icon: 'guardian_technology' },
-    { label: "Wired - Latest Stories", url: "https://www.wired.com/feed/category/science/latest/rss", category: "Technology", icon: 'wired_technology' },
-    { label: "TechCrunch - Startups", url: "http://feeds.feedburner.com/TechCrunch/startups", category: "Technology", icon: 'techcrunch_startups' },
-    { label: "Ars Technica - All Stories", url: "http://feeds.arstechnica.com/arstechnica/index", category: "Technology", icon: 'ars_technica' },
-    { label: "NPR: Science", url: "https://www.npr.org/rss/rss.php?id=1007", category: "Science", icon: 'npr_science' },
-    { label: "The New York Times - Science", url: "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml", category: "Science", icon: 'nyt_science' },
-    { label: "The Guardian - Science", url: "https://www.theguardian.com/science/rss", category: "Science", icon: 'guardian_science' },
-];
+var NEWSREADER_DEFAULT_FEEDS = [];
 
 function newsreaderSlugify(label) {
     if (!label) return '';
@@ -318,7 +293,7 @@ var LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_BLUE | WHITE));
 var LIST_INACTIVE = resolveAttr('FILE_LIST_INACTIVE', (BG_BLACK | LIGHTGRAY));
 var HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_BLUE | WHITE));
 var STATUS_ATTR = resolveAttr('FILE_FOOTER', (BG_BLACK | LIGHTGRAY));
-var IMAGE_CACHE_LIMIT = 6;
+var IMAGE_CACHE_LIMIT = 4;
 var NEWSREADER_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 var NEWSREADER_ASCII_ENTITY_MAP = {
     160: ' ',

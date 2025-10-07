@@ -1,8 +1,8 @@
 load('sbbsdefs.js');
-load("iconshell/lib/subfunctions/subprogram.js");
+load("iconshell/lib/subprograms/subprogram.js");
 load("iconshell/lib/util/debug.js");
-load('iconshell/lib/subfunctions/message_board_ui.js');
-load('iconshell/lib/subfunctions/message_board_views.js');
+load('iconshell/lib/subprograms/message_board_ui.js');
+load('iconshell/lib/subprograms/message_board_views.js');
 if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';
 if (typeof KEY_BACKSPACE === 'undefined') var KEY_BACKSPACE = '\b';

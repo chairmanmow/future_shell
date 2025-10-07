@@ -5,7 +5,7 @@
 // 3. Greets user by name and prompts to press any key to exit.
 // 4. ESC at any time aborts immediately.
 
-load("iconshell/lib/subfunctions/subprogram.js");
+load("iconshell/lib/subprograms/subprogram.js");
 
 function HelloWorld(opts) {
 	opts = opts || {};
@@ -18,12 +18,12 @@ function HelloWorld(opts) {
 
 extend(HelloWorld, Subprogram);
 
-HelloWorld.prototype.enter = function(done) {
+HelloWorld.prototype.enter = function (done) {
 	Subprogram.prototype.enter.call(this, done);
-    this.draw();
+	this.draw();
 };
 
-HelloWorld.prototype._ensureFrames = function() {
+HelloWorld.prototype._ensureFrames = function () {
 	if (!this.parentFrame) return;
 	if (!this.outputFrame) {
 		var h = Math.max(1, this.parentFrame.height - 1);
@@ -36,11 +36,11 @@ HelloWorld.prototype._ensureFrames = function() {
 	}
 };
 
-HelloWorld.prototype.draw = function() {
+HelloWorld.prototype.draw = function () {
 	this._ensureFrames();
 	if (!this.outputFrame || !this.inputFrame) return;
 	this.outputFrame.clear();
-	this.outputFrame.gotoxy(1,1);
+	this.outputFrame.gotoxy(1, 1);
 	// Greeting always shown
 	this.outputFrame.putmsg('\x01hHELLO WORLD.\x01n');
 	this.outputFrame.crlf();
@@ -48,7 +48,7 @@ HelloWorld.prototype.draw = function() {
 	if (this._mode === 'greeted') {
 		this.outputFrame.crlf();
 		this.outputFrame.crlf();
-		this.outputFrame.putmsg('Hello ' + (this._nameBuffer || 'stranger')); 
+		this.outputFrame.putmsg('Hello ' + (this._nameBuffer || 'stranger'));
 		this.outputFrame.crlf();
 		this.outputFrame.putmsg('Press any key to exit.');
 	}
@@ -56,7 +56,7 @@ HelloWorld.prototype.draw = function() {
 	this.parentFrame.cycle();
 };
 
-HelloWorld.prototype._drawInput = function() {
+HelloWorld.prototype._drawInput = function () {
 	if (!this.inputFrame) return;
 	this.inputFrame.clear();
 	this.inputFrame.home();
@@ -73,7 +73,7 @@ HelloWorld.prototype._drawInput = function() {
 	this.inputFrame.cycle();
 };
 
-HelloWorld.prototype._handleKey = function(key) {
+HelloWorld.prototype._handleKey = function (key) {
 	// ESC always exits
 	if (key === '\x1B') { this.exit(); return; }
 	if (this._mode === 'asking') {
@@ -104,13 +104,13 @@ HelloWorld.prototype._handleKey = function(key) {
 	}
 };
 
-HelloWorld.prototype._cleanup = function() {
-	try { if (this.outputFrame) this.outputFrame.close(); } catch(e) {}
-	try { if (this.inputFrame) this.inputFrame.close(); } catch(e) {}
-    this._resetState();
+HelloWorld.prototype._cleanup = function () {
+	try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
+	try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
+	this._resetState();
 };
 
-HelloWorld.prototype._resetState = function() {
+HelloWorld.prototype._resetState = function () {
 	this._nameBuffer = '';
 	this._mode = 'asking'; // 'asking' | 'greeted'
 	this.outputFrame = null;

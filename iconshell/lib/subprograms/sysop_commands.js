@@ -1,5 +1,5 @@
-load("iconshell/lib/subfunctions/subprogram.js");
-require('sbbsdefs.js','SS_TMPSYSOP');
+load("iconshell/lib/subprograms/subprogram.js");
+require('sbbsdefs.js', 'SS_TMPSYSOP');
 
 if (typeof SC_RESET === 'undefined') var SC_RESET = '\x01N';
 if (typeof SC_BRIGHT === 'undefined') var SC_BRIGHT = '\x01H';
@@ -81,10 +81,10 @@ function buildPoster() {
     addRow({ heading: 'Node Display/Control:', color: 'Y', bright: true }, { heading: 'Editing:', color: 'M', bright: true });
     addRow({ label: 'NODE', params: '[args]', desc: 'Node Utility' }, { label: 'UEDIT', params: '[user]', desc: 'Edit User Account' });
     addRow({ label: 'DOWN', params: '<nodes>', paramColor: 'R', desc: 'Toggle Down Flag' }, { label: 'EDIT', desc: 'Edit Text/MSG File' });
-    addRow({ label: 'LOCK', params: '<nodes>', paramColor: 'R', desc: [ { text: 'Lock/Unlock ', color: 'C' }, { text: '(N)', color: 'M' } ] });
-    addRow({ label: 'INTR', params: '<nodes>', paramColor: 'R', desc: [ { text: 'Toggle Interrupt ', color: 'C' }, { text: '(I)', color: 'M' } ] }, { heading: 'Viewing:', color: 'C', bright: true });
-    addRow({ label: 'ANON', desc: [ { text: 'Toggle Anonymous ', color: 'C' }, { text: '(Q)', color: 'M' } ] }, { label: 'LIST', params: '[file]', desc: 'View Text/ANSI/MSG File' });
-    addRow({ label: 'QUIET', desc: [ { text: 'Toggle Quiet ', color: 'C' }, { text: '(Q)', color: 'M' } ] }, { label: 'LOG', desc: "Today's Log" });
+    addRow({ label: 'LOCK', params: '<nodes>', paramColor: 'R', desc: [{ text: 'Lock/Unlock ', color: 'C' }, { text: '(N)', color: 'M' }] });
+    addRow({ label: 'INTR', params: '<nodes>', paramColor: 'R', desc: [{ text: 'Toggle Interrupt ', color: 'C' }, { text: '(I)', color: 'M' }] }, { heading: 'Viewing:', color: 'C', bright: true });
+    addRow({ label: 'ANON', desc: [{ text: 'Toggle Anonymous ', color: 'C' }, { text: '(Q)', color: 'M' }] }, { label: 'LIST', params: '[file]', desc: 'View Text/ANSI/MSG File' });
+    addRow({ label: 'QUIET', desc: [{ text: 'Toggle Quiet ', color: 'C' }, { text: '(Q)', color: 'M' }] }, { label: 'LOG', desc: "Today's Log" });
     addRow(null, { label: 'YLOG', desc: "Yesterday's Log" });
 
     addRow({ heading: 'Miscellaneous:', color: 'O', bright: false }, { label: 'NS', params: '[node]', desc: 'Node Statistics' });
@@ -115,12 +115,12 @@ function SysopCommand(opts) {
 
 extend(SysopCommand, Subprogram);
 
-SysopCommand.prototype.enter = function(done) {
+SysopCommand.prototype.enter = function (done) {
     Subprogram.prototype.enter.call(this, done);
     this.draw();
 };
 
-SysopCommand.prototype._ensureFrames = function() {
+SysopCommand.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
     if (!this.outputFrame) {
         var h = Math.max(1, this.parentFrame.height - 1);
@@ -133,18 +133,18 @@ SysopCommand.prototype._ensureFrames = function() {
     }
 };
 
-SysopCommand.prototype.draw = function(options) {
+SysopCommand.prototype.draw = function (options) {
     this._ensureFrames();
     if (!this.outputFrame || !this.inputFrame) return;
     this.outputFrame.clear();
-    this.outputFrame.gotoxy(1,1);
+    this.outputFrame.gotoxy(1, 1);
     this._posterVisible = !options || options.showCommands !== false;
-    if(this._posterVisible) this.outputFrame.putmsg(this._commandPoster);
-    if(this.history.length){
+    if (this._posterVisible) this.outputFrame.putmsg(this._commandPoster);
+    if (this.history.length) {
         this.outputFrame.crlf();
         this.outputFrame.putmsg('\x01hCommand History:\x01n');
         this.outputFrame.crlf();
-        for(var i=Math.max(0, this.history.length-10); i<this.history.length; i++){
+        for (var i = Math.max(0, this.history.length - 10); i < this.history.length; i++) {
             this.outputFrame.putmsg(this.history[i]);
             this.outputFrame.crlf();
         }
@@ -153,18 +153,18 @@ SysopCommand.prototype.draw = function(options) {
     this.parentFrame.cycle();
 };
 
-SysopCommand.prototype._drawInput = function() {
+SysopCommand.prototype._drawInput = function () {
     if (!this.inputFrame) return;
     this.inputFrame.clear();
     this.inputFrame.home();
     var prompt = '; ' + this._commandBuffer;
-    if(prompt.length > this.inputFrame.width)
+    if (prompt.length > this.inputFrame.width)
         prompt = prompt.substr(prompt.length - this.inputFrame.width);
     this.inputFrame.putmsg(prompt);
     this.inputFrame.cycle();
 };
 
-SysopCommand.prototype._handleKey = function(key) {
+SysopCommand.prototype._handleKey = function (key) {
     if (key === '\x1B') { this.exit(); return; }
     if (!key) return;
     if (key === '\r' || key === '\n') {
@@ -172,42 +172,42 @@ SysopCommand.prototype._handleKey = function(key) {
         return;
     }
     if (key === '\x08' || key === '\x7F') {
-        if(this._commandBuffer.length){
-            this._commandBuffer = this._commandBuffer.substr(0, this._commandBuffer.length-1);
+        if (this._commandBuffer.length) {
+            this._commandBuffer = this._commandBuffer.substr(0, this._commandBuffer.length - 1);
             this._drawInput();
         }
         return;
     }
     if (typeof key === 'string' && key.length === 1 && key >= ' ' && key <= '~') {
-        if(!this._posterVisible) this.draw();
+        if (!this._posterVisible) this.draw();
         this._commandBuffer += key;
         this._drawInput();
     }
 };
 
-SysopCommand.prototype._submitCommand = function() {
+SysopCommand.prototype._submitCommand = function () {
     var cmd = this._commandBuffer.trim();
-    if(!cmd){
+    if (!cmd) {
         this._commandBuffer = '';
         this._drawInput();
         return;
     }
-    if(!(user && (user.compare_ars && user.compare_ars("SYSOP")) || (bbs && (bbs.sys_status & SS_TMPSYSOP)))){
+    if (!(user && (user.compare_ars && user.compare_ars("SYSOP")) || (bbs && (bbs.sys_status & SS_TMPSYSOP)))) {
         this.history.push('; ' + cmd + '  \x01h\x01r[denied]\x01n');
-        if(this.history.length > 100) this.history = this.history.slice(this.history.length-100);
+        if (this.history.length > 100) this.history = this.history.slice(this.history.length - 100);
         this._commandBuffer = '';
         this.draw();
         return;
     }
     this.history.push('; ' + cmd);
-    if(this.history.length > 100) this.history = this.history.slice(this.history.length-100);
+    if (this.history.length > 100) this.history = this.history.slice(this.history.length - 100);
     this._commandBuffer = '';
     this.draw();
     var self = this;
-    var runner = function(){
+    var runner = function () {
         try {
             load({}, 'str_cmds.js', cmd);
-        } catch(e){
+        } catch (e) {
             console.crlf();
             console.putmsg('\x01h\x01rError running command: ' + e + '\x01n');
             console.crlf();
@@ -217,7 +217,7 @@ SysopCommand.prototype._submitCommand = function() {
         console.crlf();
         console.getkey();
     };
-    if(this.shell && typeof this.shell.runExternal === 'function'){
+    if (this.shell && typeof this.shell.runExternal === 'function') {
         this.shell.runExternal(runner, { programId: 'sysop:' + cmd });
     } else {
         runner();
@@ -225,13 +225,13 @@ SysopCommand.prototype._submitCommand = function() {
     this.draw({ showCommands: false });
 };
 
-SysopCommand.prototype._cleanup = function() {
-    try { if (this.outputFrame) this.outputFrame.close(); } catch(e) {}
-    try { if (this.inputFrame) this.inputFrame.close(); } catch(e) {}
+SysopCommand.prototype._cleanup = function () {
+    try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
+    try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
     this._resetState();
 };
 
-SysopCommand.prototype._resetState = function() {
+SysopCommand.prototype._resetState = function () {
     this._commandBuffer = '';
     this.outputFrame = null;
     this.inputFrame = null;

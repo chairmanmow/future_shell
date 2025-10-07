@@ -1,18 +1,18 @@
 
-load("iconshell/lib/subfunctions/whosonline.js");
-load("iconshell/lib/subfunctions/gamesmenu.js");
+load("iconshell/lib/subprograms/whosonline.js");
+load("iconshell/lib/subprograms/gamesmenu.js");
 // Hello World demo subprogram
-load("iconshell/lib/subfunctions/hello-world.js");
-load("iconshell/lib/subfunctions/file_area.js");
-load("iconshell/lib/subfunctions/calendar.js");
-load("iconshell/lib/subfunctions/clock.js");
-load("iconshell/lib/subfunctions/rawgate.js");
-load("iconshell/lib/subfunctions/mail.js");
-load("iconshell/lib/subfunctions/system_info.js");
-load("iconshell/lib/subfunctions/message_boards.js");
-load("iconshell/lib/subfunctions/users.js");
-load("iconshell/lib/subfunctions/sysop_commands.js");
-load("iconshell/lib/subfunctions/newsreader.js");
+load("iconshell/lib/subprograms/hello-world.js");
+load("iconshell/lib/subprograms/file_area.js");
+load("iconshell/lib/subprograms/calendar.js");
+load("iconshell/lib/subprograms/clock.js");
+load("iconshell/lib/subprograms/rawgate.js");
+load("iconshell/lib/subprograms/mail.js");
+load("iconshell/lib/subprograms/system_info.js");
+load("iconshell/lib/subprograms/message_boards.js");
+load("iconshell/lib/subprograms/users.js");
+load("iconshell/lib/subprograms/sysop_commands.js");
+load("iconshell/lib/subprograms/newsreader.js");
 
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
@@ -47,7 +47,7 @@ function _icsh_err(msg) {
 var BUILTIN_ACTIONS = {
 	chat: function () { this.queueSubprogramLaunch('chat', this.chat); },
 	sysop_commands: function () {
-		try { if (typeof SysopCommand !== 'function') load('iconshell/lib/subfunctions/sysop_commands.js'); } catch (e) { dbug('subprogram', 'Failed loading sysop_commands.js ' + e); return; }
+		try { if (typeof SysopCommand !== 'function') load('iconshell/lib/subprograms/sysop_commands.js'); } catch (e) { dbug('subprogram', 'Failed loading sysop_commands.js ' + e); return; }
 		if (typeof SysopCommand !== 'function') { dbug('subprogram', 'SysopCommand class missing after load'); return; }
 		if (!this.sysopCommand) this.sysopCommand = new SysopCommand({ parentFrame: this.subFrame, shell: this });
 		else { this.sysopCommand.parentFrame = this.root; this.sysopCommand.shell = this; }
@@ -56,7 +56,7 @@ var BUILTIN_ACTIONS = {
 
 	// Dedicated IRC chat section (distinct from generic 'chat')
 	irc_chat: function () {
-		try { if (typeof IrcSection !== 'function') load('iconshell/lib/subfunctions/irc.js'); } catch (e) { dbug('subprogram', 'Failed loading irc.js ' + e); return; }
+		try { if (typeof IrcSection !== 'function') load('iconshell/lib/subprograms/irc.js'); } catch (e) { dbug('subprogram', 'Failed loading irc.js ' + e); return; }
 		if (typeof IrcSection !== 'function') { dbug('subprogram', 'IrcSection class missing after load'); return; }
 		if (!this.ircChatSub) this.ircChatSub = new IrcSection({ parentFrame: this.subFrame, shell: this });
 		else { this.ircChatSub.parentFrame = this.root; this.ircChatSub.shell = this; }
@@ -67,7 +67,7 @@ var BUILTIN_ACTIONS = {
 	hello: function () { if (!this.helloWorld) this.helloWorld = new HelloWorld(); this.queueSubprogramLaunch('hello-world', this.helloWorld); },
 	exit: function () { throw ('Exit Shell'); },
 	msg_boards: function () {
-		try { if (typeof MessageBoard !== 'function') load('iconshell/lib/subfunctions/message_boards.js'); } catch (e) { dbug('subprogram', 'Failed loading message_boards.js ' + e); return; }
+		try { if (typeof MessageBoard !== 'function') load('iconshell/lib/subprograms/message_boards.js'); } catch (e) { dbug('subprogram', 'Failed loading message_boards.js ' + e); return; }
 		if (typeof MessageBoard !== 'function') { dbug('subprogram', 'MessageBoard class missing after load'); return; }
 		if (!this.msgBoardSub) this.msgBoardSub = new MessageBoard({ parentFrame: this.subFrame, shell: this, timer: this.timer });
 		else {
@@ -78,7 +78,7 @@ var BUILTIN_ACTIONS = {
 		this.queueSubprogramLaunch('message-boards', this.msgBoardSub);
 	},
 	privatemsg: function () {
-		try { if (typeof PrivateMsg !== 'function') load('iconshell/lib/subfunctions/private_msg.js'); } catch (e) { dbug('subprogram', 'Failed loading private_msg.js ' + e); return; }
+		try { if (typeof PrivateMsg !== 'function') load('iconshell/lib/subprograms/private_msg.js'); } catch (e) { dbug('subprogram', 'Failed loading private_msg.js ' + e); return; }
 		if (typeof PrivateMsg !== 'function') { dbug('subprogram', 'PrivateMsg class missing after load'); return; }
 		if (!this.privateMsg) this.privateMsg = new PrivateMsg({ parentFrame: this.subFrame });
 		// always reassign parentFrame in case shell recreated frames
@@ -86,21 +86,21 @@ var BUILTIN_ACTIONS = {
 		this.queueSubprogramLaunch('private-msg', this.privateMsg);
 	},
 	users: function () {
-		try { if (typeof Users !== 'function') load('iconshell/lib/subfunctions/users.js'); } catch (e) { dbug('subprogram', 'Failed loading user_list.js ' + e); return; }
+		try { if (typeof Users !== 'function') load('iconshell/lib/subprograms/users.js'); } catch (e) { dbug('subprogram', 'Failed loading user_list.js ' + e); return; }
 		if (typeof Users !== 'function') { dbug('subprogram', 'Users class missing after load'); return; }
 		if (!this.Users) this.Users = new Users({ parentFrame: this.subFrame });
 		this.Users.setParentFrame(this.subFrame);
 		this.queueSubprogramLaunch('users', this.Users);
 	},
 	userlist: function () {
-		try { if (typeof UserList !== 'function') load('iconshell/lib/subfunctions/user_list.js'); } catch (e) { dbug('subprogram', 'Failed loading user_list.js ' + e); return; }
+		try { if (typeof UserList !== 'function') load('iconshell/lib/subprograms/user_list.js'); } catch (e) { dbug('subprogram', 'Failed loading user_list.js ' + e); return; }
 		if (typeof UserList !== 'function') { dbug('subprogram', 'UserList class missing after load'); return; }
 		if (!this.userList) this.userList = new UserList({ parentFrame: this.subFrame });
 		this.userList.setParentFrame(this.subFrame);
 		this.queueSubprogramLaunch('user-list', this.userList);
 	},
 	filearea: function () {
-		try { if (typeof FileArea !== 'function') load('iconshell/lib/subfunctions/file_area.js'); } catch (e) { dbug('subprogram', 'Failed loading file_area.js ' + e); return; }
+		try { if (typeof FileArea !== 'function') load('iconshell/lib/subprograms/file_area.js'); } catch (e) { dbug('subprogram', 'Failed loading file_area.js ' + e); return; }
 		if (typeof FileArea !== 'function') { dbug('subprogram', 'FileArea class missing after load'); return; }
 		var fileAreaIcons = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.fileAreaIcons) ? ICSH_SETTINGS.fileAreaIcons : null;
 		if (!this.fileArea) this.fileArea = new FileArea({ parentFrame: this.subFrame, shell: this, iconMap: fileAreaIcons });
@@ -112,7 +112,7 @@ var BUILTIN_ACTIONS = {
 		this.queueSubprogramLaunch('file-area', this.fileArea);
 	},
 	usage_viewer: function () {
-		try { load('iconshell/lib/subfunctions/usage-viewer.js'); } catch (e) { dbug('subprogram', 'Failed loading usage-viewer.js ' + e); return; }
+		try { load('iconshell/lib/subprograms/usage-viewer.js'); } catch (e) { dbug('subprogram', 'Failed loading usage-viewer.js ' + e); return; }
 		if (typeof UsageViewer !== 'function') { dbug('subprogram', 'UsageViewer class missing after load'); return; }
 		var needsNewInstance = !this.usageViewer;
 		if (!needsNewInstance && typeof UsageViewer.VERSION !== 'undefined') {
@@ -128,7 +128,7 @@ var BUILTIN_ACTIONS = {
 		this.queueSubprogramLaunch('usage-viewer', this.usageViewer);
 	},
 	newsreader: function () {
-		try { if (typeof NewsReader !== 'function') load('iconshell/lib/subfunctions/newsreader.js'); } catch (e) { dbug('subprogram', 'Failed loading newsreader.js ' + e); return; }
+		try { if (typeof NewsReader !== 'function') load('iconshell/lib/subprograms/newsreader.js'); } catch (e) { dbug('subprogram', 'Failed loading newsreader.js ' + e); return; }
 		if (typeof NewsReader !== 'function') { dbug('subprogram', 'NewsReader class missing after load'); return; }
 		if (!this.newsReaderSub) {
 			this.newsReaderSub = new NewsReader({ parentFrame: this.subFrame, shell: this, timer: this.timer });
@@ -140,42 +140,42 @@ var BUILTIN_ACTIONS = {
 		this.queueSubprogramLaunch('newsreader', this.newsReaderSub);
 	},
 	calendar: function () {
-		try { if (typeof CalendarSub !== 'function') load('iconshell/lib/subfunctions/calendar.js'); } catch (e) { dbug('subprogram', 'Failed loading calendar.js ' + e); return; }
+		try { if (typeof CalendarSub !== 'function') load('iconshell/lib/subprograms/calendar.js'); } catch (e) { dbug('subprogram', 'Failed loading calendar.js ' + e); return; }
 		if (typeof CalendarSub !== 'function') { dbug('subprogram', 'CalendarSub class missing after load'); return; }
 		if (!this.calendarSub) this.calendarSub = new CalendarSub({ parentFrame: this.subFrame });
 		this.calendarSub.setParentFrame && this.calendarSub.setParentFrame(this.subFrame);
 		this.queueSubprogramLaunch('calendar', this.calendarSub);
 	},
 	clock: function () {
-		try { if (typeof ClockSub !== 'function') load('iconshell/lib/subfunctions/clock.js'); } catch (e) { dbug('subprogram', 'Failed loading clock.js ' + e); return; }
+		try { if (typeof ClockSub !== 'function') load('iconshell/lib/subprograms/clock.js'); } catch (e) { dbug('subprogram', 'Failed loading clock.js ' + e); return; }
 		if (typeof ClockSub !== 'function') { dbug('subprogram', 'ClockSub class missing after load'); return; }
 		if (!this.clockSub) this.clockSub = new ClockSub({ parentFrame: this.subFrame, shell: this });
 		else this.clockSub.setParentFrame && this.clockSub.setParentFrame(this.subFrame);
 		this.queueSubprogramLaunch('clock', this.clockSub);
 	},
 	rawgate: function () {
-		try { if (typeof RawGateSub !== 'function') load('iconshell/lib/subfunctions/rawgate.js'); } catch (e) { dbug('subprogram', 'Failed loading rawgate.js ' + e); return; }
+		try { if (typeof RawGateSub !== 'function') load('iconshell/lib/subprograms/rawgate.js'); } catch (e) { dbug('subprogram', 'Failed loading rawgate.js ' + e); return; }
 		if (typeof RawGateSub !== 'function') { dbug('subprogram', 'RawGateSub class missing after load'); return; }
 		if (!this.rawGateSub) this.rawGateSub = new RawGateSub({ parentFrame: this.subFrame, shell: this });
 		else this.rawGateSub.setParentFrame && this.rawGateSub.setParentFrame(this.subFrame);
 		this.queueSubprogramLaunch('rawgate', this.rawGateSub);
 	},
 	mail: function () {
-		try { if (typeof Mail !== 'function') load('iconshell/lib/subfunctions/mail.js'); } catch (e) { dbug('subprogram', 'Failed loading mail.js ' + e); return; }
+		try { if (typeof Mail !== 'function') load('iconshell/lib/subprograms/mail.js'); } catch (e) { dbug('subprogram', 'Failed loading mail.js ' + e); return; }
 		if (typeof Mail !== 'function') { dbug('subprogram', 'Mail class missing after load'); return; }
 		if (!this.mailSub) this.mailSub = new Mail({ parentFrame: this.subFrame, shell: this });
 		else { this.mailSub.parentFrame = this.root; this.mailSub.shell = this; }
 		this.queueSubprogramLaunch('mail', this.mailSub);
 	},
 	sysinfo: function () {
-		try { if (typeof SystemInfo !== 'function') load('iconshell/lib/subfunctions/system_info.js'); } catch (e) { dbug('subprogram', 'Failed loading system_info.js ' + e); return; }
+		try { if (typeof SystemInfo !== 'function') load('iconshell/lib/subprograms/system_info.js'); } catch (e) { dbug('subprogram', 'Failed loading system_info.js ' + e); return; }
 		if (typeof SystemInfo !== 'function') { dbug('subprogram', 'SystemInfo class missing after load'); return; }
 		if (!this.systemInfoSub) this.systemInfoSub = new SystemInfo({ parentFrame: this.subFrame, shell: this });
 		else { this.systemInfoSub.parentFrame = this.root; this.systemInfoSub.shell = this; }
 		this.queueSubprogramLaunch('system-info', this.systemInfoSub);
 	},
 	who_list: function () {
-		try { if (typeof WhoOnline !== 'function') load('iconshell/lib/subfunctions/whosonline.js'); } catch (e) { dbug('subprogram', 'Failed loading whosonline.js ' + e); return; }
+		try { if (typeof WhoOnline !== 'function') load('iconshell/lib/subprograms/whosonline.js'); } catch (e) { dbug('subprogram', 'Failed loading whosonline.js ' + e); return; }
 		if (typeof WhoOnline !== 'function') { dbug('subprogram', 'WhoOnline class missing after load'); return; }
 		if (!this.whoOnlineSub) this.whoOnlineSub = new WhoOnline({ parentFrame: this.subFrame, shell: this });
 		else { this.whoOnlineSub.parentFrame = this.root; this.whoOnlineSub.shell = this; }
@@ -827,7 +827,7 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 		{
 			label: "Who", type: "folder", iconFile: "whosonline", get children() {
 				try {
-					if (typeof WhoOnline !== 'function') load('iconshell/lib/subfunctions/whosonline.js');
+					if (typeof WhoOnline !== 'function') load('iconshell/lib/subprograms/whosonline.js');
 					if (typeof WhoOnline !== 'function') return [];
 					if (typeof global !== 'undefined' && global.__icsh_shell && global.__icsh_shell.whoOnlineSub)
 						return global.__icsh_shell.whoOnlineSub.getOnlineUserIcons();

@@ -6,7 +6,7 @@
 // // 4. ESC at any time aborts immediately.
 
 // load('sbbsdefs.js');
-// load("iconshell/lib/subfunctions/subprogram.js");
+// load("iconshell/lib/subprograms/subprogram.js");
 // load("iconshell/lib/util/debug.js");
 // if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 // if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';

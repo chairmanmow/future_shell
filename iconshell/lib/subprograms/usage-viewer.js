@@ -1,4 +1,4 @@
-load('iconshell/lib/subfunctions/subprogram.js');
+load('iconshell/lib/subprograms/subprogram.js');
 
 require('sbbsdefs.js',
     'BG_BLACK', 'BG_BLUE', 'BG_CYAN', 'BG_GREEN', 'BG_MAGENTA', 'BG_BROWN', 'BG_LIGHTGRAY',

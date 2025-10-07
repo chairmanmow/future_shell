@@ -1,5 +1,5 @@
-load("iconshell/lib/subfunctions/chat_helpers.js");
-load("iconshell/lib/subfunctions/subprogram.js"); // Base class
+load("iconshell/lib/subprograms/chat_helpers.js");
+load("iconshell/lib/subprograms/subprogram.js"); // Base class
 
 
 function Chat(jsonchat) {
