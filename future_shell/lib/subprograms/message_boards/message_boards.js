@@ -640,7 +640,7 @@ function MessageBoard(opts) {
     this.blockScreenSaver = false;
     this.frameSet = null;
     this.overlay = null;
-    // Modal-based notice replacements (legacy frame variant removed)
+    // Optional Modal-based notice replacements (enabled via global ICSH_MB_USE_MODAL)
     this._readNoticeModal = null;
     this._transitionNoticeModal = null;
     // Lifecycle guards: _alive toggled true between enter() and final exit/cleanup.
@@ -1216,7 +1216,6 @@ MessageBoard.prototype._init = function (reentry) {
     this._threadHeadersCache = {};
     this._subMessageCounts = {};
     this._subUnreadCounts = {};
-    // Legacy notice frame properties removed; state now tracked via _readNoticeModal/_transitionNoticeModal
     this._readNoticeEvent = null;
     this._readNoticeActive = false;
     this._transitionNoticeActive = false;
@@ -2084,8 +2083,6 @@ MessageBoard.prototype._showReadNotice = function (kind) {
     var msg = labelMapModal[kind] || labelMapModal['next-message'];
     if (this._readNoticeModal) { try { this._readNoticeModal.close(); } catch (_) { } this._readNoticeModal = null; }
     var hostFrame = this.hostFrame || this.rootFrame || this.outputFrame || this.parentFrame || this._readBodyFrame;
-    // Guard: if hostFrame missing or has invalid dimensions, skip showing notice to avoid coordinate errors
-    if (!hostFrame || !hostFrame.width || !hostFrame.height || hostFrame.width < 4 || hostFrame.height < 3) return;
     var self = this;
     this._readNoticeModal = new Modal({
         type: 'spinner',
@@ -2119,7 +2116,6 @@ MessageBoard.prototype._showTransitionNotice = function (text) {
     if (typeof Modal === 'undefined') { try { load('future_shell/lib/util/layout/modal.js'); } catch (_mErr2) { } }
     if (this._transitionNoticeModal) { try { this._transitionNoticeModal.close(); } catch (_) { } this._transitionNoticeModal = null; }
     var host2 = this.hostFrame || this.rootFrame || this.outputFrame || this.parentFrame || null;
-    if (!host2 || !host2.width || !host2.height || host2.width < 4 || host2.height < 3) return false;
     var self = this;
     this._transitionNoticeModal = new Modal({
         type: 'spinner',
