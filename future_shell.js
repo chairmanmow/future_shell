@@ -94,8 +94,17 @@ function main() {
             }
         }
         if (reloadRequested) {
-            // Hard reload iconshell.js and re-enter advanced shell
-            load("future_shell/iconshell.js");
+            // Hard reload configuration so fresh INI/theme changes are picked up
+            if (typeof ThemeRegistry !== 'undefined' && typeof ThemeRegistry.clear === 'function') {
+                try { ThemeRegistry.clear(); } catch (_) { }
+            }
+            var __icshGlobal = (typeof globalThis !== 'undefined') ? globalThis : this;
+            if (__icshGlobal) __icshGlobal.__ICSH_FORCE_RELOAD__ = true;
+            // Hard reload the advanced shell stack and re-enter
+            load("future_shell/config/config.js", true);
+            load("future_shell/lib/shell/index.js", true);
+            load("future_shell/iconshell.js", true);
+            if (__icshGlobal) __icshGlobal.__ICSH_FORCE_RELOAD__ = false;
             continue;
         } else {
             // User exited BasicShell normally

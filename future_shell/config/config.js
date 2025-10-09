@@ -10,7 +10,8 @@
 // [Item.files]\n type=command\n command=exec_xtrn:ANSIVIEW\n label=Files\n icon=folder
 // [Item.settings]\n type=builtin\n builtin=settings\n label=Settings\n icon=settings
 // [Item.exit]\n type=builtin\n builtin=exit\n label=Exit\n icon=exit
-var debug_icsh = false;
+var debug_icsh = true;
+var debug_theme = true;
 function _icsh_log(msg) {
 	try {
 		if (debug_icsh) log(LOG_INFO, '[icsh-config] ' + msg);
@@ -27,6 +28,13 @@ function _icsh_err(msg) {
 	} catch (e) { }
 }
 
+if (typeof ThemeRegistry === 'undefined') {
+	try {
+		var _themeModuleConfig = load('future_shell/lib/theme/palette.js');
+		if (_themeModuleConfig && _themeModuleConfig.ThemeRegistry) ThemeRegistry = _themeModuleConfig.ThemeRegistry;
+	} catch (e) { _icsh_warn('Theme registry unavailable: ' + e); }
+}
+
 function ensureXtrnMenuLoaded() {
 	if (typeof getItemsForXtrnSection === 'function') return true;
 	try {
@@ -39,153 +47,290 @@ function ensureXtrnMenuLoaded() {
 }
 
 // Builtin actions mapping
-/* TODO : reduce boilerplate around launching subprograms
-	i.e. sysop_commands = new SubprogramActionHandler(SysopCommand, { parentFrame: this.subFrame, shell: this });
-	as opposed to the current repetitive pattern
-	try { if (typeof SysopCommand !== 'function') load('future_shell/lib/subprograms/sysop_commands.js'); } catch (e) { dbug('subprogram', 'Failed loading sysop_commands.js ' + e); return; }
-	if (typeof SysopCommand !== 'function') { dbug('subprogram', 'SysopCommand class missing after load'); return; }
-	if (!this.sysopCommand) this.sysopCommand = new SysopCommand({ parentFrame: this.subFrame, shell: this });
-	else { this.sysopCommand.parentFrame = this.root; this.sysopCommand.shell = this; }
-	this.queueSubprogramLaunch('sysop-commands', this.sysopCommand);
-*/
+function SubprogramActionHandler(descriptor, options) {
+	if (!(this instanceof SubprogramActionHandler)) return new SubprogramActionHandler(descriptor, options);
+	options = options || {};
+	var modulePath = options.module || options.modulePath || null;
+	var queueName = options.queueName || options.queue;
+	var instanceField = options.instanceProperty || options.instanceKey || null;
+	var debugNamespace = options.debugNamespace || 'subprogram';
+	var loadFailurePrefix = options.loadFailureMessage || null;
+	var missingMessage = options.missingMessage || null;
+	var optsBuilder = typeof options.options === 'function' ? options.options : null;
+	var onReuse = typeof options.onReuse === 'function' ? options.onReuse : null;
+	var shouldCreateNew = typeof options.shouldCreateNew === 'function' ? options.shouldCreateNew : null;
+	var afterCreate = typeof options.afterCreate === 'function' ? options.afterCreate : null;
+	var afterEnsure = typeof options.afterEnsure === 'function' ? options.afterEnsure : null;
+	var autoAssign = options.assignOptions !== false;
+	var defaults = (options.options && typeof options.options === 'object') ? options.options : {};
+	var globalObject = (function () { return this || (typeof global !== 'undefined' ? global : {}); })();
+	var className = options.className || null;
+
+	function logDebug(message) {
+		if (typeof dbug === 'function') dbug(debugNamespace, message);
+	}
+
+	function resolveCtorReference() {
+		if (typeof descriptor === 'function') return descriptor;
+		if (descriptor && typeof descriptor.get === 'function') return descriptor.get();
+		var name = null;
+		if (typeof descriptor === 'string') name = descriptor;
+		else if (!className && descriptor && descriptor.name) name = descriptor.name;
+		if (!className && name) className = name;
+		if (!name) name = className;
+		if (!name) return undefined;
+		var ctor;
+		try { ctor = eval(name); } catch (e) { ctor = undefined; }
+		if (typeof ctor === 'function') return ctor;
+		if (globalObject && typeof globalObject[name] === 'function') return globalObject[name];
+		return undefined;
+	}
+
+	function ensureConstructor() {
+		var ctor = resolveCtorReference();
+		if (typeof ctor === 'function') return ctor;
+		if (!modulePath) {
+			if (!missingMessage && className) missingMessage = className + ' class missing after load';
+			logDebug(missingMessage || 'Subprogram class unavailable');
+			return null;
+		}
+		try { load(modulePath); }
+		catch (e) {
+			var prefix = loadFailurePrefix || ('Failed loading ' + modulePath.split('/').pop() + ' ');
+			logDebug(prefix + e);
+			return null;
+		}
+		ctor = resolveCtorReference();
+		if (typeof ctor !== 'function') {
+			if (!missingMessage && className) missingMessage = className + ' class missing after load';
+			logDebug(missingMessage || 'Subprogram class missing after load');
+			return null;
+		}
+		return ctor;
+	}
+
+	var handler = function () {
+		var shell = this;
+		var Ctor = ensureConstructor();
+		if (!Ctor) return;
+		var opts = optsBuilder ? optsBuilder.call(shell) : defaults;
+		if (!opts || typeof opts !== 'object') opts = {};
+
+		var instance = instanceField ? shell[instanceField] : null;
+		if (instance && shouldCreateNew && shouldCreateNew.call(shell, instance, opts)) instance = null;
+		var isNew = false;
+		if (!instance) {
+			instance = new Ctor(opts);
+			isNew = true;
+			if (instanceField) shell[instanceField] = instance;
+			if (afterCreate) afterCreate.call(shell, instance, opts);
+		} else if (onReuse) {
+			onReuse.call(shell, instance, opts);
+		} else if (autoAssign) {
+			for (var key in opts) if (opts.hasOwnProperty(key)) instance[key] = opts[key];
+		}
+
+		if (afterEnsure) afterEnsure.call(shell, instance, opts, isNew);
+		if (typeof shell.queueSubprogramLaunch === 'function' && queueName) shell.queueSubprogramLaunch(queueName, instance);
+	};
+
+	return handler;
+}
 var BUILTIN_ACTIONS = {
 	chat: function () { this.queueSubprogramLaunch('chat', this.chat); },
-	sysop_commands: function () {
-		try { if (typeof SysopCommand !== 'function') load('future_shell/lib/subprograms/sysop_commands.js'); } catch (e) { dbug('subprogram', 'Failed loading sysop_commands.js ' + e); return; }
-		if (typeof SysopCommand !== 'function') { dbug('subprogram', 'SysopCommand class missing after load'); return; }
-		if (!this.sysopCommand) this.sysopCommand = new SysopCommand({ parentFrame: this.subFrame, shell: this });
-		else { this.sysopCommand.parentFrame = this.root; this.sysopCommand.shell = this; }
-		this.queueSubprogramLaunch('sysop-commands', this.sysopCommand);
-	},
+	sysop_commands: new SubprogramActionHandler('SysopCommand', {
+		module: 'future_shell/lib/subprograms/sysop_commands.js',
+		queueName: 'sysop-commands',
+		instanceProperty: 'sysopCommand',
+		loadFailureMessage: 'Failed loading sysop_commands.js ',
+		missingMessage: 'SysopCommand class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		onReuse: function (instance) {
+			instance.parentFrame = this.root;
+			instance.shell = this;
+		}
+	}),
 
 	// Dedicated IRC chat section (distinct from generic 'chat')
-	irc_chat: function () {
-		try { if (typeof IrcSection !== 'function') load('future_shell/lib/subprograms/irc.js'); } catch (e) { dbug('subprogram', 'Failed loading irc.js ' + e); return; }
-		if (typeof IrcSection !== 'function') { dbug('subprogram', 'IrcSection class missing after load'); return; }
-		if (!this.ircChatSub) this.ircChatSub = new IrcSection({ parentFrame: this.subFrame, shell: this });
-		else { this.ircChatSub.parentFrame = this.root; this.ircChatSub.shell = this; }
-		this.queueSubprogramLaunch('irc-chat', this.ircChatSub);
-	},
+	irc_chat: new SubprogramActionHandler('IrcSection', {
+		module: 'future_shell/lib/subprograms/irc.js',
+		queueName: 'irc-chat',
+		instanceProperty: 'ircChatSub',
+		loadFailureMessage: 'Failed loading irc.js ',
+		missingMessage: 'IrcSection class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		onReuse: function (instance) {
+			instance.parentFrame = this.root;
+			instance.shell = this;
+		}
+	}),
 	msg_scan_config: function () { if (typeof bbs.cfg_msg_scan === 'function') { this.runExternal(function () { bbs.cfg_msg_scan() }, { programId: 'cfg_msg_scan' }); } },
 	user_settings: function () { if (typeof bbs.user_config === 'function') { this.runExternal(function () { bbs.user_config() }, { programId: 'user_config' }); } },
-	hello: function () {
-		try { if (typeof HelloWorld !== 'function') load('future_shell/lib/subprograms/hello-world.js'); }
-		catch (e) { dbug('subprogram', 'Failed loading hello-world.js ' + e); return; }
-		if (typeof HelloWorld !== 'function') { dbug('subprogram', 'HelloWorld class missing after load'); return; }
-		if (!this.helloWorld) this.helloWorld = new HelloWorld();
-		this.queueSubprogramLaunch('hello-world', this.helloWorld);
-	},
+	hello: new SubprogramActionHandler('HelloWorld', {
+		module: 'future_shell/lib/subprograms/hello-world.js',
+		queueName: 'hello-world',
+		instanceProperty: 'helloWorld',
+		loadFailureMessage: 'Failed loading hello-world.js ',
+		missingMessage: 'HelloWorld class missing after load'
+	}),
 	exit: function () {
 		throw ('Exit Shell');
 	},
-	msg_boards: function () {
-		try { if (typeof MessageBoard !== 'function') load('future_shell/lib/subprograms/message_boards/message_boards.js'); } catch (e) { dbug('subprogram', 'Failed loading message_boards.js ' + e); return; }
-		if (typeof MessageBoard !== 'function') { dbug('subprogram', 'MessageBoard class missing after load'); return; }
-		if (!this.msgBoardSub) this.msgBoardSub = new MessageBoard({ parentFrame: this.subFrame, shell: this, timer: this.timer });
-		else {
-			this.msgBoardSub.parentFrame = this.root;
-			this.msgBoardSub.shell = this;
-			if (typeof this.msgBoardSub.attachShellTimer === 'function') this.msgBoardSub.attachShellTimer(this.timer);
+	msg_boards: new SubprogramActionHandler('MessageBoard', {
+		module: 'future_shell/lib/subprograms/message_boards/message_boards.js',
+		queueName: 'message-boards',
+		instanceProperty: 'msgBoardSub',
+		loadFailureMessage: 'Failed loading message_boards.js ',
+		missingMessage: 'MessageBoard class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this, timer: this.timer }; },
+		onReuse: function (instance) {
+			instance.parentFrame = this.root;
+			instance.shell = this;
+			instance.timer = this.timer;
+			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
 		}
-		this.queueSubprogramLaunch('message-boards', this.msgBoardSub);
-	},
-	privatemsg: function () {
-		try { if (typeof PrivateMsg !== 'function') load('future_shell/lib/subprograms/private_msg.js'); } catch (e) { dbug('subprogram', 'Failed loading private_msg.js ' + e); return; }
-		if (typeof PrivateMsg !== 'function') { dbug('subprogram', 'PrivateMsg class missing after load'); return; }
-		if (!this.privateMsg) this.privateMsg = new PrivateMsg({ parentFrame: this.subFrame });
-		// always reassign parentFrame in case shell recreated frames
-		this.privateMsg.setParentFrame(this.subFrame);
-		this.queueSubprogramLaunch('private-msg', this.privateMsg);
-	},
-	users: function () {
-		try { if (typeof Users !== 'function') load('future_shell/lib/subprograms/users.js'); } catch (e) { dbug('subprogram', 'Failed loading user_list.js ' + e); return; }
-		if (typeof Users !== 'function') { dbug('subprogram', 'Users class missing after load'); return; }
-		if (!this.Users) this.Users = new Users({ parentFrame: this.subFrame });
-		this.Users.setParentFrame(this.subFrame);
-		this.queueSubprogramLaunch('users', this.Users);
-	},
-	userlist: function () {
-		try { if (typeof UserList !== 'function') load('future_shell/lib/subprograms/user_list.js'); } catch (e) { dbug('subprogram', 'Failed loading user_list.js ' + e); return; }
-		if (typeof UserList !== 'function') { dbug('subprogram', 'UserList class missing after load'); return; }
-		if (!this.userList) this.userList = new UserList({ parentFrame: this.subFrame });
-		this.userList.setParentFrame(this.subFrame);
-		this.queueSubprogramLaunch('user-list', this.userList);
-	},
-	filearea: function () {
-		try { if (typeof FileArea !== 'function') load('future_shell/lib/subprograms/file_area.js'); } catch (e) { dbug('subprogram', 'Failed loading file_area.js ' + e); return; }
-		if (typeof FileArea !== 'function') { dbug('subprogram', 'FileArea class missing after load'); return; }
-		var fileAreaIcons = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.fileAreaIcons) ? ICSH_SETTINGS.fileAreaIcons : null;
-		if (!this.fileArea) this.fileArea = new FileArea({ parentFrame: this.subFrame, shell: this, iconMap: fileAreaIcons });
-		else {
-			if (typeof this.fileArea.setParentFrame === 'function') this.fileArea.setParentFrame(this.subFrame);
-			this.fileArea.shell = this;
-			if (typeof this.fileArea.setIconMap === 'function') this.fileArea.setIconMap(fileAreaIcons);
+	}),
+	privatemsg: new SubprogramActionHandler('PrivateMsg', {
+		module: 'future_shell/lib/subprograms/private_msg.js',
+		queueName: 'private-msg',
+		instanceProperty: 'privateMsg',
+		loadFailureMessage: 'Failed loading private_msg.js ',
+		missingMessage: 'PrivateMsg class missing after load',
+		options: function () { return { parentFrame: this.subFrame }; },
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
 		}
-		this.queueSubprogramLaunch('file-area', this.fileArea);
-	},
-	usage_viewer: function () {
-		try { load('future_shell/lib/subprograms/usage-viewer.js'); } catch (e) { dbug('subprogram', 'Failed loading usage-viewer.js ' + e); return; }
-		if (typeof UsageViewer !== 'function') { dbug('subprogram', 'UsageViewer class missing after load'); return; }
-		var needsNewInstance = !this.usageViewer;
-		if (!needsNewInstance && typeof UsageViewer.VERSION !== 'undefined') {
-			if (this.usageViewer._version !== UsageViewer.VERSION) needsNewInstance = true;
+	}),
+	users: new SubprogramActionHandler('Users', {
+		module: 'future_shell/lib/subprograms/users.js',
+		queueName: 'users',
+		instanceProperty: 'Users',
+		loadFailureMessage: 'Failed loading user_list.js ',
+		missingMessage: 'Users class missing after load',
+		options: function () { return { parentFrame: this.subFrame }; },
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
 		}
-		if (needsNewInstance) {
-			this.usageViewer = new UsageViewer({ parentFrame: this.subFrame, shell: this, timer: this.timer });
-		} else {
-			if (typeof this.usageViewer.setParentFrame === 'function') this.usageViewer.setParentFrame(this.subFrame);
-			this.usageViewer.shell = this;
-			if (typeof this.usageViewer.attachShellTimer === 'function') this.usageViewer.attachShellTimer(this.timer);
+	}),
+	userlist: new SubprogramActionHandler('UserList', {
+		module: 'future_shell/lib/subprograms/user_list.js',
+		queueName: 'user-list',
+		instanceProperty: 'userList',
+		loadFailureMessage: 'Failed loading user_list.js ',
+		missingMessage: 'UserList class missing after load',
+		options: function () { return { parentFrame: this.subFrame }; },
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
 		}
-		this.queueSubprogramLaunch('usage-viewer', this.usageViewer);
-	},
-	newsreader: function () {
-		try { if (typeof NewsReader !== 'function') load('future_shell/lib/subprograms/newsreader.js'); } catch (e) { dbug('subprogram', 'Failed loading newsreader.js ' + e); return; }
-		if (typeof NewsReader !== 'function') { dbug('subprogram', 'NewsReader class missing after load'); return; }
-		if (!this.newsReaderSub) {
-			this.newsReaderSub = new NewsReader({ parentFrame: this.subFrame, shell: this, timer: this.timer });
-		} else {
-			if (typeof this.newsReaderSub.setParentFrame === 'function') this.newsReaderSub.setParentFrame(this.subFrame);
-			this.newsReaderSub.shell = this;
-			if (typeof this.newsReaderSub.attachShellTimer === 'function') this.newsReaderSub.attachShellTimer(this.timer);
+	}),
+	filearea: new SubprogramActionHandler('FileArea', {
+		module: 'future_shell/lib/subprograms/file_area.js',
+		queueName: 'file-area',
+		instanceProperty: 'fileArea',
+		loadFailureMessage: 'Failed loading file_area.js ',
+		missingMessage: 'FileArea class missing after load',
+		options: function () {
+			var icons = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.fileAreaIcons) ? ICSH_SETTINGS.fileAreaIcons : null;
+			return { parentFrame: this.subFrame, shell: this, iconMap: icons };
+		},
+		afterEnsure: function (instance, opts) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+			instance.shell = this;
+			if (typeof instance.setIconMap === 'function') instance.setIconMap(opts.iconMap);
 		}
-		this.queueSubprogramLaunch('newsreader', this.newsReaderSub);
-	},
-	calendar: function () {
-		try { if (typeof CalendarSub !== 'function') load('future_shell/lib/subprograms/calendar.js'); } catch (e) { dbug('subprogram', 'Failed loading calendar.js ' + e); return; }
-		if (typeof CalendarSub !== 'function') { dbug('subprogram', 'CalendarSub class missing after load'); return; }
-		if (!this.calendarSub) this.calendarSub = new CalendarSub({ parentFrame: this.subFrame });
-		this.calendarSub.setParentFrame && this.calendarSub.setParentFrame(this.subFrame);
-		this.queueSubprogramLaunch('calendar', this.calendarSub);
-	},
-	clock: function () {
-		try { if (typeof ClockSub !== 'function') load('future_shell/lib/subprograms/clock.js'); } catch (e) { dbug('subprogram', 'Failed loading clock.js ' + e); return; }
-		if (typeof ClockSub !== 'function') { dbug('subprogram', 'ClockSub class missing after load'); return; }
-		if (!this.clockSub) this.clockSub = new ClockSub({ parentFrame: this.subFrame, shell: this });
-		else this.clockSub.setParentFrame && this.clockSub.setParentFrame(this.subFrame);
-		this.queueSubprogramLaunch('clock', this.clockSub);
-	},
-	rawgate: function () {
-		try { if (typeof RawGateSub !== 'function') load('future_shell/lib/subprograms/rawgate.js'); } catch (e) { dbug('subprogram', 'Failed loading rawgate.js ' + e); return; }
-		if (typeof RawGateSub !== 'function') { dbug('subprogram', 'RawGateSub class missing after load'); return; }
-		if (!this.rawGateSub) this.rawGateSub = new RawGateSub({ parentFrame: this.subFrame, shell: this });
-		else this.rawGateSub.setParentFrame && this.rawGateSub.setParentFrame(this.subFrame);
-		this.queueSubprogramLaunch('rawgate', this.rawGateSub);
-	},
-	mail: function () {
-		try { if (typeof Mail !== 'function') load('future_shell/lib/subprograms/mail.js'); } catch (e) { dbug('subprogram', 'Failed loading mail.js ' + e); return; }
-		if (typeof Mail !== 'function') { dbug('subprogram', 'Mail class missing after load'); return; }
-		if (!this.mailSub) this.mailSub = new Mail({ parentFrame: this.subFrame, shell: this });
-		else { this.mailSub.parentFrame = this.root; this.mailSub.shell = this; }
-		this.queueSubprogramLaunch('mail', this.mailSub);
-	},
-	sysinfo: function () {
-		try { if (typeof SystemInfo !== 'function') load('future_shell/lib/subprograms/system_info.js'); } catch (e) { dbug('subprogram', 'Failed loading system_info.js ' + e); return; }
-		if (typeof SystemInfo !== 'function') { dbug('subprogram', 'SystemInfo class missing after load'); return; }
-		if (!this.systemInfoSub) this.systemInfoSub = new SystemInfo({ parentFrame: this.subFrame, shell: this });
-		else { this.systemInfoSub.parentFrame = this.root; this.systemInfoSub.shell = this; }
-		this.queueSubprogramLaunch('system-info', this.systemInfoSub);
-	},
+	}),
+	usage_viewer: new SubprogramActionHandler('UsageViewer', {
+		module: 'future_shell/lib/subprograms/usage-viewer.js',
+		queueName: 'usage-viewer',
+		instanceProperty: 'usageViewer',
+		loadFailureMessage: 'Failed loading usage-viewer.js ',
+		missingMessage: 'UsageViewer class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this, timer: this.timer }; },
+		shouldCreateNew: function (instance) {
+			if (!instance) return false;
+			if (typeof UsageViewer !== 'undefined' && typeof UsageViewer.VERSION !== 'undefined') {
+				return instance._version !== UsageViewer.VERSION;
+			}
+			return false;
+		},
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+			instance.shell = this;
+			instance.timer = this.timer;
+			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
+		}
+	}),
+	newsreader: new SubprogramActionHandler('NewsReader', {
+		module: 'future_shell/lib/subprograms/newsreader.js',
+		queueName: 'newsreader',
+		instanceProperty: 'newsReaderSub',
+		loadFailureMessage: 'Failed loading newsreader.js ',
+		missingMessage: 'NewsReader class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this, timer: this.timer }; },
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+			instance.shell = this;
+			instance.timer = this.timer;
+			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
+		}
+	}),
+	calendar: new SubprogramActionHandler('CalendarSub', {
+		module: 'future_shell/lib/subprograms/calendar.js',
+		queueName: 'calendar',
+		instanceProperty: 'calendarSub',
+		loadFailureMessage: 'Failed loading calendar.js ',
+		missingMessage: 'CalendarSub class missing after load',
+		options: function () { return { parentFrame: this.subFrame }; },
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+		}
+	}),
+	clock: new SubprogramActionHandler('ClockSub', {
+		module: 'future_shell/lib/subprograms/clock.js',
+		queueName: 'clock',
+		instanceProperty: 'clockSub',
+		loadFailureMessage: 'Failed loading clock.js ',
+		missingMessage: 'ClockSub class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+		}
+	}),
+	rawgate: new SubprogramActionHandler('RawGateSub', {
+		module: 'future_shell/lib/subprograms/rawgate.js',
+		queueName: 'rawgate',
+		instanceProperty: 'rawGateSub',
+		loadFailureMessage: 'Failed loading rawgate.js ',
+		missingMessage: 'RawGateSub class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+		}
+	}),
+	mail: new SubprogramActionHandler('Mail', {
+		module: 'future_shell/lib/subprograms/mail.js',
+		queueName: 'mail',
+		instanceProperty: 'mailSub',
+		loadFailureMessage: 'Failed loading mail.js ',
+		missingMessage: 'Mail class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		onReuse: function (instance) {
+			instance.parentFrame = this.root;
+			instance.shell = this;
+		}
+	}),
+	sysinfo: new SubprogramActionHandler('SystemInfo', {
+		module: 'future_shell/lib/subprograms/system_info.js',
+		queueName: 'system-info',
+		instanceProperty: 'systemInfoSub',
+		loadFailureMessage: 'Failed loading system_info.js ',
+		missingMessage: 'SystemInfo class missing after load',
+		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		onReuse: function (instance) {
+			instance.parentFrame = this.root;
+			instance.shell = this;
+		}
+	}),
 	who_list: function () { dbug('subprogram', 'WhoOnline subprogram deprecated'); },
 };
 
@@ -572,7 +717,7 @@ var ICSH_SETTINGS = (function () {
 // distinct key even if its colors match another, so they can diverge
 // later without touching code. All are overrideable via [Colors].
 // ====================================================================
-var ICSH_VALS = {
+var ICSH_DEFAULTS = {
 	// Shell core (legacy names kept for backwards compatibility)
 	ROOT: { BG: BG_BLACK, FG: WHITE },
 	VIEW: { BG: BG_BLACK, FG: LIGHTGRAY },
@@ -689,12 +834,30 @@ var ICSH_VALS = {
 	RAIN_DIM2: { BG: BG_BLACK, FG: DARKGRAY }
 };
 
+var ICSH_VALS = ICSH_DEFAULTS;
+if (typeof ThemeRegistry !== 'undefined') {
+	ThemeRegistry.registerPalette('icsh', ICSH_DEFAULTS);
+	ICSH_VALS = ThemeRegistry.get('icsh');
+}
+
 // Helper: resolve full attribute (BG|FG) from semantic key
 function ICSH_ATTR(key) {
 	var g = ICSH_VALS[key];
 	if (g === undefined) return WHITE; // fallback
 	if (typeof g === 'number') return g; // primitive
 	var bg = g.BG || 0; var fg = g.FG || 0; return bg | fg;
+}
+
+function _clonePalette(src) {
+	if (!src || typeof src !== 'object') return {};
+	var out = {};
+	for (var key in src) {
+		if (!Object.prototype.hasOwnProperty.call(src, key)) continue;
+		var val = src[key];
+		if (val && typeof val === 'object' && !Array.isArray(val)) out[key] = _clonePalette(val);
+		else out[key] = val;
+	}
+	return out;
 }
 
 // Color override loader: allows redefining colors via [Colors] section in guishell.ini
@@ -711,32 +874,47 @@ function ICSH_ATTR(key) {
 //   - Tokens map to Synchronet color constants; BG_ prefix optional for backgrounds.
 //   - If a single token is supplied for an entry having BG/FG and no attribute specified, it's treated as FG.
 //   - Invalid tokens are logged and ignored.
-function applyColorOverrides(vals) {
+function applyColorOverrides(defaults) {
+	var baseDefaults = defaults || ICSH_DEFAULTS;
+	var vals = _clonePalette((typeof ThemeRegistry !== 'undefined') ? ThemeRegistry.get('icsh') : baseDefaults);
+	var changed = false;
+	var namespaceOverrides = {};
+	function ensureNamespace(ns, key) {
+		if (!namespaceOverrides[ns]) namespaceOverrides[ns] = {};
+		if (!namespaceOverrides[ns][key]) namespaceOverrides[ns][key] = {};
+		return namespaceOverrides[ns][key];
+	}
 	try {
 		var iniRaw = readConfigIni('theme.ini');
 		if (!iniRaw) iniRaw = readConfigIni('guishell.ini');
-		if (!iniRaw) return; // no file
+		if (!iniRaw) {
+			if (debug_theme) _icsh_log('Theme override skipped: no theme.ini or guishell.ini found');
+			if (typeof ThemeRegistry === 'undefined') ICSH_VALS = vals;
+			else ICSH_VALS = ThemeRegistry.get('icsh');
+			return;
+		}
 		var ini = parseIni(iniRaw);
-		if (!ini || (!ini.Colors && !ini.colors)) return; // no section
+		if (!ini || (!ini.Colors && !ini.colors)) {
+			if (debug_theme) _icsh_log('Theme override skipped: no [Colors] section');
+			if (typeof ThemeRegistry === 'undefined') ICSH_VALS = vals;
+			else ICSH_VALS = ThemeRegistry.get('icsh');
+			return;
+		}
 		var sect = ini.Colors || ini.colors;
+		if (debug_theme) _icsh_log('Theme override initialised with ' + Object.keys(sect).length + ' entries');
 
 		function lookupColor(token, isBg) {
 			if (token === undefined || token === null) return null;
 			token = ('' + token).trim();
 			if (token === '') return null;
-			// Allow numeric values directly
 			if (/^[0-9]+$/.test(token)) return parseInt(token, 10);
 			var up = token.toUpperCase();
-			// If already has BG_ prefix and we're resolving BG, try directly first
 			var candidates = [];
 			if (isBg) {
 				if (up.indexOf('BG_') === 0) candidates.push(up); else candidates.push('BG_' + up);
-				// fallback to raw (maybe user specified actual BG_* constant name incorrectly flagged as FG)
 				if (up.indexOf('BG_') !== 0) candidates.push(up);
 			} else {
-				// Foreground: prefer raw name first
 				candidates.push(up);
-				// If they specified a BG_ token for FG by mistake, skip adding BG_ variant
 			}
 			for (var i = 0; i < candidates.length; i++) {
 				var name = candidates[i];
@@ -747,33 +925,89 @@ function applyColorOverrides(vals) {
 
 		function setPair(baseKey, bgVal, fgVal) {
 			if (!vals[baseKey] || typeof vals[baseKey] !== 'object') return;
-			if (bgVal !== null) { vals[baseKey].BG = bgVal; _icsh_log('Color override ' + baseKey + '.BG applied'); }
-			if (fgVal !== null) { vals[baseKey].FG = fgVal; _icsh_log('Color override ' + baseKey + '.FG applied'); }
+			var applied = false;
+			if (bgVal !== null) { vals[baseKey].BG = bgVal; applied = true; _icsh_log('Color override ' + baseKey + '.BG applied'); }
+			if (fgVal !== null) { vals[baseKey].FG = fgVal; applied = true; _icsh_log('Color override ' + baseKey + '.FG applied'); }
+			if (applied) changed = true;
 		}
 
+		function applyNamespaceOverride(origKey, value) {
+			var parts = origKey.split('.');
+			if (parts.length < 2) { _icsh_warn('Invalid namespace color override ' + origKey); return; }
+			var ns = parts.shift().trim();
+			if (!ns) { _icsh_warn('Invalid namespace color override ' + origKey); return; }
+			if (debug_theme) _icsh_log('Apply namespace override: ' + ns + ' <- ' + value);
+			var attrTarget = null;
+			var last = parts[parts.length - 1];
+			if (last && /^(BG|FG|COLOR)$/i.test(last.trim())) {
+				attrTarget = last.trim().toUpperCase();
+				parts.pop();
+			}
+			var keyName = parts.join('.').trim();
+			if (!keyName) {
+				if (attrTarget) keyName = 'DEFAULT';
+				else { _icsh_warn('Invalid namespace color override ' + origKey); return; }
+			}
+			keyName = keyName.toUpperCase();
+			var entry = ensureNamespace(ns, keyName);
+			function logSuccess(msg) { if (debug_theme) _icsh_log('Color override ' + ns + '.' + keyName + msg); }
+			if (attrTarget === 'COLOR') {
+				var c = lookupColor(value, false);
+				if (c !== null) { entry.COLOR = c; changed = true; logSuccess('.COLOR applied'); } else _icsh_warn('Invalid COLOR token ' + value + ' for ' + ns + '.' + keyName);
+				return;
+			} else if (attrTarget === 'BG' || attrTarget === 'FG') {
+				var isBg = attrTarget === 'BG';
+				var col = lookupColor(value, isBg);
+				if (col !== null) { entry[attrTarget] = col; changed = true; logSuccess('.' + attrTarget + ' applied'); } else _icsh_warn('Invalid ' + attrTarget + ' token ' + value + ' for ' + ns + '.' + keyName);
+				return;
+			}
+			if (typeof value === 'string' && value.indexOf(',') !== -1) {
+				var pair = value.split(',');
+				var bg = lookupColor(pair[0], true);
+				var fg = lookupColor(pair[1], false);
+				if (bg === null && fg === null) { _icsh_warn('Invalid pair override ' + value + ' for ' + ns + '.' + keyName); return; }
+				if (bg !== null) entry.BG = bg;
+				if (fg !== null) entry.FG = fg;
+				changed = true; logSuccess(' applied');
+			} else {
+				var fgOnly = lookupColor(value, false);
+				if (fgOnly !== null) { entry.FG = fgOnly; changed = true; logSuccess('.FG applied'); }
+				else _icsh_warn('Invalid color token ' + value + ' for ' + ns + '.' + keyName);
+			}
+		}
+
+		var seenKeys = 0;
 		for (var rawKey in sect) {
-			if (!sect.hasOwnProperty(rawKey)) continue;
+			if (!Object.prototype.hasOwnProperty.call(sect, rawKey)) continue;
 			var value = sect[rawKey];
 			if (value === undefined || value === null) continue;
-			var key = rawKey.trim();
-			if (key === '') continue;
-			var upKey = key.toUpperCase();
-			var base = null, target = null; // target: BG|FG|COLOR|null
+			var trimmed = rawKey.trim();
+			if (!trimmed) continue;
+			var upKey = trimmed.toUpperCase();
+			if (debug_theme) _icsh_log('Processing color key ' + trimmed + ' = ' + value);
+			var base = null, target = null;
 			if (upKey.indexOf('.') !== -1) {
 				var parts = upKey.split('.');
 				base = parts[0]; target = parts[1];
 			} else if (/_(BG|FG|COLOR)$/.test(upKey)) {
-				if (upKey.endsWith('_BG')) { base = upKey.slice(0, -3); target = 'BG'; }
-				else if (upKey.endsWith('_FG')) { base = upKey.slice(0, -3); target = 'FG'; }
-				else if (upKey.endsWith('_COLOR')) { base = upKey.slice(0, -6); target = 'COLOR'; }
+				var suffixBg = /_BG$/;
+				var suffixFg = /_FG$/;
+				var suffixColor = /_COLOR$/;
+				if (suffixBg.test(upKey)) { base = upKey.replace(suffixBg, ''); target = 'BG'; }
+				else if (suffixFg.test(upKey)) { base = upKey.replace(suffixFg, ''); target = 'FG'; }
+				else if (suffixColor.test(upKey)) { base = upKey.replace(suffixColor, ''); target = 'COLOR'; }
 			} else {
 				base = upKey;
 			}
-			if (!vals.hasOwnProperty(base)) { _icsh_warn('Color override references unknown group ' + base); continue; }
-			// If group is a primitive numeric (EXTERNAL_BG/EXTERNAL_FG), allow direct numeric/constant replacement
+
+			if (!vals.hasOwnProperty(base)) {
+				if (trimmed.indexOf('.') !== -1) { applyNamespaceOverride(trimmed, value); }
+				else if (debug_theme) _icsh_warn('Color override references unknown group ' + trimmed);
+				continue;
+			}
 			if (typeof vals[base] === 'number') {
 				var prim = lookupColor(value, /_BG$|\.BG$/.test(upKey));
-				if (prim !== null) { vals[base] = prim; _icsh_log('Color override ' + base + '=' + value); }
+				if (prim !== null) { vals[base] = prim; changed = true; _icsh_log('Color override ' + base + '=' + value); }
 				else _icsh_warn('Invalid color token ' + value + ' for ' + base);
 				continue;
 			}
@@ -781,51 +1015,59 @@ function applyColorOverrides(vals) {
 				var isBg = (target === 'BG');
 				if (target === 'COLOR') {
 					var col = lookupColor(value, false);
-					if (col !== null) { vals[base].COLOR = col; _icsh_log('Color override ' + base + '.COLOR=' + value); }
+					if (col !== null) { vals[base].COLOR = col; changed = true; _icsh_log('Color override ' + base + '.COLOR=' + value); }
 					else _icsh_warn('Invalid COLOR token ' + value + ' for ' + base);
-				} else { // BG or FG
+				} else {
 					var col2 = lookupColor(value, isBg);
-					if (col2 !== null) { vals[base][target] = col2; _icsh_log('Color override ' + base + '.' + target + '=' + value); }
+					if (col2 !== null) { vals[base][target] = col2; changed = true; _icsh_log('Color override ' + base + '.' + target + '=' + value); }
 					else _icsh_warn('Invalid ' + target + ' token ' + value + ' for ' + base);
 				}
 				continue;
 			}
-			// No explicit target: either BG,FG pair or single token.
 			if (base === 'ANIMATION') {
-				// Shorthand for ANIMATION.COLOR
 				var c = lookupColor(value, false);
-				if (c !== null) { vals.ANIMATION.COLOR = c; _icsh_log('Color override ANIMATION.COLOR=' + value); }
+				if (c !== null) { vals.ANIMATION.COLOR = c; changed = true; _icsh_log('Color override ANIMATION.COLOR=' + value); }
 				else _icsh_warn('Invalid ANIMATION color ' + value);
 				continue;
 			}
-			// BG,FG pair separated by comma
-			if (value.indexOf(',') !== -1) {
+			if (typeof value === 'string' && value.indexOf(',') !== -1) {
 				var pair = value.split(',');
 				var bg = lookupColor(pair[0], true);
 				var fg = lookupColor(pair[1], false);
-				if (bg === null) _icsh_warn('Invalid BG token "' + pair[0] + '" for ' + base);
-				if (fg === null) _icsh_warn('Invalid FG token "' + pair[1] + '" for ' + base);
+				if (bg === null && fg === null) { _icsh_warn('Invalid pair override ' + value + ' for ' + base); continue; }
 				setPair(base, bg, fg);
 			} else {
-				// Single token -> FG preference, unless group only has COLOR
 				if (vals[base] && typeof vals[base] === 'object') {
 					if ('FG' in vals[base]) {
 						var fgOnly = lookupColor(value, false);
-						if (fgOnly !== null) { vals[base].FG = fgOnly; _icsh_log('Color override ' + base + '.FG=' + value); }
+						if (fgOnly !== null) { vals[base].FG = fgOnly; changed = true; _icsh_log('Color override ' + base + '.FG=' + value); }
 						else _icsh_warn('Invalid FG token ' + value + ' for ' + base);
 					} else if ('COLOR' in vals[base]) {
 						var conly = lookupColor(value, false);
-						if (conly !== null) { vals[base].COLOR = conly; _icsh_log('Color override ' + base + '.COLOR=' + value); }
+						if (conly !== null) { vals[base].COLOR = conly; changed = true; _icsh_log('Color override ' + base + '.COLOR=' + value); }
 						else _icsh_warn('Invalid COLOR token ' + value + ' for ' + base);
 					}
 				}
 			}
+			seenKeys++;
 		}
 	} catch (e) { _icsh_warn('applyColorOverrides error: ' + e); }
+	if (typeof ThemeRegistry !== 'undefined') {
+		if (changed) ThemeRegistry.applyOverrides({ icsh: vals });
+		if (Object.keys(namespaceOverrides).length) ThemeRegistry.applyOverrides(namespaceOverrides);
+		if (debug_theme) {
+			_icsh_log('Theme overrides applied: icsh changed=' + changed);
+			_icsh_log('Namespace overrides: ' + JSON.stringify(namespaceOverrides));
+		}
+		ICSH_VALS = ThemeRegistry.get('icsh');
+	} else {
+		ICSH_VALS = vals;
+	}
 }
 
+
 // Apply overrides at load time (silent if no [Colors] section present)
-applyColorOverrides(ICSH_VALS);
+applyColorOverrides(ICSH_DEFAULTS);
 
 // IconShell configuration: menu structure, labels, icons, and actions
 var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {

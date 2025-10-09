@@ -11,12 +11,20 @@ if (typeof registerModuleExports !== 'function') {
 }
 
 function HelloWorld(opts) {
+	log("HELLO WORLD CONSTRUCTOR 2");
 	opts = opts || {};
 	Subprogram.call(this, { name: 'hello-world', parentFrame: opts.parentFrame });
+	this.id = 'hello-world';
+	this.themeNamespace = this.id;
 	this._nameBuffer = '';
 	this._mode = 'asking'; // 'asking' | 'greeted'
 	this.outputFrame = null;
 	this.inputFrame = null;
+	this.registerColors({
+		OUTPUT: { BG: BG_RED, FG: WHITE },
+		INPUT: { BG: BG_RED, FG: WHITE },
+		PROMPT: { FG: CYAN }
+	});
 }
 
 extend(HelloWorld, Subprogram);
@@ -30,11 +38,13 @@ HelloWorld.prototype._ensureFrames = function () {
 	if (!this.parentFrame) return;
 	if (!this.outputFrame) {
 		var h = Math.max(1, this.parentFrame.height - 1);
-		this.outputFrame = new Frame(1, 1, this.parentFrame.width, h, ICSH_ATTR('HELLO_OUTPUT'), this.parentFrame);
+		var outputAttr = this.paletteAttr('OUTPUT', ICSH_ATTR('HELLO_OUTPUT'));
+		this.outputFrame = new Frame(1, 1, this.parentFrame.width, h, outputAttr, this.parentFrame);
 		this.outputFrame.open();
 	}
 	if (!this.inputFrame) {
-		this.inputFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, ICSH_ATTR('HELLO_INPUT'), this.parentFrame);
+		var inputAttr = this.paletteAttr('INPUT', ICSH_ATTR('HELLO_INPUT'));
+		this.inputFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, inputAttr, this.parentFrame);
 		this.inputFrame.open();
 	}
 };
@@ -42,10 +52,12 @@ HelloWorld.prototype._ensureFrames = function () {
 HelloWorld.prototype.draw = function () {
 	this._ensureFrames();
 	if (!this.outputFrame || !this.inputFrame) return;
-	this.outputFrame.clear();
+	var outputAttr = this.paletteAttr('OUTPUT', ICSH_ATTR('HELLO_OUTPUT'));
+	this.outputFrame.clear(outputAttr);
+	this.outputFrame.attr = outputAttr;
 	this.outputFrame.gotoxy(1, 1);
 	// Greeting always shown
-	this.outputFrame.putmsg('\x01hHELLO WORLD.\x01n');
+	this.outputFrame.putmsg('HELLO WORLD.');
 	this.outputFrame.crlf();
 	this.outputFrame.putmsg('What is your name?');
 	if (this._mode === 'greeted') {
@@ -61,16 +73,18 @@ HelloWorld.prototype.draw = function () {
 
 HelloWorld.prototype._drawInput = function () {
 	if (!this.inputFrame) return;
-	this.inputFrame.clear();
+	var inputAttr = this.paletteAttr('INPUT', ICSH_ATTR('HELLO_INPUT'));
+	this.inputFrame.clear(inputAttr);
 	this.inputFrame.home();
 	if (this._mode === 'asking') {
 		var prompt = '> ' + this._nameBuffer;
-		// Truncate if longer than frame width
 		if (prompt.length > this.inputFrame.width) {
 			prompt = prompt.substr(prompt.length - this.inputFrame.width);
 		}
+		this.inputFrame.attr = this.paletteAttr('PROMPT', inputAttr);
 		this.inputFrame.putmsg(prompt);
 	} else {
+		this.inputFrame.attr = inputAttr;
 		this.inputFrame.putmsg('[ Done ]');
 	}
 	this.inputFrame.cycle();
@@ -114,10 +128,10 @@ HelloWorld.prototype._cleanup = function () {
 };
 
 HelloWorld.prototype._resetState = function () {
- this._nameBuffer = '';
- this._mode = 'asking'; // 'asking' | 'greeted'
- this.outputFrame = null;
- this.inputFrame = null;
+	this._nameBuffer = '';
+	this._mode = 'asking'; // 'asking' | 'greeted'
+	this.outputFrame = null;
+	this.inputFrame = null;
 }
 
 registerModuleExports({ HelloWorld: HelloWorld });

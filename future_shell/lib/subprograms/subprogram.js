@@ -1,23 +1,29 @@
 load('sbbsdefs.js');
 if (typeof lazyLoadModule !== 'function') {
-	try { load('future_shell/lib/util/lazy.js'); } catch (e) { }
+    try { load('future_shell/lib/util/lazy.js'); } catch (e) { }
+}
+if (typeof ThemeRegistry === 'undefined') {
+    try {
+        var _themeModule = load('future_shell/lib/theme/palette.js');
+        if (_themeModule && _themeModule.ThemeRegistry) ThemeRegistry = _themeModule.ThemeRegistry;
+    } catch (e) { }
 }
 
 // Provide sensible defaults when sbbsdefs.js hasn't populated key constants yet.
-if (typeof KEY_UP === 'undefined')      var KEY_UP = 0x4800;
-if (typeof KEY_DOWN === 'undefined')    var KEY_DOWN = 0x5000;
-if (typeof KEY_PGUP === 'undefined')    var KEY_PGUP = 0x4900;
-if (typeof KEY_PGDN === 'undefined')    var KEY_PGDN = 0x5100;
-if (typeof KEY_PAGEUP === 'undefined')  var KEY_PAGEUP = 0x4900;
-if (typeof KEY_PAGEDN === 'undefined')  var KEY_PAGEDN = 0x5100;
-if (typeof KEY_HOME === 'undefined')    var KEY_HOME = 0x4700;
-if (typeof KEY_END === 'undefined')     var KEY_END = 0x4F00;
-if (typeof KEY_LEFT === 'undefined')    var KEY_LEFT = 0x4B00;
-if (typeof KEY_RIGHT === 'undefined')   var KEY_RIGHT = 0x4D00;
-if (typeof KEY_ENTER === 'undefined')   var KEY_ENTER = '\r';
-if (typeof KEY_TAB === 'undefined')     var KEY_TAB = '\t';
+if (typeof KEY_UP === 'undefined') var KEY_UP = 0x4800;
+if (typeof KEY_DOWN === 'undefined') var KEY_DOWN = 0x5000;
+if (typeof KEY_PGUP === 'undefined') var KEY_PGUP = 0x4900;
+if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = 0x5100;
+if (typeof KEY_PAGEUP === 'undefined') var KEY_PAGEUP = 0x4900;
+if (typeof KEY_PAGEDN === 'undefined') var KEY_PAGEDN = 0x5100;
+if (typeof KEY_HOME === 'undefined') var KEY_HOME = 0x4700;
+if (typeof KEY_END === 'undefined') var KEY_END = 0x4F00;
+if (typeof KEY_LEFT === 'undefined') var KEY_LEFT = 0x4B00;
+if (typeof KEY_RIGHT === 'undefined') var KEY_RIGHT = 0x4D00;
+if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
+if (typeof KEY_TAB === 'undefined') var KEY_TAB = '\t';
 function Subprogram(opts) {
-    this.__bg_frame = null;  
+    this.__bg_frame = null;
     opts = opts || {};
     this.name = opts.name || 'subprogram';
     this.parentFrame = opts.parentFrame || null;
@@ -30,171 +36,236 @@ function Subprogram(opts) {
     this._myFrames = [];
     this.timer = opts.timer || (this.shell && this.shell.timer) || null;
     this.blockScreenSaver = false;
+    this.id = opts.id || this.name || 'subprogram';
+    this.themeNamespace = opts.themeNamespace || this.id;
 }
 
-Subprogram.prototype.enter = function(done) {
-    this._done = (typeof done === 'function') ? done : function(){};
+Subprogram.registerColors = function (namespace, defaults) {
+	if (!namespace) {
+		throw new Error('Subprogram.registerColors requires a namespace');
+	}
+	var base = defaults || {};
+	if (typeof ThemeRegistry === 'undefined') return base;
+	ThemeRegistry.registerPalette(namespace, base);
+	return ThemeRegistry.get(namespace) || base;
+};
+
+Subprogram.getColors = function (namespace) {
+    if (typeof ThemeRegistry === 'undefined') return {};
+	if (!namespace) return {};
+	return ThemeRegistry.get(namespace) || {};
+};
+
+Subprogram.prototype.resolveColor = function (namespace, key, fallback) {
+	if (arguments.length === 1) {
+		key = namespace;
+		namespace = null;
+		fallback = undefined;
+	} else if (arguments.length === 2) {
+		fallback = key;
+		key = namespace;
+		namespace = null;
+	}
+	var ns = namespace || this.themeNamespace || this.id;
+	if (!ns || typeof ThemeRegistry === 'undefined') return fallback;
+	return ThemeRegistry.get(ns, key, fallback);
+};
+
+Subprogram.prototype.colorPalette = function (namespace) {
+	var ns = namespace;
+	if (arguments.length === 0 || namespace === null) ns = this.themeNamespace || this.id;
+	if (!ns || typeof ThemeRegistry === 'undefined') return {};
+	return ThemeRegistry.get(ns) || {};
+};
+
+Subprogram.prototype.paletteAttr = function (namespace, key, fallback) {
+	if (arguments.length === 1) {
+		key = namespace;
+		namespace = null;
+		fallback = undefined;
+	} else if (arguments.length === 2) {
+		fallback = key;
+		key = namespace;
+		namespace = null;
+	}
+	var entry = this.resolveColor(namespace, key, null);
+	if (!entry) return (typeof fallback === 'number') ? fallback : (fallback || 0);
+	if (typeof entry === 'number') return entry;
+	var bg = entry.BG || 0;
+	var fg = entry.FG || 0;
+	return bg | fg;
+};
+
+Subprogram.prototype.registerColors = function (defaults, namespace) {
+	var ns = namespace || this.themeNamespace || this.id;
+	if (!ns) throw new Error('registerColors requires a namespace');
+	this.themeNamespace = ns;
+	return Subprogram.registerColors(ns, defaults || {});
+};
+
+Subprogram.prototype.enter = function (done) {
+    this._done = (typeof done === 'function') ? done : function () { };
     this.running = true;
-    if(!this.parentFrame) {
-        this.parentFrame = new Frame(1,1,console.screen_columns,console.screen_rows, ICSH_ATTR('FRAME_STANDARD'));
+    if (!this.parentFrame) {
+        this.parentFrame = new Frame(1, 1, console.screen_columns, console.screen_rows, ICSH_ATTR('FRAME_STANDARD'));
         this.parentFrame.open();
         this._ownsParentFrame = true;
     }
     this._ensureHostFrame();
     this.draw();
-    if(this._myFrames.length === 0)
+    if (this._myFrames.length === 0)
         this.registerDefaultFrames();
 };
 
-Subprogram.prototype.exit = function() {
+Subprogram.prototype.exit = function () {
     this.running = false;
     this.cleanup();
     if (this._done) this._done();
 };
 
-Subprogram.prototype.handleKey = function(key) {
-    if(this._handleKey && typeof this._handleKey === 'function') {
+Subprogram.prototype.handleKey = function (key) {
+    if (this._handleKey && typeof this._handleKey === 'function') {
         return this._handleKey(key);
     }
     if (key === '\x1B') this.exit();
 };
 
-Subprogram.prototype.draw = function(){};
-Subprogram.prototype.refresh = function(){ this.draw(); };
-Subprogram.prototype.cleanup = function(){
-    if(this._cleanup && typeof this._cleanup === 'function') {
+Subprogram.prototype.draw = function () { };
+Subprogram.prototype.refresh = function () { this.draw(); };
+Subprogram.prototype.cleanup = function () {
+    if (this._cleanup && typeof this._cleanup === 'function') {
         this._cleanup();
     }
-    if(this.hostFrame){
+    if (this.hostFrame) {
         var oldHost = this.hostFrame;
-        try { oldHost.close(); } catch(e) {}
+        try { oldHost.close(); } catch (e) { }
         var idx = this._myFrames.indexOf(oldHost);
-        if(idx !== -1) this._myFrames.splice(idx, 1);
+        if (idx !== -1) this._myFrames.splice(idx, 1);
         this.hostFrame = null;
     }
     this.setBackgroundFrame(null);
     if (this.parentFrame) {
-        if(this._ownsParentFrame){
-            try { this.parentFrame.close(); } catch(e) {}
+        if (this._ownsParentFrame) {
+            try { this.parentFrame.close(); } catch (e) { }
             this.parentFrame = null;
         } else {
-            try { this.parentFrame.cycle(); } catch(e) {}
+            try { this.parentFrame.cycle(); } catch (e) { }
         }
     }
     this.detachShellTimer();
     this._myFrames = [];
 };
 
-Subprogram.prototype._teardownHostFrame = function(){
-    if(!this.hostFrame) return;
-    try { this.hostFrame.close(); } catch(e){}
+Subprogram.prototype._teardownHostFrame = function () {
+    if (!this.hostFrame) return;
+    try { this.hostFrame.close(); } catch (e) { }
     var idx = this._myFrames.indexOf(this.hostFrame);
-    if(idx !== -1) this._myFrames.splice(idx, 1);
+    if (idx !== -1) this._myFrames.splice(idx, 1);
     this.hostFrame = null;
     this.setBackgroundFrame(null);
 };
 
-Subprogram.prototype._releaseFrameRefs = function(){
-    for(var key in this){
-        if(!Object.prototype.hasOwnProperty.call(this, key)) continue;
-        if(!this[key]) continue;
-        if(key === 'parentFrame' || key === 'hostFrame' || key === '__bg_frame' || key === '_myFrames') continue;
+Subprogram.prototype._releaseFrameRefs = function () {
+    for (var key in this) {
+        if (!Object.prototype.hasOwnProperty.call(this, key)) continue;
+        if (!this[key]) continue;
+        if (key === 'parentFrame' || key === 'hostFrame' || key === '__bg_frame' || key === '_myFrames') continue;
         var val = this[key];
-        if(val && typeof val === 'object'){
+        if (val && typeof val === 'object') {
             var isFrameLike = (typeof val.close === 'function' && typeof val.open === 'function' && typeof val.gotoxy === 'function');
-            if(isFrameLike){
-                try { val.close(); } catch(e){}
+            if (isFrameLike) {
+                try { val.close(); } catch (e) { }
                 this[key] = null;
             }
         }
     }
 };
 
-Subprogram.prototype.onShellResize = function(dims){
+Subprogram.prototype.onShellResize = function (dims) {
     this._releaseFrameRefs();
     this._teardownHostFrame();
     this._myFrames = [];
-    if(typeof this.handleResize === 'function'){
-        try { this.handleResize(dims); } catch(e){}
+    if (typeof this.handleResize === 'function') {
+        try { this.handleResize(dims); } catch (e) { }
     }
     this._ensureHostFrame();
-    if(typeof this.afterResize === 'function'){
-        try { this.afterResize(dims); } catch(e){}
+    if (typeof this.afterResize === 'function') {
+        try { this.afterResize(dims); } catch (e) { }
     }
-    if(typeof this.refresh === 'function'){
-        try { this.refresh(); } catch(e){}
-    } else if(typeof this.draw === 'function'){
-        try { this.draw(); } catch(e){}
+    if (typeof this.refresh === 'function') {
+        try { this.refresh(); } catch (e) { }
+    } else if (typeof this.draw === 'function') {
+        try { this.draw(); } catch (e) { }
     }
-    if(this.parentFrame && typeof this.parentFrame.cycle === 'function'){
-        try { this.parentFrame.cycle(); } catch(e){}
+    if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
+        try { this.parentFrame.cycle(); } catch (e) { }
     }
 };
 
-Subprogram.prototype.registerFrame = function(frame){
+Subprogram.prototype.registerFrame = function (frame) {
     this._myFrames.push(frame);
 };
 
-Subprogram.prototype.registerDefaultFrames = function(){
-    if(this.outputFrame) this.registerFrame(this.outputFrame);
-    if(this.inputFrame) this.registerFrame(this.inputFrame);
+Subprogram.prototype.registerDefaultFrames = function () {
+    if (this.outputFrame) this.registerFrame(this.outputFrame);
+    if (this.inputFrame) this.registerFrame(this.inputFrame);
 }
 
-Subprogram.prototype.closeMyFrames = function(){
-    this._myFrames.forEach(function(frame){
+Subprogram.prototype.closeMyFrames = function () {
+    this._myFrames.forEach(function (frame) {
         frame.close();
     });
     this.parentFrame.cycle();
-};      
+};
 
-Subprogram.prototype.bringFramesToTop = function(){
+Subprogram.prototype.bringFramesToTop = function () {
     log("BRINGING SUBPROGRAM FRAMES TO TOP", this._myFrames.length);
-    if(this.refresh) this.refresh();
+    if (this.refresh) this.refresh();
     this.draw();
-    this._myFrames.forEach(function(frame){
+    this._myFrames.forEach(function (frame) {
         frame.top();
     });
     // this.draw();
     this.parentFrame.cycle();
-};   
+};
 
-Subprogram.prototype.sendFramesToBottom = function(){
-    this._myFrames.forEach(function(frame){
+Subprogram.prototype.sendFramesToBottom = function () {
+    this._myFrames.forEach(function (frame) {
         frame.bottom();
     });
     this.parentFrame.cycle();
-}; 
+};
 
-Subprogram.prototype.pauseForReason = function(reason){};
+Subprogram.prototype.pauseForReason = function (reason) { };
 
-Subprogram.prototype.resumeForReason = function(reason){};
+Subprogram.prototype.resumeForReason = function (reason) { };
 
-Subprogram.prototype.setParentFrame = function(f){
+Subprogram.prototype.setParentFrame = function (f) {
     this.parentFrame = f;
     this._ownsParentFrame = !this.parentFrame;
     return this;
 };
 
-Subprogram.prototype.attachShellTimer = function(timer){
+Subprogram.prototype.attachShellTimer = function (timer) {
     this.timer = timer || null;
 };
 
-Subprogram.prototype.detachShellTimer = function(){
+Subprogram.prototype.detachShellTimer = function () {
     this.timer = null;
 };
 
-Subprogram.prototype.setBackgroundFrame = function(frame) { 
-    this.__bg_frame = frame; 
-    return frame; 
+Subprogram.prototype.setBackgroundFrame = function (frame) {
+    this.__bg_frame = frame;
+    return frame;
 };
 
-Subprogram.prototype.backgroundFrame = function() { 
+Subprogram.prototype.backgroundFrame = function () {
     return this.__bg_frame || false;
 };
 
-Subprogram.prototype._ensureHostFrame = function(){
-    if(this.hostFrame && this.hostFrame.is_open) return this.hostFrame;
-    if(!this.parentFrame) return null;
+Subprogram.prototype._ensureHostFrame = function () {
+    if (this.hostFrame && this.hostFrame.is_open) return this.hostFrame;
+    if (!this.parentFrame) return null;
     var pf = this.parentFrame;
     var width = Math.max(1, pf.width || console.screen_columns || 80);
     var height = Math.max(1, pf.height || console.screen_rows || 24);
@@ -207,9 +278,9 @@ Subprogram.prototype._ensureHostFrame = function(){
         this.hostFrame = new Frame(1, 1, width, height, attr, pf);
         this.hostFrame.open();
         this.setBackgroundFrame(this.hostFrame);
-        if(this._myFrames.indexOf(this.hostFrame) === -1) this._myFrames.push(this.hostFrame);
-    } catch(e) {
-        log('Subprogram '+(this.name||'unknown')+' failed to create hostFrame: '+e);
+        if (this._myFrames.indexOf(this.hostFrame) === -1) this._myFrames.push(this.hostFrame);
+    } catch (e) {
+        log('Subprogram ' + (this.name || 'unknown') + ' failed to create hostFrame: ' + e);
         this.hostFrame = null;
     }
     return this.hostFrame;
@@ -217,8 +288,8 @@ Subprogram.prototype._ensureHostFrame = function(){
 
 // Unified toast helper available to every subprogram.
 // Usage: this._showToast({ message:'Hello', timeout:5000, position:'bottom-right' })
-Subprogram.prototype._showToast = function(opts) {
-    log("Subprogram._showToast called with " +JSON.stringify(opts));
+Subprogram.prototype._showToast = function (opts) {
+    log("Subprogram._showToast called with " + JSON.stringify(opts));
     opts = opts || {};
     try {
         if (this.shell && typeof this.shell.showToast === 'function') {
@@ -232,7 +303,7 @@ Subprogram.prototype._showToast = function(opts) {
         if (opts.message && typeof console !== 'undefined' && console.putmsg) {
             console.putmsg('\r\n' + opts.message + '\r\n');
         }
-    } catch(e) { /* swallow */ }
+    } catch (e) { /* swallow */ }
     return null;
 };
 

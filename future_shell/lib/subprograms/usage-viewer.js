@@ -1,6 +1,6 @@
 load('future_shell/lib/subprograms/subprogram.js');
 if (typeof registerModuleExports !== 'function') {
-	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 
 require('sbbsdefs.js',
@@ -24,8 +24,16 @@ var USAGE_VIEWER_VERSION = '20250108e';
 var hideSysopXtrns = ['scfgansi'];
 
 function UsageViewer(opts) {
+    log("USAGE VIEWER CONSTRUCTOR");
     opts = opts || {};
     Subprogram.call(this, { name: 'usage-viewer', parentFrame: opts.parentFrame, shell: opts.shell, timer: opts.timer });
+    this.id = 'usage-viewer';
+    this.themeNamespace = this.id;
+    this.registerColors({
+        ICON: { BG: BG_BLACK, FG: LIGHTGRAY },
+        LIST: { BG: BG_RED, FG: BLACK },
+        GAME_TITLE: { BG: BG_BROWN, FG: LIGHTBLUE }
+    });
     var modsDir = system.mods_dir;
     if (modsDir && modsDir.slice(-1) !== '/' && modsDir.slice(-1) !== '\\') modsDir += '/';
     this.dataFile = modsDir + 'future_shell/data/external_usage.json';
@@ -263,7 +271,8 @@ UsageViewer.prototype.ensureFrames = function () {
         }
     }
     if (!this.listFrame) {
-        this.listFrame = new Frame(host.x, host.y, width, listHeight, BG_BLACK | LIGHTGRAY, host);
+        var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
+        this.listFrame = new Frame(host.x, host.y, width, listHeight, attr, host);
         log("Created list frame at y=" + host.y + ", height=" + listHeight);
 
         this.listFrame.open();
@@ -967,7 +976,7 @@ UsageViewer.prototype._resolveProgramDisplayInfo = function (prog) {
 
 UsageViewer.prototype._renderProgramIcon = function (frame, info) {
     if (!frame || !info) return;
-    var attr = ICSH_ATTR('FRAME_STANDARD');
+    var attr = this.paletteAttr('ICON', ICSH_ATTR('FRAME_STANDARD'));
     if (typeof info.iconBg === 'number' || typeof info.iconFg === 'number') {
         attr = (info.iconBg || 0) | (info.iconFg || 0);
     }
@@ -1015,11 +1024,12 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     var baseAttr = BG_BLACK | LIGHTGRAY;
     var width = df.width;
     if (width <= 0 || height <= 0) return;
-
-    var blockFrame = new Frame(1, baseY + 1, width, height + 1, baseAttr, df);
+    var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
+    log("GOT ATTRIBUTE FROM PALETTE: " + JSON.stringify(attr));
+    var blockFrame = new Frame(1, baseY + 1, width, height + 1, attr, df);
     blockFrame.transparent = true;
     try { blockFrame.open(); } catch (e) { }
-    blockFrame.clear(baseAttr);
+    blockFrame.clear(attr);
     this._programFrames.push(blockFrame);
 
     var display = this._resolveProgramDisplayInfo(prog);
@@ -1279,7 +1289,7 @@ UsageViewer.prototype._showUserFilter = function () {
         this._activeUserModal = legacy;
     }
     // Reset selection context when opening (program list resets after filter change)
-	this.programIndex = 0; this.programTop = 0;
+    this.programIndex = 0; this.programTop = 0;
 };
 
 registerModuleExports({ UsageViewer: UsageViewer });

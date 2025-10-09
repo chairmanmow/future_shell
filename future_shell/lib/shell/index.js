@@ -1,5 +1,11 @@
+var __ICSH_FORCE_RELOAD__ = (typeof globalThis !== 'undefined' && typeof globalThis.__ICSH_FORCE_RELOAD__ === 'boolean') ? globalThis.__ICSH_FORCE_RELOAD__ : (typeof __ICSH_FORCE_RELOAD__ === 'boolean' ? __ICSH_FORCE_RELOAD__ : false);
+
+function loadModule(path) {
+	return load(path, __ICSH_FORCE_RELOAD__);
+}
+
 function loadMany(paths) {
-	for (var i = 0; i < paths.length; i++) load(paths[i]);
+	for (var i = 0; i < paths.length; i++) loadModule(paths[i]);
 }
 
 function resolveExport(mod, name) {
@@ -10,10 +16,10 @@ function resolveExport(mod, name) {
 }
 
 // basic helpers
-load("future_shell/lib/util/helpers.js");
+loadModule("future_shell/lib/util/helpers.js");
 // shell/index.js
 
-load("future_shell/lib/shell/dependencies.js");
+loadModule("future_shell/lib/shell/dependencies.js");
 
 // Icon Shell prototypes
 loadMany([
@@ -27,8 +33,8 @@ loadMany([
 ]);
 
 // subclasses
-var Icon = resolveExport(load("future_shell/lib/shell/icon.js"), 'Icon');
-load("future_shell/lib/shell/toast.js");
+var Icon = resolveExport(loadModule("future_shell/lib/shell/icon.js"), 'Icon');
+loadModule("future_shell/lib/shell/toast.js");
 
 // subprograms
 loadMany([
