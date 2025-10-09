@@ -454,6 +454,12 @@ IconShell.prototype._processKeyQueue = function (keys, nowTs) {
         var key = keys.shift();
         if (key === undefined || key === null) continue;
         key = this._normalizeKey(key);
+        try {
+            if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG && key !== '') {
+                var code = (typeof key === 'string' && key.length) ? key.charCodeAt(0) : key;
+                log('[GLOBAL normalized key] repr=' + JSON.stringify(key) + ' code=' + code);
+            }
+        } catch (_) { }
         if (!key) continue;
         if (typeof key === 'string' && key.length > 0) {
             if (key === CTRL_D && perf) {
@@ -471,6 +477,14 @@ IconShell.prototype._processKeyQueue = function (keys, nowTs) {
             }
         }
         this._lastKeyTimestamp = nowTs;
+        // Modal interception: if a modal is active, route key there first
+        var modalConsumed = false;
+        try {
+            if (typeof Modal !== 'undefined' && Modal && typeof Modal.handleGlobalKey === 'function') {
+                modalConsumed = Modal.handleGlobalKey(key);
+            }
+        } catch (_mk) { }
+        if (modalConsumed) continue;
         this.processKeyboardInput(key);
     }
 };

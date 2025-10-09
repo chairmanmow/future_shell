@@ -289,9 +289,9 @@ function getNewsreaderConfig(forceReload) {
     };
 }
 
-var LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_BLUE | WHITE));
+var LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_GREEN | WHITE));
 var LIST_INACTIVE = resolveAttr('FILE_LIST_INACTIVE', (BG_BLACK | LIGHTGRAY));
-var HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_BLUE | WHITE));
+var HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_MAGENTA | WHITE));
 var STATUS_ATTR = resolveAttr('FILE_FOOTER', (BG_BLACK | LIGHTGRAY));
 var IMAGE_CACHE_LIMIT = 4;
 var NEWSREADER_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -378,9 +378,9 @@ function NewsReader(opts) {
 extend(NewsReader, Subprogram);
 
 NewsReader.prototype._resetState = function () {
-    LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_BLUE | WHITE));
+    LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_GREEN | WHITE));
     LIST_INACTIVE = resolveAttr('FILE_LIST_INACTIVE', (BG_BLACK | LIGHTGRAY));
-    HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_BLUE | WHITE));
+    HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_MAGENTA | WHITE));
     STATUS_ATTR = resolveAttr('FILE_FOOTER', (BG_BLACK | LIGHTGRAY));
 
     this._destroyArticleIcon();
@@ -628,15 +628,17 @@ NewsReader.prototype._destroyLoadingOverlay = function () {
         try { this._loadingModal.close(); } catch (_e) { }
         this._loadingModal = null;
     }
+    // Mitigation (Option 1): ensure any residual background from the loading modal
+    // is overwritten with the inactive list background before next render.
+    if (this.listFrame && typeof LIST_INACTIVE !== 'undefined') {
+        try { this.listFrame.clear(LIST_INACTIVE); this.listFrame.home(); } catch (_eClr) { }
+    }
 };
 
 NewsReader.prototype._showLoadingOverlay = function (message) {
     if (!this.listFrame || !this.parentFrame) return false;
     this._destroyLoadingOverlay();
     // Lazy load Modal if not already loaded in environment
-    if (typeof Modal === 'undefined') {
-        try { load('future_shell/lib/util/layout/modal.js'); } catch (_mErr) { return false; }
-    }
     var self = this;
     this._loadingModal = new Modal({
         type: 'spinner',
@@ -644,9 +646,11 @@ NewsReader.prototype._showLoadingOverlay = function (message) {
         message: this._toDisplayText(message || 'Working...'),
         parentFrame: this.parentFrame,
         overlay: true,
-        attr: LIST_ACTIVE,
-        contentAttr: LIST_ACTIVE,
-        buttonAttr: LIST_ACTIVE,
+        // Mitigation (Option 3): use LIST_INACTIVE so the spinner overlay background
+        // matches final surface and does not leave a contrasting (blue) residue.
+        attr: LIST_INACTIVE,
+        contentAttr: LIST_INACTIVE,
+        buttonAttr: LIST_INACTIVE,
         autoOpen: true,
         spinnerFrames: ['|', '/', '-', '\\'],
         spinnerInterval: 120,
@@ -1287,8 +1291,11 @@ NewsReader.prototype._renderCategoryIcons = function () {
     var startRow = this.scrollOffset;
     var endRow = Math.min(totalRows, startRow + visibleRows);
     var cells = [];
-    var bgVal = (typeof BG_BLUE === 'number') ? BG_BLUE : ((typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70) : 0);
-    var fgVal = (typeof WHITE === 'number') ? WHITE : ((typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F) : (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    // Use the background nibble from LIST_INACTIVE so theme / attr.ini overrides apply.
+    var bgVal = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70)
+        : ((typeof BG_BLACK === 'number') ? BG_BLACK : 0);
+    var fgVal = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F)
+        : ((typeof WHITE === 'number') ? WHITE : (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
 
     for (var row = startRow; row < endRow; row++) {
         for (var col = 0; col < cols; col++) {
@@ -1377,8 +1384,11 @@ NewsReader.prototype._renderFeedIcons = function () {
     var startRow = this.scrollOffset;
     var endRow = Math.min(totalRows, startRow + visibleRows);
     var cells = [];
-    var bgVal = (typeof BG_BLUE === 'number') ? BG_BLUE : ((typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70) : 0);
-    var fgVal = (typeof WHITE === 'number') ? WHITE : ((typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F) : (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    // Do not force blue for feed icons either; respect LIST_INACTIVE background.
+    var bgVal = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70)
+        : ((typeof BG_BLACK === 'number') ? BG_BLACK : 0);
+    var fgVal = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F)
+        : ((typeof WHITE === 'number') ? WHITE : (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
 
     for (var row = startRow; row < endRow; row++) {
         for (var col = 0; col < cols; col++) {

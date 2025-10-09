@@ -17,7 +17,8 @@ if (typeof KEY_END === 'undefined') var KEY_END = 0x4F00;
 if (typeof KEY_LEFT === 'undefined') var KEY_LEFT = 0x4B00;
 if (typeof KEY_RIGHT === 'undefined') var KEY_RIGHT = 0x4D00;
 
-var USAGE_VIEWER_VERSION = '20250108a';
+var USAGE_VIEWER_VERSION = '20250108e';
+var hideSysopXtrns = ['scfgansi'];
 
 function UsageViewer(opts) {
     opts = opts || {};
@@ -25,23 +26,47 @@ function UsageViewer(opts) {
     var modsDir = system.mods_dir;
     if (modsDir && modsDir.slice(-1) !== '/' && modsDir.slice(-1) !== '\\') modsDir += '/';
     this.dataFile = modsDir + 'future_shell/data/external_usage.json';
-    this.months = [];
-    this.index = 0;
-    this.top = 0;
+    this.months = []; // includes synthesized All Time at index 0 after load
+    this.index = 0; // month index (0 = All Time)
+    this.top = 0; // scroll offset for program list
     this.listFrame = null;
     this.detailFrame = null;
     this.message = '';
-    this.focus = 'month';
-    this.programIndex = 0;
-    this.programTop = 0;
+    this.focus = 'program'; // unified list focus (no separate month/program focus now)
+    this.programIndex = 0; // highlighted program row
+    this.programTop = 0; // scroll offset for visible list window
+    this._omitCodes = (opts.omitCodes || []); // array of program ids/codes to skip
+    this._sortMode = 'time'; // 'time' | 'launches' | 'recent' | 'name'
+    this._categoryFilter = null; // future: filter by xtrn category (not yet populated if catalog missing)
+    this._categories = []; // unique categories collected (future enhancement)
     this._programFrames = [];
     this._programHotspots = {};
     this._iconLookup = null;
     this._version = USAGE_VIEWER_VERSION;
     this._programCatalog = null;
+    this._programCategories = null; // id(lower) -> category label
+    // Behavior flag: if true, unknown programs (not in catalog) are shown (fail-open). Default false -> fail-closed.
+    this._failOpenOnUnknown = false;
+    // Launch debounce tracking
+    this._lastLaunchTime = 0;
+    this._lastLaunchIndex = -1;
+    // User filter state (null = no filter)
+    this._userFilter = null; // user key from usage DB
+    this._userFilterAlias = null; // cached alias
 }
 extend(UsageViewer, Subprogram);
 UsageViewer.VERSION = USAGE_VIEWER_VERSION;
+
+// Helper: derive a normalized access requirement string from varied field names.
+UsageViewer.prototype._extractAccessRequirement = function (obj) {
+    if (!obj) return '';
+    var fields = ['ar', 'AR', 'access_requirements', 'required_ar', 'req_ar', 'sec_ar', 'secAR'];
+    for (var i = 0; i < fields.length; i++) {
+        var k = fields[i];
+        if (obj[k] && typeof obj[k] === 'string' && obj[k].trim().length) return obj[k].trim();
+    }
+    return '';
+};
 
 UsageViewer.prototype.setParentFrame = function (frame) {
     this._ensureVersion(frame);
@@ -79,7 +104,7 @@ UsageViewer.prototype._loadData = function () {
     this.index = 0;
     this.top = 0;
     this.message = '';
-    this.focus = 'month';
+    this.focus = 'program';
     this.programIndex = 0;
     this.programTop = 0;
     this._clearProgramResources();
@@ -111,12 +136,15 @@ UsageViewer.prototype._loadData = function () {
         return;
     }
     keys.sort();
-    keys.reverse();
+    keys.reverse(); // newest first
+    var allTime = { month: 'All Time', count: 0, seconds: 0, programs: [], users: {}, lastTimestamp: 0 };
+    var allProgramMap = {}; // id -> {count, seconds, lastTimestamp}
     for (var i = 0; i < keys.length; i++) {
         var key = keys[i];
         var entry = data[key] || {};
         var totals = entry.totals || {};
         var programs = entry.programs || {};
+        var perProgUserSet = {}; // pid -> { userKey: true }
         var programList = [];
         for (var pid in programs) {
             if (!programs.hasOwnProperty(pid)) continue;
@@ -125,22 +153,91 @@ UsageViewer.prototype._loadData = function () {
                 id: pid,
                 count: p.count || 0,
                 seconds: p.seconds || 0,
-                lastTimestamp: p.lastTimestamp || 0
+                lastTimestamp: p.lastTimestamp || 0,
+                uniqueUsers: 0
             });
         }
         programList.sort(function (a, b) {
             if (b.count !== a.count) return b.count - a.count;
             return (b.seconds || 0) - (a.seconds || 0);
         });
-        this.months.push({
+        // Build monthly entry
+        var monthEntry = {
             month: key,
             count: totals.count || 0,
             seconds: totals.seconds || 0,
             programs: programList,
             users: entry.users || {},
             lastTimestamp: entry.lastTimestamp || 0
-        });
+        };
+        this.months.push(monthEntry);
+        // Aggregate per-user stats into allTime.users
+        var usersMap = entry.users || {};
+        for (var uk in usersMap) {
+            if (!usersMap.hasOwnProperty(uk)) continue;
+            var uInfo = usersMap[uk] || {};
+            if (!allTime.users[uk]) allTime.users[uk] = { alias: uInfo.alias || uk, programs: {} };
+            var srcProgStats = (uInfo.programs || {});
+            var dstUser = allTime.users[uk];
+            for (var upid in srcProgStats) {
+                if (!srcProgStats.hasOwnProperty(upid)) continue;
+                var usp = srcProgStats[upid] || {};
+                if (!dstUser.programs[upid]) dstUser.programs[upid] = { count: 0, seconds: 0, lastTimestamp: 0 };
+                var dstp = dstUser.programs[upid];
+                dstp.count += usp.count || 0;
+                dstp.seconds += usp.seconds || 0;
+                if ((usp.lastTimestamp || 0) > (dstp.lastTimestamp || 0)) dstp.lastTimestamp = usp.lastTimestamp || 0;
+                if (!perProgUserSet[upid]) perProgUserSet[upid] = {};
+                perProgUserSet[upid][uk] = true;
+            }
+        }
+        for (var pl = 0; pl < programList.length; pl++) {
+            var plProg = programList[pl];
+            if (plProg && perProgUserSet[plProg.id]) {
+                var cnt = 0; var setRef = perProgUserSet[plProg.id];
+                for (var sKey in setRef) if (setRef.hasOwnProperty(sKey)) cnt++;
+                plProg.uniqueUsers = cnt;
+            }
+        }
+        // Aggregate into all-time (apply omit filter later)
+        for (var ap = 0; ap < programList.length; ap++) {
+            var apProg = programList[ap];
+            if (!apProg || !apProg.id) continue;
+            var omit = this._omitCodes && this._omitCodes.indexOf(apProg.id) !== -1;
+            if (omit) continue;
+            if (!allProgramMap[apProg.id]) allProgramMap[apProg.id] = { id: apProg.id, count: 0, seconds: 0, lastTimestamp: 0 };
+            var tgt = allProgramMap[apProg.id];
+            tgt.count += apProg.count || 0;
+            tgt.seconds += apProg.seconds || 0;
+            if (apProg.lastTimestamp > tgt.lastTimestamp) tgt.lastTimestamp = apProg.lastTimestamp;
+        }
+        allTime.count += totals.count || 0;
+        allTime.seconds += totals.seconds || 0;
+        if (entry.lastTimestamp > allTime.lastTimestamp) allTime.lastTimestamp = entry.lastTimestamp;
     }
+    // Finalize all-time program list
+    var allTimeUserSets = {};
+    for (var au in allTime.users) if (allTime.users.hasOwnProperty(au)) {
+        var auInfo = allTime.users[au] || {};
+        var auProgMap = auInfo.programs || {};
+        for (var apid in auProgMap) if (auProgMap.hasOwnProperty(apid)) {
+            if (!allTimeUserSets[apid]) allTimeUserSets[apid] = {};
+            allTimeUserSets[apid][au] = true;
+        }
+    }
+    for (var pidAll in allProgramMap) if (allProgramMap.hasOwnProperty(pidAll)) {
+        var allEntry = allProgramMap[pidAll];
+        if (allTimeUserSets[pidAll]) {
+            var cu = 0; var uset = allTimeUserSets[pidAll];
+            for (var kU in uset) if (uset.hasOwnProperty(kU)) cu++;
+            allEntry.uniqueUsers = cu;
+        } else allEntry.uniqueUsers = 0;
+        allTime.programs.push(allEntry);
+    }
+    // Sort all-time list by default sort (time)
+    this._sortPrograms(allTime.programs);
+    // Place all time at front
+    this.months.unshift(allTime);
 };
 
 UsageViewer.prototype.ensureFrames = function () {
@@ -149,29 +246,11 @@ UsageViewer.prototype.ensureFrames = function () {
     var width = host.width;
     var height = host.height;
     if (height < 2) height = 2;
-    var minList = 3;
-    var minDetail = 5;
-    var listHeight = Math.max(minList, Math.floor(height * 0.30));
-    if (height - listHeight < minDetail) listHeight = Math.max(minList, height - minDetail);
-    if (listHeight > height - 1) listHeight = height - 1;
-    if (listHeight < 1) listHeight = 1;
-    var detailHeight = height - listHeight;
-    if (detailHeight < minDetail) {
-        detailHeight = Math.max(minDetail, height - minList);
-        if (detailHeight >= height) detailHeight = Math.max(1, height - minList);
-        listHeight = height - detailHeight;
-        if (listHeight < 1) listHeight = 1;
-    }
-    var frameGap = 1;
-    if (listHeight + detailHeight + frameGap > height) {
-        var over = listHeight + detailHeight + frameGap - height;
-        if (detailHeight - over >= minDetail) detailHeight -= over;
-        else listHeight = Math.max(minList, listHeight - over);
-    }
-    var detailY = host.y + listHeight + frameGap;
-    if (detailY + detailHeight - 1 > host.y + height - 1) {
-        detailHeight = Math.max(1, (host.y + height) - detailY);
-    }
+    // New layout: list consumes full height minus 1 header row (or 2 rows). We'll use 2-line header.
+    var headerHeight = 1;  // doesn't look like we are using a frame for this.
+    var listHeight = Math.max(1, height - headerHeight);
+    var detailHeight = 0; // deprecated (still keep frame for compatibility)
+    var detailY = host.y + height; // off-screen effectively
     if (this.listFrame) {
         var needsListRebuild = this.listFrame.width !== width || this.listFrame.height !== listHeight
             || this.listFrame.x !== host.x || this.listFrame.y !== host.y;
@@ -182,9 +261,12 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.listFrame) {
         this.listFrame = new Frame(host.x, host.y, width, listHeight, BG_BLACK | LIGHTGRAY, host);
+        log("Created list frame at y=" + host.y + ", height=" + listHeight);
+
         this.listFrame.open();
         this.registerFrame(this.listFrame);
     }
+    this.setBackgroundFrame(this.listFrame);
     if (this.detailFrame) {
         var needsDetailRebuild = this.detailFrame.width !== width || this.detailFrame.height !== detailHeight
             || this.detailFrame.x !== host.x || this.detailFrame.y !== detailY;
@@ -193,9 +275,10 @@ UsageViewer.prototype.ensureFrames = function () {
             this.detailFrame = null;
         }
     }
-    if (!this.detailFrame) {
-        this.detailFrame = new Frame(host.x, detailY, width, detailHeight, BG_BLACK | LIGHTGRAY, host);
-        this.detailFrame.open();
+    if (!this.detailFrame) { // stub frame retained for legacy refs; not displayed
+        this.detailFrame = new Frame(host.x, detailY, width, Math.max(1, detailHeight), BG_BLACK | LIGHTGRAY, host);
+        log("Created detail frame at y=" + detailY + ", height=" + detailHeight);
+        try { this.detailFrame.open(); } catch (eDF) { }
         this.registerFrame(this.detailFrame);
     }
 };
@@ -207,36 +290,230 @@ UsageViewer.prototype.draw = function () {
     lf.attr = BG_BLACK | LIGHTGRAY;
     lf.clear(BG_BLACK | LIGHTGRAY);
     lf.gotoxy(1, 1);
-    if (this.message) {
-        var msg = this.message;
-        if (msg.length > lf.width) msg = msg.substr(0, lf.width);
-        lf.putmsg('\x01h\x01c' + msg + '\x01n');
-        lf.cycle();
-        if (this.detailFrame) {
-            this.detailFrame.clear();
-            this.detailFrame.gotoxy(1, 1);
-            this.detailFrame.putmsg('ESC=Exit');
-            this.detailFrame.cycle();
+    // Header (line 1 & 2)
+    lf.clear(BG_BLACK | LIGHTGRAY);
+    var current = this.months[this.index] || { month: 'All Time', count: 0, seconds: 0, programs: [] };
+    // Prepare filtered program list early for header counts
+    var rawProgsForHeader = (current.programs || []).slice(0);
+    if (this._categoryFilter) {
+        this._ensureProgramCatalog();
+        var tmpCat = [];
+        for (var hcp = 0; hcp < rawProgsForHeader.length; hcp++) {
+            var hpid = rawProgsForHeader[hcp].id || '';
+            var hcat = this._programCategories && this._programCategories[hpid.toLowerCase()];
+            if (hcat === this._categoryFilter) tmpCat.push(rawProgsForHeader[hcp]);
         }
+        rawProgsForHeader = tmpCat;
+    }
+    // Access filter (remove programs user cannot launch)
+    var tmpAccess = [];
+    for (var hap = 0; hap < rawProgsForHeader.length; hap++) {
+        if (this._userHasAccess(rawProgsForHeader[hap].id)) tmpAccess.push(rawProgsForHeader[hap]);
+    }
+    rawProgsForHeader = tmpAccess;
+    // Always filter to only programs that have an icon
+    var tmpIcon = [];
+    for (var hip = 0; hip < rawProgsForHeader.length; hip++) {
+        if (this._lookupIconBase(rawProgsForHeader[hip].id)) tmpIcon.push(rawProgsForHeader[hip]);
+    }
+    rawProgsForHeader = tmpIcon;
+    // Build directional month navigation header without explicit help text.
+    var monthNav = '';
+    var totalMonths = this.months.length;
+    var monthName = current.month;
+    // Color legend: cyan brackets/arrows (\x01c), light blue month (bright blue \x01h\x01b), yellow directional arrows (\x01h\x01y)
+    if (totalMonths <= 1) {
+        monthNav = '\x01c[\x01h\x01b' + monthName + '\x01c]';
+    } else if (this.index === 0) {
+        // First (All Time) only has a forward indicator to the right
+        monthNav = '\x01c[\x01h\x01b' + monthName + '\x01h\x01y>';
+    } else if (this.index === totalMonths - 1) {
+        // Last month only has a backward indicator to the left
+        monthNav = '\x01h\x01y<\x01h\x01b' + monthName + '\x01c]';
+    } else {
+        // Middle month(s) show both directions
+        monthNav = '\x01h\x01y<\x01h\x01b' + monthName + '\x01h\x01y>';
+    }
+
+    // Color-coded sort mode
+    var sortColor = '\x01h\x01w'; // default for launches (white/gray)
+    if (this._sortMode === 'time') sortColor = '\x01h\x01g'; // light green
+    else if (this._sortMode === 'recent') sortColor = '\x01h\x01r'; // bright red
+    else if (this._sortMode === 'name') sortColor = '\x01h\x01c'; // light cyan
+    else if (this._sortMode === 'launches') sortColor = '\x01h\x01w'; // white / gray
+    else if (this._sortMode === 'unique') sortColor = '\x01h\x01b'; // light blue
+    var sortLabel = (this._sortMode === 'unique') ? 'uniquePlayers' : this._sortMode;
+
+    var headerParts = [];
+    headerParts.push(monthNav);
+    // Force the 'Sort:' label itself to white, then apply color to the mode value
+    headerParts.push('\x01h\x01wSort:\x01n' + sortColor + sortLabel + '\x01n');
+    var displayLaunches = current.count;
+    var displaySeconds = current.seconds;
+    if (this._userFilter) {
+        // If user filter active, compute user-specific totals for selected month
+        var monthUsers = current.users || {};
+        var uf = monthUsers[this._userFilter];
+        if (uf && uf.programs) {
+            displayLaunches = 0; displaySeconds = 0;
+            for (var upk in uf.programs) if (uf.programs.hasOwnProperty(upk)) {
+                var ups = uf.programs[upk];
+                displayLaunches += ups.count || 0;
+                displaySeconds += ups.seconds || 0;
+            }
+        }
+    }
+    headerParts.push('Launches ' + displayLaunches);
+    headerParts.push('Time ' + this._formatDuration(displaySeconds));
+    headerParts.push('Programs ' + rawProgsForHeader.length);
+    if (this._categoryFilter) headerParts.push('Cat:' + this._categoryFilter);
+    if (this._userFilterAlias) headerParts.push('User ' + this._userFilterAlias);
+    var header1 = headerParts.join('  ');
+    if (header1.length > lf.width) header1 = header1.substr(0, lf.width);
+    try { lf.gotoxy(1, 1); lf.putmsg(header1 + '\x01n'); } catch (_) { }
+    // Dynamic help line: show user filter state inline.
+    // Color legend: \x01m = magenta, \x01w = white/gray, \x01h = high intensity, \x01n = reset
+    var userStateLabel = this._userFilterAlias ? this._userFilterAlias : 'All Users';
+    // Surround variable user label with light magenta (high + magenta) for emphasis
+    var help2 = '\x01h\x01mU\x01n=\x01h\x01m' + userStateLabel + '\x01n  S=Sort  C=Cat  R=Reload  ENTER=Launch';
+    if (help2.length > lf.width) help2 = help2.substr(0, lf.width);
+    try { lf.gotoxy(1, 2); lf.putmsg(help2 + '\x01n'); } catch (_) { }
+    // Stylized icon block rendering (restored)
+    var startRow = 3; // after two header lines
+    var availableRows = lf.height - (startRow - 1);
+    if (availableRows < 1) availableRows = 1;
+    this._sortPrograms(current.programs);
+    var progs = current.programs || [];
+    // Apply user filter early: replace program list with user-specific stats
+    if (this._userFilter) {
+        var monthUsers2 = current.users || {};
+        var uSel = monthUsers2[this._userFilter];
+        if (uSel && uSel.programs) {
+            var derived = [];
+            for (var pidUF in uSel.programs) if (uSel.programs.hasOwnProperty(pidUF)) {
+                // Only include if exists in aggregated list OR allow anyway (include icon filter later)
+                var stats = uSel.programs[pidUF] || {};
+                derived.push({ id: pidUF, count: stats.count || 0, seconds: stats.seconds || 0, lastTimestamp: stats.lastTimestamp || 0 });
+            }
+            progs = derived;
+        } else {
+            progs = [];
+        }
+    }
+    if (this._categoryFilter) {
+        this._ensureProgramCatalog();
+        var filteredCat = [];
+        for (var fcp = 0; fcp < progs.length; fcp++) {
+            var cpid = progs[fcp].id || '';
+            var ccat = this._programCategories && this._programCategories[cpid.toLowerCase()];
+            if (ccat === this._categoryFilter) filteredCat.push(progs[fcp]);
+        }
+        progs = filteredCat;
+    }
+    // Apply user access filter before icon filtering
+    var filteredAccess = [];
+    for (var acp = 0; acp < progs.length; acp++) {
+        if (this._userHasAccess(progs[acp].id)) filteredAccess.push(progs[acp]);
+    }
+    progs = filteredAccess;
+    // Enforce icon presence
+    var filteredIcon = [];
+    for (var fip = 0; fip < progs.length; fip++) {
+        if (this._lookupIconBase(progs[fip].id)) filteredIcon.push(progs[fip]);
+    }
+    progs = filteredIcon;
+    // Clamp selection indices and handle empty list
+    if (!progs.length) {
+        this.programIndex = 0;
+        this.programTop = 0;
+        // Show a simple message when nothing is available
+        try { lf.gotoxy(1, startRow); lf.putmsg('\x01h\x01c(No accessible icon programs)\x01n'); } catch (_m) { }
+        try { lf.cycle(); } catch (_mc) { }
         return;
     }
-    var visible = lf.height;
-    if (this.index < this.top) this.top = this.index;
-    if (this.index >= this.top + visible) this.top = Math.max(0, this.index - visible + 1);
-    for (var row = 0; row < visible; row++) {
-        var idx = this.top + row;
-        if (idx >= this.months.length) break;
-        var item = this.months[idx];
-        var line = this._formatMonthLine(item);
-        if (line.length > lf.width) line = line.substr(0, lf.width);
-        if (idx === this.index) {
-            if (this.focus === 'month') line = '\x01n\x01h\x01c> ' + line + '\x01n';
-            else line = '> ' + line;
-        } else line = '  ' + line;
-        lf.putmsg(line + '\r\n');
+    if (this.programIndex < 0) this.programIndex = 0;
+    if (this.programIndex >= progs.length) this.programIndex = Math.max(0, progs.length - 1);
+    if (this.programTop > this.programIndex) this.programTop = this.programIndex;
+    // Compute block layout metrics
+    var blockHeight = 7; // increased for Total players line
+    var spacer = 1;
+    var step = blockHeight + spacer;
+    var maxVisible = Math.max(1, Math.floor((availableRows + spacer) / step));
+    // Try to use leftover space if enough for an additional full block (not just spacer)
+    var usedRows = (maxVisible * step) - spacer; // last block doesn't need trailing spacer
+    var leftover = availableRows - usedRows;
+    if (leftover >= blockHeight) maxVisible++;
+    // Adjust scroll window to keep selection visible
+    if (this.programIndex < this.programTop) this.programTop = this.programIndex;
+    while (this.programIndex >= this.programTop + maxVisible) this.programTop++;
+    // Clear existing program frames
+    this._clearProgramResources();
+    // Draw visible blocks
+    var hotspots = {};
+    for (var vis = 0; vis < maxVisible; vis++) {
+        var idx = this.programTop + vis;
+        if (idx >= progs.length) break;
+        var y = startRow + vis * step;
+        if (y > lf.height) break;
+        var remaining = (lf.height - y) + 1;
+        var blockHeightAdjusted = Math.min(blockHeight, remaining);
+        if (blockHeightAdjusted <= 0) break;
+        // Temporarily map month.programs to filtered list entry for block renderer
+        var prog = progs[idx];
+        this._drawProgramBlock(lf, y, blockHeightAdjusted, prog, idx, hotspots, vis);
     }
-    lf.cycle();
-    this._drawDetail();
+    this._programHotspots = hotspots;
+    try { lf.cycle(); } catch (_c) { }
+};
+UsageViewer.prototype._formatProgramLine = function (index, prog) {
+    if (!prog) return '';
+    var name = this._formatProgramName(prog.id);
+    var dur = this._formatDuration(prog.seconds);
+    var launches = prog.count || 0;
+    var recent = prog.lastTimestamp ? this._shortRecent(prog.lastTimestamp) : '---';
+    var line = format('%3u %-20s %8s %6u %s', index + 1, name.substr(0, 20), dur, launches, recent);
+    return line;
+};
+
+UsageViewer.prototype._shortRecent = function (ts) {
+    if (!ts) return '---';
+    var seconds = Math.floor(ts / 1000);
+    try { return strftime('%m-%d %H:%M', seconds); } catch (e) { return '' + seconds; }
+};
+
+UsageViewer.prototype._sortPrograms = function (list) {
+    if (!list || !list.length) return;
+    var mode = this._sortMode;
+    list.sort(function (a, b) {
+        if (mode === 'time') {
+            if (b.seconds !== a.seconds) return b.seconds - a.seconds;
+            if (b.count !== a.count) return b.count - a.count;
+            return (b.lastTimestamp || 0) - (a.lastTimestamp || 0);
+        } else if (mode === 'launches') {
+            if (b.count !== a.count) return b.count - a.count;
+            if (b.seconds !== a.seconds) return b.seconds - a.seconds;
+            return (b.lastTimestamp || 0) - (a.lastTimestamp || 0);
+        } else if (mode === 'recent') {
+            if ((b.lastTimestamp || 0) !== (a.lastTimestamp || 0)) return (b.lastTimestamp || 0) - (a.lastTimestamp || 0);
+            if (b.seconds !== a.seconds) return b.seconds - a.seconds;
+            return b.count - a.count;
+        } else if (mode === 'name') {
+            var A = (a.id || '').toLowerCase(); var B = (b.id || '').toLowerCase();
+            if (A > B) return 1; if (A < B) return -1;
+            return 0;
+        } else if (mode === 'unique') {
+            var au = (typeof a.uniqueUsers === 'number') ? a.uniqueUsers : -1;
+            var bu = (typeof b.uniqueUsers === 'number') ? b.uniqueUsers : -1;
+            if (bu !== au) return bu - au;
+            if (b.seconds !== a.seconds) return b.seconds - a.seconds;
+            if (b.count !== a.count) return b.count - a.count;
+            return (b.lastTimestamp || 0) - (a.lastTimestamp || 0);
+        }
+        return 0;
+    });
+    if (mode === 'unique') {
+        try { log('[usage-viewer] sorted by unique, first item: ' + (list[0] ? list[0].id + ' (' + list[0].uniqueUsers + ')' : 'none')); } catch (_) { }
+    }
 };
 
 UsageViewer.prototype._formatMonthLine = function (item) {
@@ -284,125 +561,130 @@ UsageViewer.prototype._formatDuration = function (seconds) {
 
 UsageViewer.prototype.handleKey = function (key) {
     if (!key) return;
-    switch (key) {
-        case '\x1B':
-        case 'Q':
-        case 'q':
-            this.exit();
+    // Hotspot activation: if key corresponds to a hotspot index (1-9) in _programHotspots
+    if (typeof key === 'string' && key.length === 1 && (key >= '1' && key <= '9') && this._programHotspots && this._programHotspots[key] !== undefined) {
+        var idx = this._programHotspots[key];
+        // Rebuild visible list to confirm bounds
+        var list = this._currentVisiblePrograms ? this._currentVisiblePrograms() : [];
+        if (idx >= 0 && idx < list.length) {
+            this.programIndex = idx;
+            this._launchSelected();
+            log("Launching from hotspot key " + key);
+            // try { this.draw(); } catch (e) { }
             return;
-        case 'R':
-        case 'r':
-            this._loadData();
-            this.draw();
-            return;
-        case KEY_LEFT:
-        case '\t':
-            if (this.focus === 'program') {
-                this.focus = 'month';
-                this.draw();
-            }
-            return;
-        case KEY_RIGHT:
-            if (this.focus === 'month' && this.months.length && (this.months[this.index].programs || []).length) {
-                this.focus = 'program';
-                this.programIndex = 0;
-                this.programTop = 0;
-                this.draw();
-            }
-            return;
-        case KEY_UP:
-        case 'k':
-        case 'K':
-            if (this.focus === 'month') {
-                if (this.index > 0) {
-                    this.index--;
-                    this.programIndex = 0;
-                    this.programTop = 0;
-                    this.draw();
-                }
-            } else {
-                if (this.programIndex > 0) {
-                    this.programIndex--;
-                    this.draw();
-                }
-            }
-            return;
-        case KEY_DOWN:
-        case 'j':
-        case 'J':
-            if (this.focus === 'month') {
-                if (this.index < this.months.length - 1) {
-                    this.index++;
-                    this.programIndex = 0;
-                    this.programTop = 0;
-                    this.draw();
-                }
-            } else {
-                var progs = (this.months[this.index] && this.months[this.index].programs) ? this.months[this.index].programs : [];
-                if (this.programIndex < progs.length - 1) {
-                    this.programIndex++;
-                    this.draw();
-                }
-            }
-            return;
-        case KEY_PGUP:
-            if (this.focus === 'month') {
-                this.index = Math.max(0, this.index - (this.listFrame ? this.listFrame.height : 1));
-                this.programIndex = 0;
-                this.programTop = 0;
-                this.draw();
-            } else {
-                this.programIndex = Math.max(0, this.programIndex - 5);
-                this.draw();
-            }
-            return;
-        case KEY_PGDN:
-            if (this.focus === 'month') {
-                this.index = Math.min(this.months.length - 1, this.index + (this.listFrame ? this.listFrame.height : 1));
-                this.programIndex = 0;
-                this.programTop = 0;
-                this.draw();
-            } else {
-                var progs = (this.months[this.index] && this.months[this.index].programs) ? this.months[this.index].programs : [];
-                this.programIndex = Math.min(progs.length - 1, this.programIndex + 5);
-                this.draw();
-            }
-            return;
-        case KEY_HOME:
-            if (this.focus === 'month') {
-                this.index = 0;
-                this.programIndex = 0;
-                this.programTop = 0;
-                this.draw();
-            } else {
-                this.programIndex = 0;
-                this.programTop = 0;
-                this.draw();
-            }
-            return;
-        case KEY_END:
-            if (this.focus === 'month') {
-                if (this.months.length) {
-                    this.index = this.months.length - 1;
-                    this.programIndex = 0;
-                    this.programTop = 0;
-                    this.draw();
-                }
-            } else {
-                var progsEnd = (this.months[this.index] && this.months[this.index].programs) ? this.months[this.index].programs : [];
-                if (progsEnd.length) {
-                    this.programIndex = progsEnd.length - 1;
-                    this.draw();
-                }
-            }
-            return;
+        }
     }
-    if (this.focus === 'program' && this._programHotspots && this._programHotspots[key] !== undefined) {
-        this.programIndex = this._programHotspots[key];
-        this.draw();
-        return;
+    switch (key) {
+        case '\x1B': case 'Q': case 'q': this.exit(); return;
+        case 'R': case 'r': this._loadData(); this.draw(); return;
+        case 'S': case 's': this._cycleSort(); this.draw(); return;
+        case 'C': case 'c': this._cycleCategory(); this.draw(); return;
+        case 'U': case 'u': this._showUserFilter(); return;
+        // case '\r':
+        // case '\n':
+        case KEY_ENTER:
+            log("Launching from Enter/Return key" + key + String.charCodeAt(0));
+            this._launchSelected();
+            return;
+        case KEY_LEFT: if (this.index > 0) { this.index--; this.programIndex = 0; this.programTop = 0; this.draw(); } return;
+        case KEY_RIGHT: if (this.index < this.months.length - 1) { this.index++; this.programIndex = 0; this.programTop = 0; this.draw(); } return;
+        case KEY_UP:
+            if (this.programIndex > 0) {
+                this.programIndex--; this.draw();
+            } return;
+        case KEY_DOWN:
+            var progs = (this.months[this.index] && this.months[this.index].programs) ? this.months[this.index].programs : [];
+            if (this.programIndex < progs.length - 1) { this.programIndex++; this.draw(); }
+            return;
+        case KEY_PGUP: this.programIndex = Math.max(0, this.programIndex - (this.listFrame ? this.listFrame.height - 2 : 5)); this.draw(); return;
+        case KEY_PGDN: {
+            var progs2 = (this.months[this.index] && this.months[this.index].programs) ? this.months[this.index].programs : [];
+            this.programIndex = Math.min(progs2.length - 1, this.programIndex + (this.listFrame ? this.listFrame.height - 2 : 5));
+            this.draw(); return;
+        }
+        default: return;
     }
 };
+
+UsageViewer.prototype._cycleSort = function () {
+    var order = ['time', 'launches', 'recent', 'name', 'unique'];
+    var idx = order.indexOf(this._sortMode);
+    if (idx === -1) idx = 0; else idx = (idx + 1) % order.length;
+    this._sortMode = order[idx];
+};
+
+UsageViewer.prototype._cycleCategory = function () {
+    this._ensureProgramCatalog();
+    if (!this._categories || !this._categories.length) { this._categoryFilter = null; return; }
+    if (this._categoryFilter === null) { this._categoryFilter = this._categories[0]; return; }
+    var idx = this._categories.indexOf(this._categoryFilter);
+    if (idx === -1) { this._categoryFilter = null; return; }
+    idx = (idx + 1) % (this._categories.length + 1);
+    if (idx >= this._categories.length) this._categoryFilter = null; else this._categoryFilter = this._categories[idx];
+};
+
+// Reconstruct current visible (filtered) program list (same logic as draw)
+UsageViewer.prototype._currentVisiblePrograms = function () {
+    var current = this.months[this.index] || { programs: [] };
+    var progs;
+    if (this._userFilter) {
+        var uEnt = (current.users || {})[this._userFilter];
+        if (uEnt && uEnt.programs) {
+            progs = [];
+            for (var pid in uEnt.programs) if (uEnt.programs.hasOwnProperty(pid)) {
+                var st = uEnt.programs[pid] || {};
+                progs.push({ id: pid, count: st.count || 0, seconds: st.seconds || 0, lastTimestamp: st.lastTimestamp || 0 });
+            }
+        } else {
+            progs = [];
+        }
+    } else {
+        progs = (current.programs || []).slice(0);
+    }
+    this._sortPrograms(progs);
+    if (this._categoryFilter) {
+        this._ensureProgramCatalog();
+        var filteredCat = [];
+        for (var i = 0; i < progs.length; i++) {
+            var pid = progs[i].id || '';
+            var cat = this._programCategories && this._programCategories[pid.toLowerCase()];
+            if (cat === this._categoryFilter) filteredCat.push(progs[i]);
+        }
+        progs = filteredCat;
+    }
+    var filteredAccess = [];
+    for (var a = 0; a < progs.length; a++) if (this._userHasAccess(progs[a].id)) filteredAccess.push(progs[a]);
+    progs = filteredAccess;
+    var withIcons = [];
+    for (var j = 0; j < progs.length; j++) if (this._lookupIconBase(progs[j].id)) withIcons.push(progs[j]);
+    return withIcons;
+};
+
+UsageViewer.prototype._launchSelected = function () {
+    var list = this._currentVisiblePrograms();
+    if (!list.length) return;
+    if (this.programIndex < 0 || this.programIndex >= list.length) return;
+    this._launchProgram(list[this.programIndex].id);
+    this._loadData();
+    this.draw();
+};
+
+UsageViewer.prototype._launchProgram = function (programId) {
+    if (!programId) return;
+    var code = String(programId);
+    var colon = code.lastIndexOf(':');
+    if (colon !== -1) code = code.substr(colon + 1);
+    try {
+        if (this.shell && typeof this.shell.runExternal === 'function') {
+            var self = this;
+            this.shell.runExternal(function () { try { bbs.exec_xtrn(code); } catch (e) { } finally { try { self.draw(); } catch (e2) { } } }, { programId: code });
+        } else if (typeof bbs !== 'undefined' && bbs && typeof bbs.exec_xtrn === 'function') {
+            bbs.exec_xtrn(code);
+            try { this.draw(); } catch (e3) { }
+        }
+    } catch (e) { }
+};
+
 
 UsageViewer.prototype.cleanup = function () {
     this._clearProgramResources();
@@ -501,11 +783,15 @@ UsageViewer.prototype._formatProgramName = function (programId) {
 UsageViewer.prototype._ensureProgramCatalog = function () {
     if (this._programCatalog) return;
     var catalog = {};
+    var categories = {};
+    this._rawProgramMeta = this._rawProgramMeta || {}; // lower id -> raw prog object (for access checks)
+    this._rawSectionMeta = this._rawSectionMeta || {}; // lower id -> section access snapshot
     try {
         if (system && system.xtrn_area && system.xtrn_area.length) {
             for (var s = 0; s < system.xtrn_area.length; s++) {
                 var area = system.xtrn_area[s];
                 if (!area || !area.prog_list) continue;
+                var areaName = (area.name || area.desc || area.code || ('Area' + s));
                 for (var p = 0; p < area.prog_list.length; p++) {
                     var prog = area.prog_list[p];
                     if (!prog || !prog.code) continue;
@@ -514,6 +800,23 @@ UsageViewer.prototype._ensureProgramCatalog = function () {
                     var lower = code.toLowerCase();
                     catalog[lower] = label;
                     catalog[code.replace(/\s+/g, '_').toLowerCase()] = label;
+                    categories[lower] = areaName;
+                    // Store reference plus snapshot of built-in access flags if present
+                    if (prog && (typeof prog.can_access !== 'undefined' || typeof prog.can_run !== 'undefined')) {
+                        prog._futureShellAccessFlags = {
+                            can_access: prog.can_access,
+                            can_run: prog.can_run
+                        };
+                    }
+                    this._rawProgramMeta[lower] = prog; // store reference
+                    // Store section meta keyed by program id (capture minimal fields)
+                    if (area) {
+                        var areaAr = this._extractAccessRequirement(area);
+                        this._rawSectionMeta[lower] = {
+                            level: (typeof area.sec_level === 'number') ? area.sec_level : (typeof area.level === 'number' ? area.level : undefined),
+                            ar: areaAr
+                        };
+                    }
                 }
             }
         }
@@ -527,12 +830,31 @@ UsageViewer.prototype._ensureProgramCatalog = function () {
                 var lk = rawCode.toLowerCase();
                 catalog[lk] = title;
                 catalog[rawCode.replace(/\s+/g, '_').toLowerCase()] = title;
+                if (progInfo.area && progInfo.area.name) {
+                    categories[lk] = progInfo.area.name;
+                    var secAr = this._extractAccessRequirement(progInfo.area);
+                    this._rawSectionMeta[lk] = {
+                        level: (typeof progInfo.area.sec_level === 'number') ? progInfo.area.sec_level : (typeof progInfo.area.level === 'number' ? progInfo.area.level : undefined),
+                        ar: secAr
+                    };
+                }
+                if (progInfo && (typeof progInfo.can_access !== 'undefined' || typeof progInfo.can_run !== 'undefined')) {
+                    progInfo._futureShellAccessFlags = {
+                        can_access: progInfo.can_access,
+                        can_run: progInfo.can_run
+                    };
+                }
+                this._rawProgramMeta[lk] = progInfo;
             }
         }
-    } catch (e) {
-        // leave catalog as whatever we built so far
-    }
+    } catch (e) { }
     this._programCatalog = catalog;
+    this._programCategories = categories;
+    var catSet = {};
+    for (var pid in categories) if (categories.hasOwnProperty(pid)) catSet[categories[pid]] = true;
+    this._categories = [];
+    for (var cname in catSet) if (catSet.hasOwnProperty(cname)) this._categories.push(cname);
+    this._categories.sort();
 };
 
 UsageViewer.prototype._lookupProgramFriendlyName = function (programId) {
@@ -543,6 +865,78 @@ UsageViewer.prototype._lookupProgramFriendlyName = function (programId) {
     var underscored = key.replace(/\s+/g, '_');
     if (this._programCatalog && this._programCatalog[underscored]) return this._programCatalog[underscored];
     return null;
+};
+
+UsageViewer.prototype._userHasAccess = function (programId) {
+    if (!programId) return false;
+    var pid = String(programId).toLowerCase();
+    // Sysop-hide list workaround: if program in hideSysopXtrns and user is not SYSOP (level >=90) then hide
+    try {
+        if (typeof hideSysopXtrns !== 'undefined' && hideSysopXtrns && hideSysopXtrns.length) {
+            var checkList = [];
+            for (var hs = 0; hs < hideSysopXtrns.length; hs++) {
+                var c = hideSysopXtrns[hs];
+                if (!c) continue;
+                checkList.push(String(c).toLowerCase());
+            }
+            if (checkList.length && checkList.indexOf(pid) !== -1) {
+                var userLevelCheck = 0;
+                try {
+                    if (typeof user !== 'undefined' && user) {
+                        if (user.security && typeof user.security.level === 'number') userLevelCheck = user.security.level;
+                        else if (typeof user.security === 'number') userLevelCheck = user.security;
+                        else if (typeof user.level === 'number') userLevelCheck = user.level;
+                    }
+                } catch (elv) { }
+                if (userLevelCheck < 90) return false; // hide from non-sysop
+            }
+        }
+    } catch (eHideSys) { }
+    if (!this._rawProgramMeta) return true; // if we lack metadata, allow
+    var meta = this._rawProgramMeta[pid];
+    var secMeta = this._rawSectionMeta ? this._rawSectionMeta[pid] : null;
+    if (!meta && !secMeta) {
+        return this._failOpenOnUnknown ? true : false;
+    }
+    try {
+        // Prefer built-in Synchronet flags when available
+        if (meta && (typeof meta.can_access !== 'undefined' || (meta._futureShellAccessFlags && typeof meta._futureShellAccessFlags.can_access !== 'undefined'))) {
+            var ca = (typeof meta.can_access !== 'undefined') ? meta.can_access : (meta._futureShellAccessFlags ? meta._futureShellAccessFlags.can_access : undefined);
+            if (ca === false) return false; // explicitly not accessible
+        }
+        if (meta && (typeof meta.can_run !== 'undefined' || (meta._futureShellAccessFlags && typeof meta._futureShellAccessFlags.can_run !== 'undefined'))) {
+            var cr = (typeof meta.can_run !== 'undefined') ? meta.can_run : (meta._futureShellAccessFlags ? meta._futureShellAccessFlags.can_run : undefined);
+            if (cr === false) return false; // explicitly cannot run
+        }
+        // Check security level requirement
+        var requiredLevel = undefined;
+        if (meta && typeof meta.level === 'number') requiredLevel = meta.level;
+        if (requiredLevel === undefined && meta && typeof meta.sec_level === 'number') requiredLevel = meta.sec_level;
+        if (requiredLevel === undefined && secMeta && typeof secMeta.level === 'number') requiredLevel = secMeta.level;
+        if (typeof requiredLevel === 'number') {
+            if (typeof user !== 'undefined' && user) {
+                var userLevel = undefined;
+                if (user.security && typeof user.security.level === 'number') userLevel = user.security.level;
+                else if (typeof user.security === 'number') userLevel = user.security;
+                if (typeof userLevel === 'number' && userLevel < requiredLevel) return false;
+            }
+        }
+        // Check AR string if present
+        if (typeof user !== 'undefined' && user && typeof user.compare_ars === 'function') {
+            // Program AR AND Section AR must both pass if they exist.
+            var progAr = meta && typeof meta.ar === 'string' ? meta.ar : '';
+            var secAr = secMeta && typeof secMeta.ar === 'string' ? secMeta.ar : '';
+            if (progAr) {
+                try { if (!user.compare_ars(progAr)) return false; } catch (ePar) { /* allow on error */ }
+            }
+            if (secAr) {
+                try { if (!user.compare_ars(secAr)) return false; } catch (eSar) { /* allow on error */ }
+            }
+        }
+    } catch (e) {
+        // On any unexpected error, default to visible to avoid over-filtering
+    }
+    return true;
 };
 
 UsageViewer.prototype._resolveProgramDisplayInfo = function (prog) {
@@ -609,50 +1003,20 @@ UsageViewer.prototype._renderProgramIcon = function (frame, info) {
 };
 
 UsageViewer.prototype._drawProgramBlocks = function (df, month) {
-    this._clearProgramResources();
-    var programs = month.programs || [];
-    if (!programs.length) {
-        this.programIndex = 0;
-        this.programTop = 0;
-        df.putmsg('  (No program data)\r\n');
-        return;
-    }
-    this.programIndex = Math.min(this.programIndex, Math.max(0, programs.length - 1));
-    var startRow = 4;
-    var instructionRow = df.height - 1;
-    var availableRows = instructionRow - startRow;
-    if (availableRows <= 0) return;
-    var blockHeight = 6;
-    var spacer = 1;
-    var step = blockHeight + spacer;
-    var maxVisible = Math.max(1, Math.floor((availableRows + spacer) / step));
-    if (this.programIndex < this.programTop) this.programTop = this.programIndex;
-    while (this.programIndex >= this.programTop + maxVisible) this.programTop++;
-    var hotspots = {};
-    for (var vis = 0; vis < maxVisible; vis++) {
-        var idx = this.programTop + vis;
-        if (idx >= programs.length) break;
-        var y = startRow + vis * step;
-        if (y >= instructionRow) break;
-        var blockHeightAdjusted = Math.min(blockHeight, instructionRow - y);
-        if (blockHeightAdjusted <= 0) break;
-        this._drawProgramBlock(df, y, blockHeightAdjusted, programs[idx], idx, hotspots, vis);
-    }
-    this._programHotspots = hotspots;
+    // Deprecated in new list layout (retain no-op for legacy safety)
+    return;
 };
 
 UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, index, hotspots, vis) {
-    var highlight = (this.focus === 'program' && index === this.programIndex);
+    var isSelected = (this.focus === 'program' && index === this.programIndex);
     var baseAttr = BG_BLACK | LIGHTGRAY;
-    var highlightAttr = BG_BLACK | WHITE;
-    var attr = highlight ? highlightAttr : baseAttr;
     var width = df.width;
     if (width <= 0 || height <= 0) return;
 
-    var blockFrame = new Frame(1, baseY, width, height, attr, df);
-    blockFrame.transparent = false;
+    var blockFrame = new Frame(1, baseY + 1, width, height + 1, baseAttr, df);
+    blockFrame.transparent = true;
     try { blockFrame.open(); } catch (e) { }
-    blockFrame.clear(attr);
+    blockFrame.clear(baseAttr);
     this._programFrames.push(blockFrame);
 
     var display = this._resolveProgramDisplayInfo(prog);
@@ -664,13 +1028,14 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     var availableForIcon = Math.max(0, width - leftPad - gap - 1);
     var showIcon = iconWidth > 0 && iconHeight > 0 && availableForIcon >= iconWidth;
     var iconFrame = null;
+    var iconAttr = baseAttr; // use base attribute for icon background
     var textStart = gap + 1;
     var iconError = null;
     if (showIcon) {
         var iconX = blockFrame.x + leftPad;
         var iconY = blockFrame.y;
         try {
-            iconFrame = new Frame(iconX, iconY, iconWidth, iconHeight, attr, df);
+            iconFrame = new Frame(iconX, iconY, iconWidth, iconHeight, iconAttr, df);
             iconFrame.transparent = true;
             this._programFrames.push(iconFrame);
             this._renderProgramIcon(iconFrame, display);
@@ -685,34 +1050,54 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     var textWidth = Math.max(0, width - textStart + 1);
 
     var lines = [];
-    var rankStr = '\x01h\x01y#' + (index + 1) + '\x01n';
-    var nameStr = '\x01h\x01c' + display.displayName + '\x01n';
-    lines.push(rankStr + ' ' + nameStr);
+    var rankStr, nameStr;
+    if (isSelected) {
+        // Selected: rank in yellow, name in white, background blue applied via attr on first line
+        rankStr = '\x01h\x01y#' + (index + 1); // no reset yet
+        nameStr = ' \x01h\x01w' + display.displayName; // white name
+        lines.push(rankStr + nameStr + '\x01n');
+    } else {
+        rankStr = '\x01h\x01y#' + (index + 1) + '\x01n';
+        nameStr = '\x01h\x01c' + display.displayName + '\x01n';
+        lines.push(rankStr + ' ' + nameStr);
+    }
     lines.push('\x01gTime Played:\x01n  \x01h\x01g' + this._formatDuration(prog.seconds) + '\x01n');
     lines.push('Launches:     ' + prog.count);
     lines.push('\x01rLast Played:\x01n  \x01h\x01r' + this._formatTimestamp(prog.lastTimestamp) + '\x01n');
     lines.push('\x01mTop Players:\x01n  \x01h\x01m' + this._getTopPlayersString(prog.id) + '\x01n');
+    var uCount = (typeof prog.uniqueUsers === 'number') ? prog.uniqueUsers : 0;
+    lines.push('\x01bTotal players:\x01n  \x01h\x01b' + uCount + '\x01n');
     lines.push('');
     for (var row = 0; row < height && row < lines.length; row++) {
         var line = lines[row] || '';
         if (row === 0 && iconError) line += ' [icon error]';
         if (textWidth > 0) {
-            blockFrame.attr = attr;
+            var lineAttr = (isSelected && row === 0) ? (BG_BLUE | LIGHTGRAY) : baseAttr;
+            blockFrame.attr = lineAttr;
             blockFrame.gotoxy(textStart, row + 1);
-            var padded = this._padColoredLine(line, textWidth);
-            blockFrame.putmsg(padded);
+            // var padded = this._padColoredLine(line, textWidth);
+            // blockFrame.putmsg(padded);
+            blockFrame.putmsg(line)
         }
     }
     try { blockFrame.cycle(); } catch (cycleErr) { }
 
     if (vis < 9 && typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
-        var hotKey = String(vis + 49);
-        hotspots[hotKey] = index;
-        var minX = df.x;
-        var maxX = df.x + width - 1;
-        var startY = df.y + baseY - 1;
-        for (var y = 0; y < height; y++) {
-            try { console.add_hotspot(hotKey, false, minX, maxX, startY + y); } catch (e2) { }
+        if (iconFrame && iconFrame.width > 0 && iconFrame.height > 0) {
+            function absRect(f) {
+                var x = f.x, y = f.y, p = f.parent;
+                while (p) { x += (p.x - 1); y += (p.y - 1); p = p.parent; }
+                return { x: x, y: y, w: f.width, h: f.height };
+            }
+            var hotKey = String.fromCharCode(49 + vis); // '1'..'9'
+            hotspots[hotKey] = index;
+            var r = absRect(iconFrame);
+            var minX = r.x;
+            var maxX = r.x + r.w - 1;
+            var startY = r.y - 1; // shift up one row per request
+            for (var y = 0; y < r.h; y++) {
+                try { console.add_hotspot(hotKey, false, minX, maxX, startY + y); } catch (e2) { }
+            }
         }
     }
 };
@@ -788,3 +1173,110 @@ UsageViewer.prototype._getTopPlayers = function (month, programId) {
 };
 
 this.UsageViewer = UsageViewer;
+
+// ================= User Filter Modal =================
+UsageViewer.prototype._showUserFilter = function () {
+    // Build user list from current aggregated data (All Time if on All Time, else current month)
+    var month = this.months[this.index];
+    if (!month) return;
+    var usersMap = month.users || {};
+    var entries = [];
+    for (var k in usersMap) if (usersMap.hasOwnProperty(k)) {
+        var alias = usersMap[k] && usersMap[k].alias ? usersMap[k].alias : k;
+        entries.push({ key: k, alias: alias });
+    }
+    log("Building user filter list from " + JSON.stringify(entries) + " users");
+    //[{"key":"Hm Derdoc","alias":"Hm Derdoc"},
+    // {"key":"Larry Lagomorph","alias":"Larry Lagomorph"}]
+    entries.sort(function (a, b) { var A = a.alias.toLowerCase(); var B = b.alias.toLowerCase(); if (A > B) return 1; if (A < B) return -1; return 0; });
+    entries.unshift({ key: null, alias: 'Show All' });
+    if (!entries.length) return;
+    var self = this;
+    if (this._activeUserModal) { try { this._activeUserModal.close(); } catch (_) { } this._activeUserModal = null; }
+    var chooserItems = entries.map(function (e) { return { label: e.alias, value: e.key }; });
+    var chooser = (typeof Modal !== 'undefined' && Modal && typeof Modal.createChooser === 'function') ? (function () {
+        var c = Modal.createChooser({
+            title: 'User Filter',
+            items: chooserItems,
+            initialIndex: 0,
+            hotspots: {
+                enabled: true,
+                maxDigits: 9,
+                immediate: true,   // just select
+            },
+            onChoose: function (value, item) {
+                log('User filter chosen value : ' + value + ' item: ' + JSON.stringify(item));
+                if (value === null) {
+                    self._userFilter = null; self._userFilterAlias = null;
+                } else {
+                    self._userFilter = value; self._userFilterAlias = item && item.label ? item.label : value;
+                }
+                self.programIndex = 0; // reset selection within filtered list
+                try { self.draw(); } catch (_) { }
+            },
+            onCancel: function () { log("User filter modal canceled"); },
+            onClose: function () {
+                try {
+                    log("User filter modal closed");
+                    self.draw();
+                } catch (_) { } if (self._activeUserModal === c) self._activeUserModal = null;
+            }
+        });
+        // Explicitly open chooser (createChooser does not auto-open)
+        try {
+            if (c && typeof c.open === 'function') {
+                log('Opening user filter chooser modal');
+                c.open();
+            } else {
+                log('Chooser modal missing open()');
+            }
+        } catch (eOpen) { try { log('Error opening chooser: ' + eOpen); } catch (_) { } }
+        return c;
+    })() : null;
+    if (chooser) this._activeUserModal = chooser; else {
+        // Fallback legacy inline modal (simplified) if chooser creation failed.
+        var sel = 0;
+        var legacy = new Modal({
+            type: 'custom',
+            title: 'User Filter',
+            width: 40,
+            height: Math.min(console.screen_rows - 2, entries.length + 6),
+            overlay: true,
+            autoOpen: true,
+            render: function (frame) {
+                try {
+                    var innerW = frame.width - 4;
+                    var startY = 2;
+                    for (var cy = startY; cy < frame.height - 1; cy++) { frame.gotoxy(2, cy); frame.putmsg(Array(innerW + 1).join(' ')); }
+                    for (var i = 0; i < entries.length && (startY + i) < frame.height - 1; i++) {
+                        var e = entries[i];
+                        var line = (i === sel ? '\x01h\x01w> ' : '  ') + e.alias;
+                        if (line.length > innerW) line = line.substr(0, innerW);
+                        frame.gotoxy(2, startY + i); frame.putmsg(line + '\x01n');
+                    }
+                    frame.cycle();
+                } catch (er) { }
+            },
+            keyHandler: function (k, m) {
+                if (!k) return false;
+                if (k === '\x1B') { m.close(null); return true; }
+                if ((typeof KEY_ENTER !== 'undefined' && k === KEY_ENTER) || (typeof KEY_ENTER === 'undefined' && k === '\r')) {
+                    var chosen = entries[sel];
+                    if (chosen) {
+                        if (chosen.key === null) { self._userFilter = null; self._userFilterAlias = null; }
+                        else { self._userFilter = chosen.key; self._userFilterAlias = chosen.alias; }
+                    }
+                    m.close(true); return true;
+                }
+                if (k === KEY_UP) { sel = (sel > 0) ? sel - 1 : entries.length - 1; m.options.render && m.options.render(m.frame, m); return true; }
+                if (k === KEY_DOWN) { sel = (sel < entries.length - 1) ? sel + 1 : 0; m.options.render && m.options.render(m.frame, m); return true; }
+                if (k.length === 1 && k >= ' ' && k <= '~') { var upper = k.toUpperCase(); for (var ii = 0; ii < entries.length; ii++) { if (entries[ii].alias && entries[ii].alias.toUpperCase().charAt(0) === upper) { sel = ii; break; } } m.options.render && m.options.render(m.frame, m); return true; }
+                return false;
+            },
+            onClose: function () { try { self.draw(); } catch (_) { } if (self._activeUserModal === legacy) self._activeUserModal = null; }
+        });
+        this._activeUserModal = legacy;
+    }
+    // Reset selection context when opening (program list resets after filter change)
+    this.programIndex = 0; this.programTop = 0;
+};

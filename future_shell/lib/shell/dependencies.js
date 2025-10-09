@@ -4,5 +4,6 @@ load("future_shell/lib/effects/frame-ext.js");
 load("load/graphic.js");
 load("json-client.js");
 load("json-chat.js");
-
+load("future_shell/lib/effects/frame-ext.js");
+load("future_shell/lib/util/layout/modal.js");
 

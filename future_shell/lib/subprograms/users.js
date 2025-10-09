@@ -249,35 +249,95 @@ Users.prototype._openModal = function (user) {
     }
     var self = this;
     var u = user;
-    var lines = [
-        'User #' + u.number + '  ' + u.alias,
-        'Location: ' + (u.location || ''),
-        'Last On : ' + system.datestr(u.laston),
-        'Conn    : ' + (u.connection || ''),
-        'Online  : ' + (u.online !== -1 ? 'Yes' : 'No'),
-        '',
-        '(ENTER/ESC to close)'
-    ];
-    // Optionally include avatar (simple textual representation) beneath details if available
+    // We'll display:
+    // Top header (alias + number)
+    // Left column: details list
+    // Right column: avatar box (if any)
+    // Footer help line
+    // Using single frame; manual positioning inside render callback
+    function buildDetailLines(userObj) {
+        return [
+            'Location: ' + (userObj.location || ''),
+            'Last On : ' + system.datestr(userObj.laston),
+            'Conn    : ' + (userObj.connection || ''),
+            'Online  : ' + (userObj.online !== -1 ? ('Yes (Node ' + userObj.online + ')') : 'No')
+        ];
+    }
     var avatarLines = [];
     try { avatarLines = this._getAvatar(u) || []; } catch (_) { }
-    if (avatarLines && avatarLines.length) {
-        lines.push('');
-        // Truncate avatar width to reasonable size
-        for (var i = 0; i < avatarLines.length && i < 6; i++) {
-            var avl = avatarLines[i];
-            if (avl.length > 40) avl = avl.substr(0, 40);
-            lines.push(avl);
-        }
-    }
+    var detailLines = buildDetailLines(u);
+    // Fixed classic layout (no adaptive fallback). Dimensions approximate original multi-frame design.
+    var classic = true;
+    var FIXED_WIDTH = 44;
+    var FIXED_HEIGHT = 16; // matches earlier multi-frame vertical footprint
+    // Build minimal placeholder string (runtime may not support String.repeat)
+    var placeholder = (function (n) { var s = ''; while (n-- > 0) s += ' '; return s; })(10);
     this.modal = new Modal({
         type: 'custom',
         title: 'User Detail',
-        message: lines.join('\n'),
+        message: placeholder, // minimal placeholder; we fully custom render
         parentFrame: this.parentFrame,
-        overlay: true,
+        overlay: false,
+        width: FIXED_WIDTH,
+        height: FIXED_HEIGHT,
+        attr: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7),
+        contentAttr: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7),
+        buttonAttr: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7),
         buttons: [{ label: 'Close', value: true, default: true }],
-        render: function (frame, modal) { /* placeholder for richer avatar rendering */ },
+        render: function (frame, modal) {
+            // Clear content area (leave border handled by Modal)
+            try { frame.clear(); } catch (_) { }
+            if (!frame || frame.width < FIXED_WIDTH || frame.height < FIXED_HEIGHT) return; // expect fixed dims
+            var startX = 2, startY = 2;
+            var colGap = 2;
+            var avatarColW = (avatarLines.length ? self.avatarWidth : 0);
+            if (avatarColW > 10) avatarColW = 10; // cap inside fixed width
+            var leftColW = FIXED_WIDTH - 2 - (avatarColW ? (avatarColW + colGap) : 0) - 1; // border + gap
+            if (leftColW < 24) { // enforce minimum left width; if too tight, drop avatar entirely
+                if (avatarColW) { avatarColW = 0; leftColW = FIXED_WIDTH - 4; }
+            }
+
+            // Header
+            var header = ('User #' + u.number + '  ' + u.alias).substr(0, leftColW);
+            try { frame.gotoxy(startX, startY); frame.putmsg('\x01h' + header + '\x01n'); } catch (_) { }
+            // Detail lines (fixed vertical slots)
+            var detailStartY = startY + 2;
+            for (var i = 0; i < detailLines.length && i < 6; i++) { // show up to 6 lines
+                var dl = detailLines[i]; if (dl.length > leftColW) dl = dl.substr(0, leftColW);
+                try { frame.gotoxy(startX, detailStartY + i); frame.putmsg(dl); } catch (_) { }
+            }
+            // Avatar block (attempt base64 decode + blit; fallback to ASCII lines without raw base64 line)
+            if (avatarColW && avatarLines.length) {
+                var ax = startX + leftColW + colGap;
+                var ay = startY + 1; // below header
+                var usedBinary = false;
+                var candidate = avatarLines[0];
+                // Heuristic: candidate length and base64 charset
+                if (candidate && candidate.length > 16 && /^(?:[A-Za-z0-9+\/=]+)$/.test(candidate)) {
+                    try {
+                        // putAvatarBindataIntoFrame will internally try base64_decode and fallback
+                        self.putAvatarBindataIntoFrame(candidate, frame, ax, ay, avatarLines);
+                        usedBinary = true;
+                    } catch (_binErr) { usedBinary = false; }
+                }
+                if (!usedBinary) {
+                    var startIndex = 0;
+                    // If it looks like base64 but failed to render, skip raw line to avoid visual noise
+                    if (candidate && /^(?:[A-Za-z0-9+\/=]+)$/.test(candidate)) startIndex = 1;
+                    var maxAvatarLines = Math.min(self.avatarHeight, avatarLines.length - startIndex);
+                    for (var al = 0; al < maxAvatarLines; al++) {
+                        var avl = avatarLines[startIndex + al];
+                        if (avl.length > avatarColW) avl = avl.substr(0, avatarColW);
+                        try { frame.gotoxy(ax, ay + al); frame.putmsg(avl); } catch (_) { }
+                    }
+                }
+            }
+
+            // Footer help
+            var help = '(ENTER/ESC to close)';
+            if (help.length > leftColW) help = help.substr(0, leftColW);
+            try { frame.gotoxy(startX, frame.height - 4); frame.putmsg(help); } catch (_) { }
+        },
         onClose: function () { self.modal = null; self.draw(); }
     });
 };

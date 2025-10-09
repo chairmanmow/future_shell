@@ -22,3 +22,5 @@ load("future_shell/lib/shell/toast.js");
 load("future_shell/lib/subprograms/chat.js");
 load("future_shell/lib/util/mouse_hotspot_test.js");
 
+// layout
+load("future_shell/lib/util/layout/modal.js");

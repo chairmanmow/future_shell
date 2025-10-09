@@ -47,7 +47,7 @@ function BasicShell(onReloadAdvancedShell) {
                 // help();
                 // promptContinue();
                 MouseTest();
-                 break;
+                break;
 
             case 'R':
                 if (typeof onReloadAdvancedShell === 'function') {
@@ -65,7 +65,7 @@ function BasicShell(onReloadAdvancedShell) {
                 if (typeof console.clear_hotspots === 'function') {
                     try { console.clear_hotspots(); } catch (_eQ) { }
                 }
-                bbs.logoff()
+                bbs.logoff(false)
                 return; // clean exit
 
             default:

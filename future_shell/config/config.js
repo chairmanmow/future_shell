@@ -65,7 +65,9 @@ var BUILTIN_ACTIONS = {
 	msg_scan_config: function () { if (typeof bbs.cfg_msg_scan === 'function') { this.runExternal(function () { bbs.cfg_msg_scan() }, { programId: 'cfg_msg_scan' }); } },
 	user_settings: function () { if (typeof bbs.user_config === 'function') { this.runExternal(function () { bbs.user_config() }, { programId: 'user_config' }); } },
 	hello: function () { if (!this.helloWorld) this.helloWorld = new HelloWorld(); this.queueSubprogramLaunch('hello-world', this.helloWorld); },
-	exit: function () { throw ('Exit Shell'); },
+	exit: function () {
+		throw ('Exit Shell');
+	},
 	msg_boards: function () {
 		try { if (typeof MessageBoard !== 'function') load('future_shell/lib/subprograms/message_boards/message_boards.js'); } catch (e) { dbug('subprogram', 'Failed loading message_boards.js ' + e); return; }
 		if (typeof MessageBoard !== 'function') { dbug('subprogram', 'MessageBoard class missing after load'); return; }
@@ -582,6 +584,8 @@ var ICSH_VALS = {
 	HILITE_CYAN: { BG: BG_CYAN, FG: WHITE },
 	POPUP_FRAME: { BG: BG_BLACK, FG: WHITE },
 	POPUP_CONTENT: { BG: BG_BLACK, FG: LIGHTGRAY },
+	// Generic modal surface (default background for all modal chrome unless overridden)
+	MODAL: { BG: BG_BLUE, FG: WHITE },
 	MODAL_FRAME: { BG: BG_BLUE, FG: WHITE },
 	MODAL_LEFT_PANEL: { BG: BG_CYAN, FG: LIGHTGRAY },
 	MODAL_RIGHT_PANEL: { BG: BG_BLUE, FG: LIGHTGRAY },
