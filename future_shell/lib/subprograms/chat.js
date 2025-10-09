@@ -1,6 +1,8 @@
 load("future_shell/lib/subprograms/chat_helpers.js");
 load("future_shell/lib/subprograms/subprogram.js"); // Base class
-
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 
 function Chat(jsonchat) {
     this.input = "";
@@ -1098,7 +1100,10 @@ Chat.prototype._renderAvatars = function (groups) {
         }
     }
 
-    var avatarLib = load({}, '../exec/load/avatar_lib.js');
+    var avatarLib = (function () {
+        try { return lazyLoadModule('../exec/load/avatar_lib.js', { cacheKey: 'avatar_lib.exec' }); }
+        catch (e) { return null; }
+    })();
     var leftPacked = packAvatars(placements.left, this.leftAvatarFrame.height);
     var rightPacked = packAvatars(placements.right, this.rightAvatarFrame.height);
 
@@ -1197,3 +1202,5 @@ Chat.prototype._renderInputString = function (text) {
         try { this.chatInputFrame.cycle(); } catch (e) { }
     }
 };
+
+registerModuleExports({ Chat: Chat });

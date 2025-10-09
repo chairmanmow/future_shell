@@ -6,6 +6,9 @@
 //  - Timeout (default 10s) prints notice if no data received in that span.
 
 load('future_shell/lib/subprograms/subprogram.js');
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 require('sbbsdefs.js', 'SS_MOFF');
 
 function RawGateSub(opts) {
@@ -219,7 +222,7 @@ RawGateSub.prototype.cleanup = function () {
     try { if (this.frameOutput) this.frameOutput.close(); } catch (e) { }
     try { if (this.frameInput) this.frameInput.close(); } catch (e) { }
     this.frameOutput = this.frameInput = null;
-    Subprogram.prototype.cleanup.call(this);
+Subprogram.prototype.cleanup.call(this);
 };
 
-this.RawGateSub = RawGateSub;
+registerModuleExports({ RawGateSub: RawGateSub });

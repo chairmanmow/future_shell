@@ -3,6 +3,9 @@
 // Future extension: highlight events (birthdays, resets) via this.highlights[day]=true.
 
 load('future_shell/lib/subprograms/subprogram.js');
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 
 function CalendarSub(opts) {
     opts = opts || {};
@@ -114,4 +117,4 @@ CalendarSub.prototype.cleanup = function () {
     Subprogram.prototype.cleanup.call(this);
 };
 
-this.CalendarSub = CalendarSub;
+registerModuleExports({ CalendarSub: CalendarSub });

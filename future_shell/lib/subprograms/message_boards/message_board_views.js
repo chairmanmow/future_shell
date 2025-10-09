@@ -1,3 +1,7 @@
+if (typeof lazyLoadModule !== 'function') {
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
+
 (function (global) {
     function BaseView(board, id, options) {
         this.board = board || null;
@@ -617,7 +621,11 @@
             var f = board.outputFrame; if (f) f.clear();
             if (!bbs.mods) bbs.mods = {};
             if (!bbs.mods.avatar_lib) {
-                try { bbs.mods.avatar_lib = load({}, 'avatar_lib.js'); } catch (_e) { }
+                try {
+                    if (!bbs.mods.avatar_lib) {
+                        bbs.mods.avatar_lib = lazyLoadModule('avatar_lib.js', { cacheKey: 'avatar_lib' });
+                    }
+                } catch (_e) { }
             }
             board._avatarLib = bbs.mods.avatar_lib || null;
             var avh = (board._avatarLib && board._avatarLib.defs && board._avatarLib.defs.height) || 6;

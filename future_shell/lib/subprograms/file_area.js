@@ -11,6 +11,9 @@
 //  U          : Upload into current directory
 
 load('future_shell/lib/subprograms/subprogram.js');
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 load('future_shell/lib/shell/icon.js');
 load('frame.js');
 load('file_size.js');
@@ -806,5 +809,7 @@ FileArea.prototype.cleanup = function () {
     try { if (this.header) this.header.close(); } catch (e) { }
     try { if (this.footer) this.footer.close(); } catch (e) { }
     this.list = this.header = this.footer = null;
-    Subprogram.prototype.cleanup.call(this);
+Subprogram.prototype.cleanup.call(this);
 };
+
+registerModuleExports({ FileArea: FileArea });

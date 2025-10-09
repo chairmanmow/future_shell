@@ -29,6 +29,22 @@ mods/
 		icons/               Icon art files (*.ans / *.bin)
 ```
 
+## Module Loading & Exports
+
+The shell now relies on a lightweight module contract so that everything loaded with `load()` behaves predictably (and plays nicely with legacy globals).
+
+- **Exports:** At the bottom of each module, call `registerModuleExports({ SymbolName: Symbol })`. This keeps the global symbol for older code *and* lets you do `var { SymbolName } = load("future_shell/lib/...");`.
+- **Lazy dependencies:** Prefer `lazyLoadModule(path, opts)` over `load({}, path)` when you need to memoize external helpers (avatar library, modopts, etc.). Example:
+  ```javascript
+  var AvatarLib = lazyLoadModule('../exec/load/avatar_lib.js', { cacheKey: 'avatar_lib.exec' });
+  ```
+- **Paths:** Shell code lives under `future_shell/lib/**`. Put subprograms in `future_shell/lib/subprograms/`, shell UI/utilities in `future_shell/lib/shell/` or `future_shell/lib/util/`, and load external Synchronet helpers via relative paths (e.g. `../exec/load/avatar_lib.js`).
+- **Accessing modules:** When consuming a module, prefer the returned object instead of globals:
+  ```javascript
+  var { FileArea } = load('future_shell/lib/subprograms/file_area.js');
+  ```
+  The global (`FileArea`) still exists, but sticking to the returned value keeps intent clear and makes hot-reloads safer.
+
 ## Requirements
 
 - A working Synchronet BBS installation

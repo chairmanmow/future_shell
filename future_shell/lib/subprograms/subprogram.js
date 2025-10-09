@@ -1,4 +1,21 @@
 load('sbbsdefs.js');
+if (typeof lazyLoadModule !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (e) { }
+}
+
+// Provide sensible defaults when sbbsdefs.js hasn't populated key constants yet.
+if (typeof KEY_UP === 'undefined')      var KEY_UP = 0x4800;
+if (typeof KEY_DOWN === 'undefined')    var KEY_DOWN = 0x5000;
+if (typeof KEY_PGUP === 'undefined')    var KEY_PGUP = 0x4900;
+if (typeof KEY_PGDN === 'undefined')    var KEY_PGDN = 0x5100;
+if (typeof KEY_PAGEUP === 'undefined')  var KEY_PAGEUP = 0x4900;
+if (typeof KEY_PAGEDN === 'undefined')  var KEY_PAGEDN = 0x5100;
+if (typeof KEY_HOME === 'undefined')    var KEY_HOME = 0x4700;
+if (typeof KEY_END === 'undefined')     var KEY_END = 0x4F00;
+if (typeof KEY_LEFT === 'undefined')    var KEY_LEFT = 0x4B00;
+if (typeof KEY_RIGHT === 'undefined')   var KEY_RIGHT = 0x4D00;
+if (typeof KEY_ENTER === 'undefined')   var KEY_ENTER = '\r';
+if (typeof KEY_TAB === 'undefined')     var KEY_TAB = '\t';
 function Subprogram(opts) {
     this.__bg_frame = null;  
     opts = opts || {};

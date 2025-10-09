@@ -1,7 +1,14 @@
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
+
 function Users(opts) {
     opts = opts || {};
     Subprogram.call(this, { name: 'user-list', parentFrame: opts.parentFrame });
-    this._avatarLib = (function () { try { return load({}, '../exec/load/avatar_lib.js'); } catch (e) { return log("USERS COULDNT LOAD AVATAR LIB"); } })();
+    this._avatarLib = (function () {
+        try { return lazyLoadModule('../exec/load/avatar_lib.js', { cacheKey: 'avatar_lib.exec' }); }
+        catch (e) { try { log("USERS COULDNT LOAD AVATAR LIB: " + e); } catch (_) { } return null; }
+    })();
     this.users = [];
     this.sortMode = null;
     this.whichUsers = 'all' // 'all', 'online'
@@ -469,4 +476,4 @@ Users.prototype._blitAvatarToFrame = function (frame, binData, w, h, dstX, dstY)
 };
 
 // Export
-this.Users = Users;
+registerModuleExports({ Users: Users });

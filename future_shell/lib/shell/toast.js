@@ -1,4 +1,9 @@
-
+if (typeof lazyLoadModule !== 'function') {
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
+if (typeof registerModuleExports !== 'function') {
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 var MAX_TOAST_WIDTH = 40;
 var DEFAULT_TOAST_TIMEOUT = 30000; // 30 seconds
 // Position keywords: 'top-left','top-right','bottom-left','bottom-right','center'
@@ -8,7 +13,10 @@ function Toast(options) {
     if (!options || typeof options !== 'object') options = {};
     this._avatarData = null;
     this.title = options.title || false;
-    this._avatarLib = load({}, 'avatar_lib.js');
+    this._avatarLib = (function () {
+        try { return lazyLoadModule('avatar_lib.js', { cacheKey: 'avatar_lib' }); }
+        catch (e) { return null; }
+    })();
     if (options.avatar && this._avatarLib) {
         if (options.avatar.netaddr === system.name) {
             var uNum = system.matchuser(options.avatar.username);
@@ -122,3 +130,5 @@ Toast.prototype.insertAvatarData = function () {
         } catch (be) { log('avatar blit error: ' + be); }
     }
 }
+
+registerModuleExports({ Toast: Toast });

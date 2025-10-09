@@ -4,6 +4,9 @@
 // Keys: T (from MENU) start telegram, Q/ESC exit, ENTER advances, blank ENTER sends when composing.
 
 load('future_shell/lib/subprograms/subprogram.js');
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 require('sbbsdefs.js', 'SS_USERON');
 require('text.js', 'TelegramFmt');
 
@@ -148,7 +151,7 @@ PrivateMsg.prototype.cleanup = function () {
 	try { if (this.frameOutput) this.frameOutput.close(); } catch (e) { }
 	try { if (this.frameInput) this.frameInput.close(); } catch (e) { }
 	this.frameOutput = this.frameInput = null;
-	Subprogram.prototype.cleanup.call(this);
+Subprogram.prototype.cleanup.call(this);
 };
 
-this.PrivateMsg = PrivateMsg;
+registerModuleExports({ PrivateMsg: PrivateMsg });

@@ -3,6 +3,9 @@
 // Keys: Q/ESC exit. Any other key exits (optional minimal interaction).
 
 load('future_shell/lib/subprograms/subprogram.js');
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 
 function ClockSub(opts) {
     opts = opts || {};
@@ -130,4 +133,4 @@ ClockSub.prototype.cleanup = function () {
     Subprogram.prototype.cleanup.call(this);
 };
 
-this.ClockSub = ClockSub;
+registerModuleExports({ ClockSub: ClockSub });

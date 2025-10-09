@@ -24,7 +24,6 @@ var DEBUG_CONFIG = {
     hotkeys: { active: false, log_color: ANSI_COLORS.CYAN },
     icons: { active: false, log_color: ANSI_COLORS.CYAN },
     config: { active: false, log_color: ANSI_COLORS.CYAN },
-    whosonline: { active: false, log_color: ANSI_COLORS.CYAN },
     settings: { active: false, log_color: ANSI_COLORS.CYAN },
     view: { active: false, log_color: ANSI_COLORS.CYAN },
     messageboard: { active: true, log_color: ANSI_COLORS.CYAN },
@@ -44,4 +43,3 @@ function dbug(msg, type) {
     }
 
 }
-

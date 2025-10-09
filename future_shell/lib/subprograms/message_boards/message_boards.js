@@ -3,6 +3,9 @@ load("future_shell/lib/subprograms/subprogram.js");
 load("future_shell/lib/util/debug.js");
 load('future_shell/lib/subprograms/message_boards/message_board_ui.js');
 load('future_shell/lib/subprograms/message_boards/message_board_views.js');
+if (typeof lazyLoadModule !== 'function' || typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';
 if (typeof KEY_BACKSPACE === 'undefined') var KEY_BACKSPACE = '\b';
@@ -49,7 +52,7 @@ function _ensureCtrlAExpander() {
         if (path.substr(path.length - 1) !== '/') path += '/';
         path += 'load/ansiterm_lib.js';
         try {
-            var loaded = load({}, path);
+            var loaded = lazyLoadModule(path, { cacheKey: 'ansiterm_lib:' + path, suppressErrors: true });
             if (loaded && typeof loaded.expand_ctrl_a === 'function') expander = loaded.expand_ctrl_a;
         } catch (e2) {
             dbug('MessageBoard: load ansiterm_lib.js failed (' + e2 + ')', 'messageboard');
@@ -2653,8 +2656,6 @@ MessageBoard.prototype._threadSearchHandleKey = function (key) {
 };
 
 // Export constructor globally
-this.MessageBoard = MessageBoard;
-
 // Static convenience launcher so shell code can do: MessageBoard.launch(shell, cb)
 MessageBoard.launch = function (shell, cb, opts) {
     opts = opts || {};
@@ -3916,3 +3917,4 @@ MessageBoard.prototype.resumeForReason = function (reason) {
         }
     }
 };
+registerModuleExports({ MessageBoard: MessageBoard });

@@ -5,6 +5,9 @@ if (typeof utf8_cp437 === 'undefined') {
     try { load('utf8_cp437.js'); } catch (_encErr) { }
 }
 load("future_shell/lib/subprograms/subprogram.js");
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 load('future_shell/lib/shell/icon.js');
 load('future_shell/lib/util/gif2ans/img_loader.js')
 load('future_shell/lib/util/layout/button.js');
@@ -289,10 +292,10 @@ function getNewsreaderConfig(forceReload) {
     };
 }
 
-var LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_GREEN | WHITE));
-var LIST_INACTIVE = resolveAttr('FILE_LIST_INACTIVE', (BG_BLACK | LIGHTGRAY));
-var HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_MAGENTA | WHITE));
-var STATUS_ATTR = resolveAttr('FILE_FOOTER', (BG_BLACK | LIGHTGRAY));
+var LIST_ACTIVE = resolveAttr('NEWSREADER_ACTIVE', (BG_GREEN | WHITE));
+var LIST_INACTIVE = resolveAttr('NEWSREADER_INACTIVE', (BG_BLACK | LIGHTGRAY));
+var HEADER_ATTR = resolveAttr('NEWSREADER_HEADER', (BG_MAGENTA | WHITE));
+var STATUS_ATTR = resolveAttr('NEWSREADER_FOOTER', (BG_BLACK | LIGHTGRAY));
 var IMAGE_CACHE_LIMIT = 4;
 var NEWSREADER_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 var NEWSREADER_ASCII_ENTITY_MAP = {
@@ -378,10 +381,10 @@ function NewsReader(opts) {
 extend(NewsReader, Subprogram);
 
 NewsReader.prototype._resetState = function () {
-    LIST_ACTIVE = resolveAttr('FILE_LIST_ACTIVE', (BG_GREEN | WHITE));
-    LIST_INACTIVE = resolveAttr('FILE_LIST_INACTIVE', (BG_BLACK | LIGHTGRAY));
-    HEADER_ATTR = resolveAttr('FILE_HEADER', (BG_MAGENTA | WHITE));
-    STATUS_ATTR = resolveAttr('FILE_FOOTER', (BG_BLACK | LIGHTGRAY));
+    LIST_ACTIVE = resolveAttr('NEWSREADER_ACTIVE', (BG_GREEN | WHITE));
+    LIST_INACTIVE = resolveAttr('NEWSREADER_INACTIVE', (BG_BLACK | LIGHTGRAY));
+    HEADER_ATTR = resolveAttr('NEWSREADER_HEADER', (BG_MAGENTA | WHITE));
+    STATUS_ATTR = resolveAttr('NEWSREADER_FOOTER', (BG_BLACK | LIGHTGRAY));
 
     this._destroyArticleIcon();
     this._destroyCategoryIcons();
@@ -633,6 +636,7 @@ NewsReader.prototype._destroyLoadingOverlay = function () {
     if (this.listFrame && typeof LIST_INACTIVE !== 'undefined') {
         try { this.listFrame.clear(LIST_INACTIVE); this.listFrame.home(); } catch (_eClr) { }
     }
+    this.parentFrame.cycle();
 };
 
 NewsReader.prototype._showLoadingOverlay = function (message) {
@@ -3610,4 +3614,6 @@ NewsReader.prototype._showArticle = function (article) {
     // TODO: I want to implement this as a two phase view:
     // 1. Show a summary view with the article title and a brief excerpt (I want to expand this later to include images + figlet if possible, but keep simple for now)
     // 2. On selection, show the full article content
-}
+};
+
+registerModuleExports({ NewsReader: NewsReader });

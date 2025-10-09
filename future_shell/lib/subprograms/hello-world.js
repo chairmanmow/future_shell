@@ -6,6 +6,9 @@
 // 4. ESC at any time aborts immediately.
 
 load("future_shell/lib/subprograms/subprogram.js");
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 
 function HelloWorld(opts) {
 	opts = opts || {};
@@ -111,12 +114,10 @@ HelloWorld.prototype._cleanup = function () {
 };
 
 HelloWorld.prototype._resetState = function () {
-	this._nameBuffer = '';
-	this._mode = 'asking'; // 'asking' | 'greeted'
-	this.outputFrame = null;
-	this.inputFrame = null;
+ this._nameBuffer = '';
+ this._mode = 'asking'; // 'asking' | 'greeted'
+ this.outputFrame = null;
+ this.inputFrame = null;
 }
 
-// Export constructor globally
-this.HelloWorld = HelloWorld;
-
+registerModuleExports({ HelloWorld: HelloWorld });

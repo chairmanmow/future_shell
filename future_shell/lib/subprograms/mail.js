@@ -1,6 +1,9 @@
 load('future_shell/lib/subprograms/subprogram.js');
 // Use shared Icon renderer for consistency with main shell
 load('future_shell/lib/shell/icon.js');
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 require('sbbsdefs.js', 'MAIL_SENT', 'MAIL_YOUR', 'LM_REVERSE', 'LM_UNREAD', 'LM_INCDEL', 'NMAIL_KILL');
 require('smbdefs.js', 'NET_FIDO', 'NETMSG_INTRANSIT', 'NETMSG_SENT', 'NETMSG_KILLSENT', 'NETMSG_HOLD', 'NETMSG_CRASH', 'NETMSG_IMMEDIATE', 'NETMSG_DIRECT', 'NETMSG_ARCHIVESENT');
 require('userdefs.js', 'U_NAME');
@@ -836,4 +839,4 @@ Mail.prototype.exit = function () {
 };
 
 // Export constructor globally
-this.Mail = Mail;
+registerModuleExports({ Mail: Mail });

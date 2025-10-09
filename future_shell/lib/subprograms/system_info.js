@@ -5,6 +5,9 @@
 // Order of appearance follows the literal declaration order.
 
 load('future_shell/lib/subprograms/subprogram.js');
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 
 var SYS_INFO_FIELDS = {
 	// Top-level properties (simple)
@@ -153,7 +156,7 @@ SystemInfo.prototype.cleanup = function () {
 	try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
 	try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
 	this.outputFrame = null; this.inputFrame = null;
-	Subprogram.prototype.cleanup.call(this);
+Subprogram.prototype.cleanup.call(this);
 };
 
-this.SystemInfo = SystemInfo;
+registerModuleExports({ SystemInfo: SystemInfo });

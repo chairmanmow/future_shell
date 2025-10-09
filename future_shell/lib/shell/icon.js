@@ -1,4 +1,3 @@
-
 function Icon(iconFrame, labelFrame, data, logit) {
     this.logit = logit;
     this.iconFrame = iconFrame;
@@ -168,6 +167,9 @@ Icon.prototype._bgMatchesBlack = function (attr, blackBgNibble) {
 
 // Utility for centering label
 
+if (typeof registerModuleExports !== 'function') {
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 
-// Make Icon globally available for load()
-this.Icon = Icon;
+// Make Icon globally available and return module exports
+registerModuleExports({ Icon: Icon });

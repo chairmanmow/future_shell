@@ -1,4 +1,7 @@
 load("future_shell/lib/subprograms/subprogram.js");
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 require('sbbsdefs.js', 'SS_TMPSYSOP');
 
 if (typeof SC_RESET === 'undefined') var SC_RESET = '\x01N';
@@ -238,4 +241,4 @@ SysopCommand.prototype._resetState = function () {
     this._posterVisible = true;
 };
 
-this.SysopCommand = SysopCommand;
+registerModuleExports({ SysopCommand: SysopCommand });

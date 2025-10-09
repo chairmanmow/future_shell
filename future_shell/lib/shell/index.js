@@ -1,26 +1,36 @@
+function loadMany(paths) {
+	for (var i = 0; i < paths.length; i++) load(paths[i]);
+}
+
+function resolveExport(mod, name) {
+	if (mod && typeof mod === 'object' && Object.prototype.hasOwnProperty.call(mod, name)) return mod[name];
+	var root = typeof globalThis !== 'undefined' ? globalThis : this;
+	if (root && typeof root[name] !== 'undefined') return root[name];
+	return mod;
+}
+
 // basic helpers
 load("future_shell/lib/util/helpers.js");
 // shell/index.js
 
 load("future_shell/lib/shell/dependencies.js");
-// Explicitly load all shell module files in this directory
 
 // Icon Shell prototypes
-load("future_shell/lib/shell/shelllib.js");
-load("future_shell/lib/shell/shell_frame_help.js");
-load("future_shell/lib/shell/grid_nav.js");
-load("future_shell/lib/shell/hotkeys.js");
-load("future_shell/lib/shell/launch.js");
-load("future_shell/lib/effects/eye_candy.js");
-load("future_shell/lib/util/debug.js");
+loadMany([
+	"future_shell/lib/shell/shelllib.js",
+	"future_shell/lib/shell/shell_frame_help.js",
+	"future_shell/lib/shell/grid_nav.js",
+	"future_shell/lib/shell/hotkeys.js",
+	"future_shell/lib/shell/launch.js",
+	"future_shell/lib/effects/eye_candy.js",
+	"future_shell/lib/util/debug.js"
+]);
 
 // subclasses
-var Icon = load("future_shell/lib/shell/icon.js");
+var Icon = resolveExport(load("future_shell/lib/shell/icon.js"), 'Icon');
 load("future_shell/lib/shell/toast.js");
 
 // subprograms
-load("future_shell/lib/subprograms/chat.js");
-load("future_shell/lib/util/mouse_hotspot_test.js");
-
-// layout
-load("future_shell/lib/util/layout/modal.js");
+loadMany([
+	"future_shell/lib/subprograms/chat.js",
+]);

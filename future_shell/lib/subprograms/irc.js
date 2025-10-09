@@ -3,10 +3,15 @@ load('future_shell/lib/subprograms/subprogram.js');
 load('sbbsdefs.js');
 load('nodedefs.js');
 load('text.js');
-
-(function () {
+if (typeof lazyLoadModule !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 	// Load options (same precedence as original)
-	var options = load('modopts.js', 'chat') || load('modopts.js', 'chat_sec') || {};
+	var options = (function () {
+		var primary = lazyLoadModule('modopts.js', { cacheKey: 'modopts:chat', args: ['chat'], useContext: false, suppressErrors: true });
+		var fallback = lazyLoadModule('modopts.js', { cacheKey: 'modopts:chat_sec', args: ['chat_sec'], useContext: false, suppressErrors: true });
+		return primary || fallback || {};
+	})();
 	if (options.irc === undefined) options.irc = true;
 	if (options.finger === undefined) options.finger = true;
 	if (options.imsg === undefined) options.imsg = true;
@@ -137,7 +142,7 @@ load('text.js');
 			case 'S': case 's': this._toggle(CHAT_SPLITP); break;
 			case 'D': case 'd': this._toggle(CHAT_NOPAGE, null, NODE_POFF); break;
 			case 'F': case 'f': if (this.options.finger) { try { load('finger.js'); } catch (e) { } } break;
-			case 'I': case 'i': if (this.options.imsg) { try { load({}, 'sbbsimsg.js'); } catch (e) { } } break;
+			case 'I': case 'i': if (this.options.imsg) { try { lazyLoadModule('sbbsimsg.js', { cacheKey: 'sbbsimsg', suppressErrors: true }); } catch (e) { } } break;
 			case 'R': case 'r': this._ircConnect(); break;
 			case 'J': case 'j': try { bbs.multinode_chat(); } catch (e) { } break;
 			case 'P': case 'p': try { bbs.private_chat(); } catch (e) { } break;
@@ -155,6 +160,4 @@ load('text.js');
 		opts = opts || {}; opts.parentFrame = opts.parentFrame || (shell && shell.subFrame) || (shell && shell.root) || null; opts.shell = shell || opts.shell; var c = new IrcSection(opts); c.enter(cb); return c;
 	};
 
-	// export
-	this.IrcSection = IrcSection;
-})();
+registerModuleExports({ IrcSection: IrcSection });

@@ -2,7 +2,13 @@
 // Extracted AvatarsFloat animation for focused debugging.
 // Provides a frame-only avatar sprite system using avatar_lib.js (mandatory).
 // Guarded load to avoid double-loading (which caused 'redeclaration of const defs').
-var AVATAR_LIB = (function(){ try { return load({}, '../../exec/load/avatar_lib.js'); } catch(e){ return null; } })();
+if (typeof lazyLoadModule !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
+var AVATAR_LIB = (function(){
+	try { return lazyLoadModule('../../exec/load/avatar_lib.js', { cacheKey: 'avatar_lib.exec' }); }
+	catch(e){ return null; }
+})();
 
 (function(){
 "use strict";

@@ -1,6 +1,9 @@
 // mouse_hotspot_test.js
 // Minimal Synchronet JS test for mouse hotspot support
 
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 
 function MouseTest(){
 if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
@@ -37,3 +40,5 @@ if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
 console.putmsg("\r\nTest complete.\r\n");
 
 }
+
+registerModuleExports({ MouseTest: MouseTest });

@@ -42,12 +42,18 @@ function BasicShell(onReloadAdvancedShell) {
                 bbs.xtrn_sec();
                 header(); break;
 
-            case 'H':
-                // console.clear(); header("HELP");
-                // help();
-                // promptContinue();
-                MouseTest();
-                break;
+			case 'H':
+				if (typeof MouseTest !== 'function') {
+					try {
+						load('future_shell/lib/util/mouse_hotspot_test.js');
+					} catch (e) {
+						writeln("\r\n\x01h\x01cMouse hotspot test unavailable.\x01n");
+						break;
+					}
+				}
+				if (typeof MouseTest === 'function') MouseTest();
+				else writeln("\r\n\x01h\x01cMouse hotspot test not loaded.\x01n");
+				break;
 
             case 'R':
                 if (typeof onReloadAdvancedShell === 'function') {

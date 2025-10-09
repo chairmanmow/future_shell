@@ -1,4 +1,7 @@
 load('future_shell/lib/subprograms/subprogram.js');
+if (typeof registerModuleExports !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+}
 
 require('sbbsdefs.js',
     'BG_BLACK', 'BG_BLUE', 'BG_CYAN', 'BG_GREEN', 'BG_MAGENTA', 'BG_BROWN', 'BG_LIGHTGRAY',
@@ -1172,8 +1175,6 @@ UsageViewer.prototype._getTopPlayers = function (month, programId) {
     });
 };
 
-this.UsageViewer = UsageViewer;
-
 // ================= User Filter Modal =================
 UsageViewer.prototype._showUserFilter = function () {
     // Build user list from current aggregated data (All Time if on All Time, else current month)
@@ -1278,5 +1279,7 @@ UsageViewer.prototype._showUserFilter = function () {
         this._activeUserModal = legacy;
     }
     // Reset selection context when opening (program list resets after filter change)
-    this.programIndex = 0; this.programTop = 0;
+	this.programIndex = 0; this.programTop = 0;
 };
+
+registerModuleExports({ UsageViewer: UsageViewer });

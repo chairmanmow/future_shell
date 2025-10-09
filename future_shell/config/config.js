@@ -1,19 +1,3 @@
-
-load("future_shell/lib/subprograms/whosonline.js");
-load("future_shell/lib/util/xtrnmenu.js");
-// Hello World demo subprogram
-load("future_shell/lib/subprograms/hello-world.js");
-load("future_shell/lib/subprograms/file_area.js");
-load("future_shell/lib/subprograms/calendar.js");
-load("future_shell/lib/subprograms/clock.js");
-load("future_shell/lib/subprograms/rawgate.js");
-load("future_shell/lib/subprograms/mail.js");
-load("future_shell/lib/subprograms/system_info.js");
-load("future_shell/lib/subprograms/message_boards/message_boards.js");
-load("future_shell/lib/subprograms/users.js");
-load("future_shell/lib/subprograms/sysop_commands.js");
-load("future_shell/lib/subprograms/newsreader.js");
-
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
 // [Menu]
@@ -43,7 +27,27 @@ function _icsh_err(msg) {
 	} catch (e) { }
 }
 
+function ensureXtrnMenuLoaded() {
+	if (typeof getItemsForXtrnSection === 'function') return true;
+	try {
+		load('future_shell/lib/util/xtrnmenu.js');
+	} catch (e) {
+		_icsh_warn('Failed loading xtrnmenu.js ' + e);
+		return false;
+	}
+	return typeof getItemsForXtrnSection === 'function';
+}
+
 // Builtin actions mapping
+/* TODO : reduce boilerplate around launching subprograms
+	i.e. sysop_commands = new SubprogramActionHandler(SysopCommand, { parentFrame: this.subFrame, shell: this });
+	as opposed to the current repetitive pattern
+	try { if (typeof SysopCommand !== 'function') load('future_shell/lib/subprograms/sysop_commands.js'); } catch (e) { dbug('subprogram', 'Failed loading sysop_commands.js ' + e); return; }
+	if (typeof SysopCommand !== 'function') { dbug('subprogram', 'SysopCommand class missing after load'); return; }
+	if (!this.sysopCommand) this.sysopCommand = new SysopCommand({ parentFrame: this.subFrame, shell: this });
+	else { this.sysopCommand.parentFrame = this.root; this.sysopCommand.shell = this; }
+	this.queueSubprogramLaunch('sysop-commands', this.sysopCommand);
+*/
 var BUILTIN_ACTIONS = {
 	chat: function () { this.queueSubprogramLaunch('chat', this.chat); },
 	sysop_commands: function () {
@@ -64,7 +68,13 @@ var BUILTIN_ACTIONS = {
 	},
 	msg_scan_config: function () { if (typeof bbs.cfg_msg_scan === 'function') { this.runExternal(function () { bbs.cfg_msg_scan() }, { programId: 'cfg_msg_scan' }); } },
 	user_settings: function () { if (typeof bbs.user_config === 'function') { this.runExternal(function () { bbs.user_config() }, { programId: 'user_config' }); } },
-	hello: function () { if (!this.helloWorld) this.helloWorld = new HelloWorld(); this.queueSubprogramLaunch('hello-world', this.helloWorld); },
+	hello: function () {
+		try { if (typeof HelloWorld !== 'function') load('future_shell/lib/subprograms/hello-world.js'); }
+		catch (e) { dbug('subprogram', 'Failed loading hello-world.js ' + e); return; }
+		if (typeof HelloWorld !== 'function') { dbug('subprogram', 'HelloWorld class missing after load'); return; }
+		if (!this.helloWorld) this.helloWorld = new HelloWorld();
+		this.queueSubprogramLaunch('hello-world', this.helloWorld);
+	},
 	exit: function () {
 		throw ('Exit Shell');
 	},
@@ -176,13 +186,7 @@ var BUILTIN_ACTIONS = {
 		else { this.systemInfoSub.parentFrame = this.root; this.systemInfoSub.shell = this; }
 		this.queueSubprogramLaunch('system-info', this.systemInfoSub);
 	},
-	who_list: function () {
-		try { if (typeof WhoOnline !== 'function') load('future_shell/lib/subprograms/whosonline.js'); } catch (e) { dbug('subprogram', 'Failed loading whosonline.js ' + e); return; }
-		if (typeof WhoOnline !== 'function') { dbug('subprogram', 'WhoOnline class missing after load'); return; }
-		if (!this.whoOnlineSub) this.whoOnlineSub = new WhoOnline({ parentFrame: this.subFrame, shell: this });
-		else { this.whoOnlineSub.parentFrame = this.root; this.whoOnlineSub.shell = this; }
-		this.queueSubprogramLaunch('who-online', this.whoOnlineSub);
-	},
+	who_list: function () { dbug('subprogram', 'WhoOnline subprogram deprecated'); },
 };
 
 function readIniFile(path) {
@@ -398,7 +402,15 @@ function _buildItemRecursive(key, ini, ancestry) {
 		var secNum = parseInt(sect.section, 10);
 		if (isNaN(secNum) || secNum < 0) { _icsh_warn('Bad section number for ' + key); return null; }
 		obj.type = 'folder';
-		(function (secNumRef) { Object.defineProperty(obj, 'children', { configurable: true, enumerable: true, get: function () { return getItemsForXtrnSection(secNumRef); } }); })(secNum);
+		(function (secNumRef) {
+			Object.defineProperty(obj, 'children', {
+				configurable: true,
+				enumerable: true,
+				get: function () {
+					return ensureXtrnMenuLoaded() ? getItemsForXtrnSection(secNumRef) : [];
+				}
+			});
+		})(secNum);
 		return obj;
 	}
 	if (type === 'folder') {
@@ -822,25 +834,22 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 	type: "folder",
 	children: [
 		{ label: "Chat", type: "item", iconFile: "chat", action: BUILTIN_ACTIONS.chat },
-		{ label: "Games", type: "folder", iconFile: "games", get children() { return getItemsForXtrnSection(1); } },
-		{ label: "Apps", type: "folder", iconFile: "apps", get children() { return getItemsForXtrnSection(0); } },
+		{
+			label: "Games",
+			type: "folder",
+			iconFile: "games",
+			get children() { return ensureXtrnMenuLoaded() ? getItemsForXtrnSection(1) : []; }
+		},
+		{
+			label: "Apps",
+			type: "folder",
+			iconFile: "apps",
+			get children() { return ensureXtrnMenuLoaded() ? getItemsForXtrnSection(0) : []; }
+		},
 		{ label: "Messages", type: "item", iconFile: "messages", action: makeExecXtrnAction("ECREADER") },
 		{ label: "News", type: "item", iconFile: "news", action: BUILTIN_ACTIONS.newsreader },
 		{ label: "Mail", type: "item", iconFile: "mail", dynamic: true, action: BUILTIN_ACTIONS.mail },
 		{ label: "Files", type: "item", iconFile: "folder", action: makeExecXtrnAction("ANSIVIEW") },
-		{
-			label: "Who", type: "folder", iconFile: "whosonline", get children() {
-				try {
-					if (typeof WhoOnline !== 'function') load('future_shell/lib/subprograms/whosonline.js');
-					if (typeof WhoOnline !== 'function') return [];
-					if (typeof global !== 'undefined' && global.__icsh_shell && global.__icsh_shell.whoOnlineSub)
-						return global.__icsh_shell.whoOnlineSub.getOnlineUserIcons();
-					if (!this._whoTemp) this._whoTemp = new WhoOnline({ parentFrame: null, shell: null });
-					return this._whoTemp.getOnlineUserIcons();
-				} catch (e) { return []; }
-			}
-		},
-		{ label: "Who List", type: "item", iconFile: "whosonline", action: BUILTIN_ACTIONS.who_list },
 		{ label: "Hello", type: "item", iconFile: "folder", action: BUILTIN_ACTIONS.hello },
 		{ label: "Sys Info", type: "item", iconFile: "kingcomputer", action: BUILTIN_ACTIONS.sysinfo },
 		{ label: "Usage", type: "item", iconFile: "calendar", action: BUILTIN_ACTIONS.usage_viewer },

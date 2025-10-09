@@ -1,8 +1,8 @@
 // console-only ANSI / BIN / XBIN renderer (clean implementation)
 // drawAnsiBin(inputPathOrBase, opts)
 // opts: { bases:["answer","logon"], speed:0, pausing:true, forceSimple:false, autowrap:true, debug:false, pause:false, finalPause:false }
-function dbg(msg){
-    log(msg);
+if (typeof lazyLoadModule !== 'function') {
+	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 function drawAnsiBin(input, opts, cb) {
 	if(!!cb) log("DRAW ANSI BIN HAS CALLBACK");
@@ -22,11 +22,14 @@ function drawAnsiBin(input, opts, cb) {
 	dbg('Bases: '+bases.join(','));
 
 	// Load libs
-	var Sauce, cterm, xbin, Ansi;
-	try { Sauce = load({}, 'sauce_lib.js'); } catch(e) { dbg('No sauce_lib.js'); }
-	try { cterm = load({}, 'cterm_lib.js'); } catch(e) { dbg('No cterm_lib.js'); }
-	try { xbin = load({}, 'xbin_lib.js'); } catch(e) { dbg('No xbin_lib.js'); }
-	try { Ansi = load({}, 'ansiterm_lib.js'); } catch(e) { dbg('No ansiterm_lib.js'); }
+	var Sauce = lazyLoadModule('sauce_lib.js', { cacheKey: 'sauce_lib', suppressErrors: true });
+	var cterm = lazyLoadModule('cterm_lib.js', { cacheKey: 'cterm_lib', suppressErrors: true });
+	var xbin = lazyLoadModule('xbin_lib.js', { cacheKey: 'xbin_lib', suppressErrors: true });
+	var Ansi = lazyLoadModule('ansiterm_lib.js', { cacheKey: 'ansiterm_lib', suppressErrors: true });
+	if (!Sauce) dbg('No sauce_lib.js');
+	if (!cterm) dbg('No cterm_lib.js');
+	if (!xbin) dbg('No xbin_lib.js');
+	if (!Ansi) dbg('No ansiterm_lib.js');
 
 	var isSyncTerm=false; try { if (cterm && cterm.query_da() !== false) { isSyncTerm=true; dbg('SyncTERM detected'); } } catch(e) { dbg('cterm query failed'); }
 	var finalPause = opts.finalPause === true || opts.pause === true; // treat pause as finalPause too
@@ -240,3 +243,4 @@ function drawAnsiBin(input, opts, cb) {
 	}
 	}
 
+this.drawAnsiBin = drawAnsiBin;
