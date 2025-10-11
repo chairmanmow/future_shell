@@ -410,7 +410,7 @@ FileArea.prototype._renderGrid = function (items, type) {
     if (this.selectedIndex >= tiles.length) this.selectedIndex = tiles.length - 1;
     if (this.selectedIndex < 0) this.selectedIndex = 0;
     if (tiles.length > 1 && this.selectedIndex === 0 && tiles[0] && (tiles[0]._type === 'exit' || tiles[0]._type === 'back')) {
-        this.selectedIndex = 1;
+        this.selectedIndex = 0;
     }
 
     var metrics = this._getIconMetrics();
@@ -457,7 +457,7 @@ FileArea.prototype._renderGrid = function (items, type) {
             if (typeof this.registerFrame === 'function') { this.registerFrame(iconFrame); this.registerFrame(labelFrame); }
 
             var iconName = '';
-            if (item._type === 'exit') iconName = 'exit';
+            if (item._type === 'exit') iconName = 'back';
             else if (item._type === 'back') iconName = 'back';
             else if (type === 'libs') iconName = this._iconForLib(item);
             else if (type === 'dirs') iconName = this._iconForDir(item);
@@ -589,59 +589,112 @@ FileArea.prototype.handleKey = function (key) {
 };
 
 FileArea.prototype._handleGridNav = function (key, lengthWithTile, onEnter, onBack) {
-    var grid = this._gridLayout || null;
-    var length = lengthWithTile; // includes Exit/Back tile row 0
+    var length = Math.max(0, (lengthWithTile | 0));
+    if (length === 0) return;
+
+    // Prefer layout from renderer, fall back to computed meta
+    var layout = this._gridLayout || null;
+    var meta = this.gridMeta || null;
+
+    var cols = Math.max(1, (layout && layout.cols) || (meta && meta.cols) || 1);
+    var visibleRows = Math.max(1, (layout && layout.visibleRows) || (meta && meta.rowsVisible) || 1);
+
+    // Clamp current selection into range
+    if (typeof this.selectedIndex !== 'number') this.selectedIndex = 0;
+    if (this.selectedIndex < 0) this.selectedIndex = 0;
+    if (this.selectedIndex >= length) this.selectedIndex = length - 1;
+
+    // Helpers
+    function rowOf(i) { return Math.floor(i / cols); }
+    function colOf(i) { return i % cols; }
+    function maxRowOf(len) { return Math.floor((len - 1) / cols); }
+    function clampToRowCol(row, col, len) {
+        var lastRow = maxRowOf(len);
+        if (row < 0) row = 0;
+        if (row > lastRow) row = lastRow;
+        var inRow = Math.min(cols, len - row * cols); // items in this row (ragged last row)
+        if (inRow <= 0) { row = lastRow; inRow = Math.min(cols, len - row * cols); }
+        if (col < 0) col = 0;
+        if (col >= inRow) col = inRow - 1;
+        return row * cols + col;
+    }
+
+    var idx = this.selectedIndex;
+    var row = rowOf(idx);
+    var col = colOf(idx);
 
     switch (key) {
-        case KEY_UP: case "\u001e":
-            if (!grid) break;
-            if (this.selectedIndex >= grid.cols) this.selectedIndex -= grid.cols;
-            else this.selectedIndex = this.selectedIndex % grid.cols;
-            this._adjustGridScroll(grid, length);
-            this.draw();
+        case KEY_UP:
+        case "\u001e": // Ctrl-^ typically up
+        case "\x1B[A": // ANSI up
+            idx = clampToRowCol(row - 1, col, length);
             break;
-        case KEY_DOWN: case "\u000a":
-            if (!grid) break;
-            var nextDown = this.selectedIndex + grid.cols;
-            if (nextDown < length) this.selectedIndex = nextDown;
-            else this.selectedIndex = length - 1;
-            this._adjustGridScroll(grid, length);
-            this.draw();
+
+        case KEY_DOWN:
+        case "\u000a": // Ctrl-J sometimes mapped as down in your env
+        case "\x1B[B": // ANSI down
+            idx = clampToRowCol(row + 1, col, length);
             break;
-        case KEY_LEFT: case "\u001d": case "\x1B[D":
-            if (!grid) break;
-            if (this.selectedIndex > 0) this.selectedIndex--;
-            this._adjustGridScroll(grid, length);
-            this.draw();
+
+        case KEY_LEFT:
+        case "\u001d":
+        case "\x1B[D": // ANSI left
+            idx = Math.max(0, idx - 1);
             break;
-        case KEY_RIGHT: case "\u0006": case "\x1B[C":
-            if (!grid) break;
-            if (this.selectedIndex < length - 1) this.selectedIndex++;
-            this._adjustGridScroll(grid, length);
-            this.draw();
+
+        case KEY_RIGHT:
+        case "\u0006":
+        case "\x1B[C": // ANSI right
+            idx = Math.min(length - 1, idx + 1);
             break;
-        case KEY_PGUP:
-            if (!grid) break;
-            this.selectedIndex = Math.max(0, this.selectedIndex - (grid.cols * grid.visibleRows));
-            this._adjustGridScroll(grid, length);
-            this.draw(); break;
-        case KEY_PGDN:
-            if (!grid) break;
-            this.selectedIndex = Math.min(length - 1, this.selectedIndex + (grid.cols * grid.visibleRows));
-            this._adjustGridScroll(grid, length);
-            this.draw(); break;
+
+        case KEY_PGUP: {
+            var page = cols * visibleRows;
+            var target = Math.max(0, idx - page);
+            // maintain column if possible on the new row
+            idx = clampToRowCol(rowOf(target), col, length);
+            break;
+        }
+
+        case KEY_PGDN: {
+            var pageDn = cols * visibleRows;
+            var targetDn = Math.min(length - 1, idx + pageDn);
+            idx = clampToRowCol(rowOf(targetDn), col, length);
+            break;
+        }
+
         case KEY_HOME:
-            this.selectedIndex = 0; this._adjustGridScroll(grid, length); this.draw(); break;
+            idx = 0;
+            break;
+
         case KEY_END:
-            this.selectedIndex = length - 1; this._adjustGridScroll(grid, length); this.draw(); break;
+            idx = length - 1;
+            break;
+
         case KEY_ENTER:
             if (typeof onEnter === 'function') onEnter();
-            break;
-        case '\x1B': case '\b': case '\x08': case '\x7F':
+            return;
+
+        case '\x1B':    // ESC
+        case '\b':      // BS
+        case '\x08':    // BS (alternate)
+        case '\x7F':    // DEL
             if (typeof onBack === 'function') onBack();
             else this.exit();
-            break;
+            return;
+
+        default:
+            return; // unhandled key
     }
+
+    this.selectedIndex = idx;
+
+    // Adjust scroll with a minimal grid object if renderer layout missing
+    var adjustGrid = layout || { cols: cols, visibleRows: visibleRows };
+    if (typeof this._adjustGridScroll === 'function') {
+        this._adjustGridScroll(adjustGrid, length);
+    }
+    this.draw();
 };
 
 FileArea.prototype._adjustGridScroll = function (grid, length) {
