@@ -46,14 +46,17 @@ function FileArea(opts) {
     this.tagged = {};             // filename -> true
     this.statusMessage = '';
     this.statusMessageTs = 0;
-
+    this.id = "filearea";
     // Theming (compatible with attr.ini overrides)
     if (typeof this.registerColors === 'function') {
         this.registerColors({
-            LIST_ACTIVE: { BG: BG_CYAN, FG: BLACK },
+            LIST_ACTIVE: { BG: BG_MAGENTA, FG: YELLOW },
             LIST_INACTIVE: { BG: BG_BLACK, FG: LIGHTGRAY },
-            HEADER_ATTR: { BG: BG_BLUE, FG: WHITE },
-            STATUS_ATTR: { BG: BG_BLACK, FG: LIGHTGRAY }
+            HEADER_ATTR: { BG: BG_MAGENTA, FG: WHITE },
+            STATUS_ATTR: { BG: BG_BLACK, FG: LIGHTGRAY },
+            TEXT_HOTKEY: { FG: YELLOW },
+            TEXT_NORMAL: { FG: LIGHTGRAY },
+            TEXT_BOLD: { FG: LIGHTMAGENTA }
         });
     }
 
@@ -107,12 +110,12 @@ FileArea.prototype._ensureFrames = function () {
     }
     if (!this.statusFrame) {
         var sa = this.paletteAttr('STATUS_ATTR');
-        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.y + this.parentFrame.height - 1, this.parentFrame.width, 1, sa, this.parentFrame);
+        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.y + this.parentFrame.height, this.parentFrame.width, 1, sa, this.parentFrame);
         this.statusFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
     }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 2);
+        var h = Math.max(1, this.parentFrame.height - 1);
         var la = this.paletteAttr('LIST_INACTIVE');
         this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, la, this.parentFrame);
         this.listFrame.open();
@@ -179,7 +182,7 @@ FileArea.prototype._setHeader = function (text) {
     if (t.length > this.headerFrame.width) t = t.substr(0, this.headerFrame.width);
     this.headerFrame.clear(this.paletteAttr('HEADER_ATTR'));
     this.headerFrame.gotoxy(1, 1);
-    this.headerFrame.putmsg(t);
+    this.headerFrame.center(t);
 };
 
 FileArea.prototype._setStatus = function (text) {
@@ -415,7 +418,7 @@ FileArea.prototype._renderGrid = function (items, type) {
 
     var metrics = this._getIconMetrics();
     var labelH = 1;
-    var paddingTop = 1;
+    var paddingTop = 2;
     var cellW = metrics.width + 4;
     var cellH = metrics.height + labelH + 2;
     var fw = this.listFrame.width, fh = this.listFrame.height;
@@ -477,15 +480,18 @@ FileArea.prototype._renderGrid = function (items, type) {
     this._gridLayout = { type: type, cols: cols, visibleRows: visibleRows, total: total, rows: rows, cellWidth: cellW, cellHeight: cellH };
     if (cells.length) this._registerGridHotspots(cells);
     else this._releaseHotspots();
-
+    var line = this.colorize('TEXT_HOTKEY', 'ENTER') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'open ') +
+        this.colorize('TEXT_HOTKEY', 'ESC') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'exit ') +
+        this.colorize('TEXT_HOTKEY', 'Click') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'select ');
     // header & status
     if (type === 'libs') {
         this._setHeader('Libraries');
-        this._setStatus('ENTER=open  ESC=exit  CLICK=select');
+
+        this._setStatus(line);
     } else {
         var lib = (this.libIndex >= 0) ? file_area.lib_list[this.libIndex] : null;
         this._setHeader((lib ? (lib.name || lib.description || 'Library') : 'Library') + ' > Directories');
-        this._setStatus('ENTER=open  ESC=back  CLICK=select');
+        this._setStatus(line);
     }
 };
 
@@ -536,7 +542,12 @@ FileArea.prototype._drawFiles = function () {
     if (lib) title.push(lib.name || lib.description || 'Library');
     if (dir) title.push(dir.description || dir.name || this.dirCode);
     this._setHeader(title.join(' > ') || 'Files');
-    this._setStatus('ENTER=info  T/Space=tag  D=download  U=upload  ESC=back');
+    var statusLine = this.colorize('TEXT_HOTKEY', 'ENTER') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'info ') +
+        this.colorize('TEXT_HOTKEY', 'T/Space') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'tag ') +
+        this.colorize('TEXT_HOTKEY', 'D') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'download ') +
+        this.colorize('TEXT_HOTKEY', 'U') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'upload ') +
+        this.colorize('TEXT_HOTKEY', 'ESC') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'back');
+    this._setStatus(statusLine);
 };
 
 FileArea.prototype._computeFileListWidths = function () {

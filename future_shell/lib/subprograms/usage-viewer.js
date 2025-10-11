@@ -42,7 +42,8 @@ function UsageViewer(opts) {
         TEXT_TIME: { FG: LIGHTGREEN },
         TEXT_RECENT: { FG: LIGHTRED },
         TEXT_TOP: { FG: LIGHTMAGENTA },
-        TEXT_TOTAL: { FG: LIGHTBLUE }
+        TEXT_TOTAL: { FG: LIGHTBLUE },
+        DETAIL_FRAME: { BG: BG_BLUE, FG: WHITE },
     });
     var modsDir = system.mods_dir;
     if (modsDir && modsDir.slice(-1) !== '/' && modsDir.slice(-1) !== '\\') modsDir += '/';
@@ -302,7 +303,7 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.listFrame) {
         var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
-        this.listFrame = new Frame(host.x, host.y, width, listHeight, attr, host);
+        this.listFrame = new Frame(host.x, 2, width, listHeight, attr, host);
 
         this.listFrame.open();
         this.registerFrame(this.listFrame);
@@ -317,7 +318,8 @@ UsageViewer.prototype.ensureFrames = function () {
         }
     }
     if (!this.detailFrame) { // stub frame retained for legacy refs; not displayed
-        this.detailFrame = new Frame(host.x, detailY, width, Math.max(1, detailHeight), BG_BLACK | LIGHTGRAY, host);
+        var attr = this.paletteAttr('DETAIL_FRAME') || (BG_BLUE | LIGHTGRAY);
+        this.detailFrame = new Frame(host.x, 1, width, Math.max(1, detailHeight), attr, host);
         try { this.detailFrame.open(); } catch (eDF) { }
         this.registerFrame(this.detailFrame);
     }
@@ -329,7 +331,7 @@ UsageViewer.prototype.draw = function () {
     var lf = this.listFrame;
     lf.attr = BG_BLACK | LIGHTGRAY;
     lf.clear(BG_BLACK | LIGHTGRAY);
-    lf.gotoxy(1, 1);
+    lf.gotoxy(1, 2);
     // Header (line 1 & 2)
     lf.clear(BG_BLACK | LIGHTGRAY);
     var current = this.months[this.index] || { month: 'All Time', count: 0, seconds: 0, programs: [] };
@@ -410,16 +412,16 @@ UsageViewer.prototype.draw = function () {
     if (this._userFilterAlias) headerParts.push('User ' + this._userFilterAlias);
     var header1 = headerParts.join('  ');
     if (header1.length > lf.width) header1 = header1.substr(0, lf.width);
-    try { lf.gotoxy(1, 1); lf.putmsg(header1 + '\x01n'); } catch (_) { }
+    try { lf.gotoxy(1, 2); lf.putmsg(header1 + '\x01n'); } catch (_) { }
     // Dynamic help line: show user filter state inline.
     // Color legend: \x01m = magenta, \x01w = white/gray, \x01h = high intensity, \x01n = reset
     var userStateLabel = this._userFilterAlias ? this._userFilterAlias : 'All Users';
     // Surround variable user label with light magenta (high + magenta) for emphasis
     var help2 = '\x01h\x01mU\x01n=\x01h\x01m' + userStateLabel + '\x01n  S=Sort  C=Cat  R=Reload  ENTER=Launch';
     if (help2.length > lf.width) help2 = help2.substr(0, lf.width);
-    try { lf.gotoxy(1, 2); lf.putmsg(help2 + '\x01n'); } catch (_) { }
+    try { lf.gotoxy(1, 3); lf.putmsg(help2 + '\x01n'); } catch (_) { }
     // Stylized icon block rendering (restored)
-    var startRow = 3; // after two header lines
+    var startRow = 5; // after two header lines
     var availableRows = lf.height - (startRow - 1);
     if (availableRows < 1) availableRows = 1;
     this._sortPrograms(current.programs);
@@ -503,7 +505,9 @@ UsageViewer.prototype.draw = function () {
         this._drawProgramBlock(lf, y, blockHeightAdjusted, prog, idx, hotspots, vis);
     }
     this._programHotspots = hotspots;
+    this._drawDetail();
     try { lf.cycle(); } catch (_c) { }
+
 };
 UsageViewer.prototype._formatProgramLine = function (index, prog) {
     if (!prog) return '';
@@ -564,31 +568,8 @@ UsageViewer.prototype._formatMonthLine = function (item) {
 
 UsageViewer.prototype._drawDetail = function () {
     if (!this.detailFrame) return;
-    var df = this.detailFrame;
-    df.attr = BG_BLACK | LIGHTGRAY;
-    df.clear(BG_BLACK | LIGHTGRAY);
-    df.gotoxy(1, 1);
-    this._clearProgramResources();
-    if (!this.months.length) {
-        df.putmsg('ESC=Exit');
-        df.cycle();
-        return;
-    }
-    var current = this.months[this.index];
-    var header = format('Month %s  Launches %u  Time %s  [v%s]', current.month, current.count, this._formatDuration(current.seconds), this._version || '?');
-    if (header.length > df.width) header = header.substr(0, df.width);
-    df.putmsg('\x01n\x01h' + header + '\x01n\r\n');
-    df.putmsg('\r\n');
-    this._drawProgramBlocks(df, current);
-    var hasPrograms = (current.programs || []).length > 0;
-    var instructions;
-    if (this.focus === 'program') instructions = 'ESC=Exit  LEFT=Months  Up/Down=Programs  1-9=Select  R=Reload';
-    else instructions = hasPrograms ? 'ESC=Exit  RIGHT=Programs  Up/Down=Months  R=Reload'
-        : 'ESC=Exit  Up/Down=Months  R=Reload';
-    if (instructions.length > df.width) instructions = instructions.substr(0, df.width);
-    df.gotoxy(1, df.height);
-    df.putmsg(instructions);
-    df.cycle();
+    this.detailFrame.center("Top Programs");
+    this.detailFrame.cycle();
 };
 
 UsageViewer.prototype._formatDuration = function (seconds) {
