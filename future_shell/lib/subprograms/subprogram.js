@@ -9,6 +9,36 @@ if (typeof ThemeRegistry === 'undefined') {
     } catch (e) { }
 }
 
+var FG_CTRL_MAP = {};
+FG_CTRL_MAP[BLACK & 0x0F] = '\x01k';
+FG_CTRL_MAP[BLUE & 0x0F] = '\x01b';
+FG_CTRL_MAP[GREEN & 0x0F] = '\x01g';
+FG_CTRL_MAP[CYAN & 0x0F] = '\x01c';
+FG_CTRL_MAP[RED & 0x0F] = '\x01r';
+FG_CTRL_MAP[MAGENTA & 0x0F] = '\x01m';
+FG_CTRL_MAP[BROWN & 0x0F] = '\x01y';
+FG_CTRL_MAP[LIGHTGRAY & 0x0F] = '\x01w';
+FG_CTRL_MAP[DARKGRAY & 0x0F] = '\x01h\x01k';
+FG_CTRL_MAP[LIGHTBLUE & 0x0F] = '\x01h\x01b';
+FG_CTRL_MAP[LIGHTGREEN & 0x0F] = '\x01h\x01g';
+FG_CTRL_MAP[LIGHTCYAN & 0x0F] = '\x01h\x01c';
+FG_CTRL_MAP[LIGHTRED & 0x0F] = '\x01h\x01r';
+FG_CTRL_MAP[LIGHTMAGENTA & 0x0F] = '\x01h\x01m';
+FG_CTRL_MAP[YELLOW & 0x0F] = '\x01h\x01y';
+FG_CTRL_MAP[WHITE & 0x0F] = '\x01h\x01w';
+
+function _colorCtrlFromEntry(entry) {
+	if (entry === null || entry === undefined) return '';
+	var fg = null;
+	if (typeof entry === 'number') fg = entry & 0x0F;
+	else if (typeof entry === 'object') {
+		if (typeof entry.FG === 'number') fg = entry.FG & 0x0F;
+		else if (typeof entry.COLOR === 'number') fg = entry.COLOR & 0x0F;
+	}
+	if (fg === null) return '';
+	return FG_CTRL_MAP.hasOwnProperty(fg) ? FG_CTRL_MAP[fg] : '';
+}
+
 // Provide sensible defaults when sbbsdefs.js hasn't populated key constants yet.
 if (typeof KEY_UP === 'undefined') var KEY_UP = 0x4800;
 if (typeof KEY_DOWN === 'undefined') var KEY_DOWN = 0x5000;
@@ -92,8 +122,40 @@ Subprogram.prototype.paletteAttr = function (namespace, key, fallback) {
 	if (!entry) return (typeof fallback === 'number') ? fallback : (fallback || 0);
 	if (typeof entry === 'number') return entry;
 	var bg = entry.BG || 0;
-	var fg = entry.FG || 0;
+	var fg = entry.FG || entry.COLOR || 0;
 	return bg | fg;
+};
+
+Subprogram.prototype.colorReset = function () {
+	return '\x01n';
+};
+
+Subprogram.prototype.colorCode = function (key) {
+	return _colorCtrlFromEntry(this.resolveColor(key));
+};
+
+Subprogram.prototype.colorCodeNamespace = function (namespace, key) {
+	return _colorCtrlFromEntry(this.resolveColor(namespace, key, null));
+};
+
+Subprogram.prototype.colorCodeShared = function (key) {
+	return _colorCtrlFromEntry(this.resolveColor('shared', key, null));
+};
+
+Subprogram.prototype.colorize = function (key, text, opts) {
+	return this.colorizeNamespace(this.themeNamespace, key, text, opts);
+};
+
+Subprogram.prototype.colorizeNamespace = function (namespace, key, text, opts) {
+	var prefix = this.colorCodeNamespace(namespace, key) || '';
+	if (!prefix) return text;
+	var reset = true;
+	if (opts && opts.reset === false) reset = false;
+	return prefix + text + (reset ? this.colorReset() : '');
+};
+
+Subprogram.prototype.colorizeShared = function (key, text, opts) {
+	return this.colorizeNamespace('shared', key, text, opts);
 };
 
 Subprogram.prototype.registerColors = function (defaults, namespace) {

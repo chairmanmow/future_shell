@@ -1,7 +1,7 @@
 load("future_shell/lib/subprograms/chat_helpers.js");
 load("future_shell/lib/subprograms/subprogram.js"); // Base class
 if (typeof registerModuleExports !== 'function') {
-	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 
 function Chat(jsonchat) {
@@ -49,6 +49,32 @@ function Chat(jsonchat) {
     this._pendingMessage = null;
     // Configurable group line color and pad character
     this.groupLineColor = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_GROUP_LINE) ? ICSH_VALS.CHAT_GROUP_LINE : MAGENTA;
+    // Shared avatar library resolution (reuse singleton to avoid duplicate loads / class mismatch)
+    this._avatarLib = (function () {
+        try {
+            if (typeof bbs !== 'undefined') {
+                if (!bbs.mods) bbs.mods = {};
+                if (bbs.mods.avatar_lib) return bbs.mods.avatar_lib;
+            }
+        } catch (_) { }
+        function attempt(path, key) {
+            try {
+                var lib = (typeof lazyLoadModule === 'function') ? lazyLoadModule(path, { cacheKey: key || path }) : load(path);
+                if (lib && (typeof lib.read === 'function' || typeof lib.get === 'function')) {
+                    try { if (typeof bbs !== 'undefined') { if (!bbs.mods) bbs.mods = {}; if (!bbs.mods.avatar_lib) bbs.mods.avatar_lib = lib; } } catch (_) { }
+                    return lib;
+                }
+            } catch (e) { try { log('[Chat] avatar_lib miss ' + path + ': ' + e); } catch (_) { } }
+            return null;
+        }
+        var candidates = ['avatar_lib.js', '../exec/load/avatar_lib.js', '../../exec/load/avatar_lib.js'];
+        for (var i = 0; i < candidates.length; i++) {
+            var lib = attempt(candidates[i], 'avatar_lib.chat:' + i);
+            if (lib) { try { log('[Chat] avatar_lib loaded from ' + candidates[i]); } catch (_) { } return lib; }
+        }
+        try { log('[Chat] avatar_lib unavailable after attempts: ' + candidates.join(', ')); } catch (_) { }
+        return null;
+    })();
 }
 
 if (typeof extend === 'function') {
@@ -223,7 +249,7 @@ Chat.prototype.updateInputFrame = function () {
 
 // Efficiently append new messages to the chat (call this from IconShell on new message event)
 Chat.prototype.updateChat = function (packet) {
-    dbug('updateChat invoked', 'chat');
+    log('updateChat invoked', 'chat');
     if (packet) this._pendingMessage = packet;
     this._needsRedraw = true;
     if (this.running) this.draw();
@@ -362,6 +388,7 @@ Chat.prototype.refresh = function () {
 
 Chat.prototype.cycle = function () {
     if (!this.running) return;
+    log('Chat.cycle invoked');
     if (this.jsonchat && typeof this.jsonchat.cycle === 'function') {
         this.jsonchat.cycle();
     }
@@ -1100,10 +1127,7 @@ Chat.prototype._renderAvatars = function (groups) {
         }
     }
 
-    var avatarLib = (function () {
-        try { return lazyLoadModule('../exec/load/avatar_lib.js', { cacheKey: 'avatar_lib.exec' }); }
-        catch (e) { return null; }
-    })();
+    var avatarLib = this._avatarLib; // reuse shared instance
     var leftPacked = packAvatars(placements.left, this.leftAvatarFrame.height);
     var rightPacked = packAvatars(placements.right, this.rightAvatarFrame.height);
 

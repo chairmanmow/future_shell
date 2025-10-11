@@ -6,7 +6,7 @@ if (typeof utf8_cp437 === 'undefined') {
 }
 load("future_shell/lib/subprograms/subprogram.js");
 if (typeof registerModuleExports !== 'function') {
-	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 load('future_shell/lib/shell/icon.js');
 load('future_shell/lib/util/gif2ans/img_loader.js')
@@ -337,6 +337,7 @@ var NEWSREADER_UNICODE_PUNCT_MAP = {
 
 
 function NewsReader(opts) {
+    log("!!!  NewsReader ctor called  !!!");
     opts = opts || {};
     Subprogram.call(this, { name: 'newsreader', parentFrame: opts.parentFrame });
 
@@ -377,6 +378,14 @@ function NewsReader(opts) {
     this._allFeeds = [];
     this._categoryOverrides = {};
     this._resetState();
+    this.id = 'newsreader';
+    this.registerColors({
+        LIGHTBAR: { BG: BG_BLUE, FG: WHITE },
+        LIST_ACTIVE: { BG: BG_GREEN, FG: WHITE },
+        LIST_INACTIVE: { BG: BG_BLACK, FG: LIGHTGRAY },
+        HEADER: { BG: BG_MAGENTA, FG: WHITE },
+        STATUS: { BG: BG_BLACK, FG: LIGHTGRAY }
+    });
 }
 extend(NewsReader, Subprogram);
 
@@ -1222,7 +1231,7 @@ NewsReader.prototype._iconNameForCategory = function (category) {
 
 NewsReader.prototype._renderIconLabel = function (frame, text, isSelected) {
     if (!frame) return;
-    var attr = isSelected ? LIST_ACTIVE : LIST_INACTIVE;
+    var attr = isSelected ? this.paletteAttr('LIST_ACTIVE') : this.paletteAttr('LIST_INACTIVE');
     try { frame.clear(attr); frame.home(); } catch (_e) { }
     var width = frame.width || 0;
     if (width <= 0) return;
@@ -1663,7 +1672,7 @@ NewsReader.prototype._drawArticleImages = function () {
             var display = prefix + this._toDisplayText(lineText);
             if (display.length > this.listFrame.width) display = display.substr(0, this.listFrame.width);
             this.listFrame.gotoxy(1, targetRow);
-            this.listFrame.attr = (idx === this.imageSelection) ? LIST_ACTIVE : LIST_INACTIVE;
+            this.listFrame.attr = (idx === this.imageSelection) ? this.paletteAttr('LIST_ACTIVE') : this.paletteAttr('LIST_INACTIVE');
             this.listFrame.putmsg(display);
             previewHotspots.push({ type: 'thumb', index: idx, y: targetRow });
         }
@@ -1767,7 +1776,7 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
     if (buttonY < 1) buttonY = 1;
     if (buttonY + 1 > this.articleHeaderFrame.height) buttonY = Math.max(1, this.articleHeaderFrame.height - 1);
     var baseAttr = LIST_INACTIVE;
-    var focusAttr = LIST_ACTIVE;
+    var focusAttr = this.paletteAttr('LIST_ACTIVE');
     var fgRead = (typeof WHITE === 'number') ? WHITE : null;
     var buttonAttr = this._composeAttrWithFg(baseAttr, fgRead);
     var shadowFg = (typeof DARKGRAY === 'number') ? DARKGRAY : null;
@@ -1972,7 +1981,7 @@ NewsReader.prototype._renderArticleListWithDates = function () {
 
         forceDateLine = false;
 
-        var baseAttr = (idx === this.selectedIndex) ? LIST_ACTIVE : LIST_INACTIVE;
+        var baseAttr = (idx === this.selectedIndex) ? this.paletteAttr('LIST_ACTIVE') : this.paletteAttr('LIST_INACTIVE');
         var prefix = (idx + 1) + '. ';
         var numberText = this._toDisplayText(prefix);
         var titleSource = article && article.title ? article.title : '[untitled]';
@@ -2111,7 +2120,7 @@ NewsReader.prototype._renderList = function (items, formatter) {
         line = this._toDisplayText(line);
         if (line.length > this.listFrame.width) line = line.substr(0, this.listFrame.width);
         this.listFrame.gotoxy(1, row + 1);
-        this.listFrame.attr = (idx === this.selectedIndex) ? LIST_ACTIVE : LIST_INACTIVE;
+        this.listFrame.attr = (idx === this.selectedIndex) ? this.paletteAttr('LIST_ACTIVE') : this.paletteAttr('LIST_INACTIVE');
         this.listFrame.putmsg(line);
         rowHotspots.push({ index: idx, y: row + 1 });
     }
@@ -2527,7 +2536,7 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
     if (grid) pageSize = Math.max(1, grid.cols * grid.visibleRows);
     switch (key) {
         case KEY_UP:
-        case '\x1B[A':
+        case "\u001e":
             if (length === 0) break;
             if (grid) {
                 if (this.selectedIndex >= grid.cols) this.selectedIndex -= grid.cols;
@@ -2543,7 +2552,7 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             }
             break;
         case KEY_DOWN:
-        case '\x1B[B':
+        case '\u000a':
             if (length === 0) break;
             if (grid) {
                 var nextDown = this.selectedIndex + grid.cols;
@@ -2562,6 +2571,7 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             }
             break;
         case KEY_LEFT:
+        case '\u001d':
         case '\x1B[D':
             if (length === 0) break;
             if (grid) {
@@ -2580,6 +2590,7 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             break;
         case KEY_RIGHT:
         case '\x1B[C':
+        case '\u0006':
             if (length === 0) break;
             if (grid) {
                 if (this.selectedIndex < length - 1) {
@@ -2644,8 +2655,7 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             }
             this.draw();
             break;
-        case '\r':
-        case '\n':
+        case KEY_ENTER:
             if (typeof onEnter === 'function') onEnter();
             break;
         case '\x1B':
@@ -2705,6 +2715,7 @@ NewsReader.prototype._handleImageNavigation = function (key) {
     var pageSize = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
     switch (key) {
         case KEY_UP:
+        case "\u001e":
         case '\x1B[A': {
             var prevScrollUp = this.imagePreviewScroll;
             this.imagePreviewScroll = Math.max(0, prevScrollUp - 1);
@@ -2712,6 +2723,7 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             break;
         }
         case KEY_DOWN:
+        case "\u000a":
         case '\x1B[B': {
             var prevScrollDown = this.imagePreviewScroll;
             var maxScrollDown = Math.max(0, this._imagePreviewScrollMax || 0);
@@ -2737,6 +2749,7 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             break;
         }
         case KEY_LEFT:
+        case '\u001d':
         case '\x1B[D':
             if (this.imageSelection > 0) {
                 this.imageSelection--;
@@ -2745,6 +2758,7 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             }
             break;
         case KEY_RIGHT:
+        case '\u0006':
         case '\x1B[C':
             if (this.imageSelection < length - 1) {
                 this.imageSelection++;
@@ -2779,8 +2793,7 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             }
             this.draw();
             break;
-        case '\r':
-        case '\n':
+        case KEY_ENTER:
             this._enterArticleContent();
             break;
         case 'I':
@@ -3034,7 +3047,7 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
     switch (key) {
         case KEY_UP:
         case '\x1B[A':
-        case 'wheel_up':
+        case "\u001e":
             if (this.articleScroll > 0) {
                 this.articleScroll--;
                 this.draw();
@@ -3042,7 +3055,7 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
             break;
         case KEY_DOWN:
         case '\x1B[B':
-        case 'wheel_down':
+        case '\u000a':
             if (this.articleScroll < maxScroll) {
                 this.articleScroll++;
                 this.draw();
@@ -3065,19 +3078,20 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
             this.draw();
             break;
         case KEY_LEFT:
+        case '\u001d':
         case '\x1B[D':
             if (!this._openAdjacentArticle(-1, { skipImagePreview: true })) {
                 this._setStatus('Already at earliest article.');
             }
             break;
         case KEY_RIGHT:
+        case '\u0006':
         case '\x1B[C':
             if (!this._openAdjacentArticle(1, { skipImagePreview: true })) {
                 this._setStatus('Already at latest article.');
             }
             break;
-        case '\r':
-        case '\n':
+        case KEY_ENTER:
             if (this.articleScroll < maxScroll) {
                 this.articleScroll = maxScroll;
                 this.draw();

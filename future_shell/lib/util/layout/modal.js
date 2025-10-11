@@ -5,6 +5,7 @@
 // Extended types supported: 'spinner', 'progress', 'custom'.
 // Hot reload support: ALWAYS redefine Modal when this file is load()'d.
 // Previous guard removed to align with other libs. We close any existing modals to avoid stale prototype issues.
+// Debug switched off by default; can be re-enabled at runtime if needed.
 var ICSH_MODAL_DEBUG = true;
 try { if (typeof log === 'function') log('[MODAL LOAD] redefining Modal v20251008-8'); } catch (_) { }
 // Close lingering old-version modals safely
@@ -92,6 +93,11 @@ function Modal(opts) {
     this._buildStructure();
     if (this.type === 'spinner' || this.type === 'progress') this._initActivityType();
     Modal._register(this);
+    // Notify external shell (if present) for explicit tracking instead of blind global polling
+    try {
+        var sh = (typeof global !== 'undefined' && global.__ICSH_ACTIVE_SHELL__) ? global.__ICSH_ACTIVE_SHELL__ : (typeof globalThis !== 'undefined' ? globalThis.__ICSH_ACTIVE_SHELL__ : null);
+        if (sh && typeof sh._modalRegistered === 'function') sh._modalRegistered(this);
+    } catch (_) { }
     if (opts.autoOpen !== false) this.open();
 }
 
@@ -346,13 +352,13 @@ Modal.prototype._initActivityType = function () {
     if (this.type === 'spinner') {
         var seq = this.options.spinnerFrames || ['|', '/', '-', '\\'];
         var interval = this.options.spinnerInterval || 120;
-        this._spinnerTimer = js.setInterval(function () {
-            self._spinnerIdx = (self._spinnerIdx + 1) % seq.length;
-            if (self._open) {
-                self._renderSpinner(self.height - 4);
-                self._cycleAll();
-            }
-        }, interval);
+        // this._spinnerTimer = js.setInterval(function () {
+        //     self._spinnerIdx = (self._spinnerIdx + 1) % seq.length;
+        //     if (self._open) {
+        //         self._renderSpinner(self.height - 4);
+        //         self._cycleAll();
+        //     }
+        // }, interval);
     }
 };
 
@@ -769,6 +775,10 @@ Modal._unregister = function (modal) {
             break;
         }
     }
+    try {
+        var sh = (typeof global !== 'undefined' && global.__ICSH_ACTIVE_SHELL__) ? global.__ICSH_ACTIVE_SHELL__ : (typeof globalThis !== 'undefined' ? globalThis.__ICSH_ACTIVE_SHELL__ : null);
+        if (sh && typeof sh._modalUnregistered === 'function') sh._modalUnregistered(modal);
+    } catch (_) { }
 };
 
 Modal.getActive = function () {
@@ -777,6 +787,7 @@ Modal.getActive = function () {
 };
 
 Modal.handleGlobalKey = function (key) {
+    log('[MODAL handleGlobalKey] key=' + JSON.stringify(key));
     try { if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG) log('[MODAL dispatch] key=' + JSON.stringify(key)); } catch (_) { }
     var active = Modal.getActive();
     if (!active) return false;

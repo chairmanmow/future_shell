@@ -1,14 +1,61 @@
 if (typeof registerModuleExports !== 'function') {
-	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 
 function Users(opts) {
     opts = opts || {};
     Subprogram.call(this, { name: 'user-list', parentFrame: opts.parentFrame });
+    // Robust avatar library resolution (paths can shift due to shell/module loader changes)
     this._avatarLib = (function () {
-        try { return lazyLoadModule('../exec/load/avatar_lib.js', { cacheKey: 'avatar_lib.exec' }); }
-        catch (e) { try { log("USERS COULDNT LOAD AVATAR LIB: " + e); } catch (_) { } return null; }
+        var tried = [];
+        // Reuse shared instance if message boards or other modules already loaded it
+        try {
+            if (typeof bbs !== 'undefined') {
+                if (!bbs.mods) bbs.mods = {};
+                if (bbs.mods.avatar_lib) {
+                    try { log('Users avatar lib reusing shared instance from bbs.mods.avatar_lib'); } catch (_) { }
+                    return bbs.mods.avatar_lib;
+                }
+            }
+        } catch (_re) { }
+        function _try(path, cacheKey) {
+            tried.push(path);
+            try {
+                var lib = null;
+                if (typeof lazyLoadModule === 'function') lib = lazyLoadModule(path, { cacheKey: cacheKey || path });
+                else {
+                    // Fallback: direct load() expecting it to return module exports object with read()
+                    lib = load(path);
+                }
+                if (lib && (typeof lib.read === 'function' || typeof lib.get === 'function')) return lib;
+                return null;
+            } catch (e) {
+                try { log('Users avatar lib miss at ' + path + ': ' + e); } catch (_) { }
+                return null;
+            }
+        }
+        var baseMods = (typeof system !== 'undefined' && system && system.mods_dir) ? system.mods_dir : '';
+        if (baseMods && baseMods.charAt(baseMods.length - 1) !== '/' && baseMods.charAt(baseMods.length - 1) !== '\\') baseMods += '/';
+        var candidates = [
+            'avatar_lib.js',                           // plain name (exec/load search path like message boards)
+            '../exec/load/avatar_lib.js',                // relative up from mods/future_shell/lib/subprograms
+            baseMods + 'avatar_lib.js',                  // direct in mods root
+            baseMods + 'exec/load/avatar_lib.js',        // mods/exec/load
+            baseMods + 'future_shell/exec/load/avatar_lib.js' // namespaced future_shell exec/load
+        ];
+        for (var i = 0; i < candidates.length; i++) {
+            var lib = _try(candidates[i], 'avatar_lib:' + i);
+            if (lib) {
+                try { log('Users avatar lib loaded from ' + candidates[i]); } catch (_) { }
+                // Cache on bbs.mods for other subprograms to reuse & avoid duplicate loads/class mismatch
+                try { if (typeof bbs !== 'undefined') { if (!bbs.mods) bbs.mods = {}; if (!bbs.mods.avatar_lib) bbs.mods.avatar_lib = lib; } } catch (_cacheE) { }
+                return lib;
+            }
+        }
+        try { log('Users avatar lib unavailable after attempts: ' + tried.join(', ')); } catch (_) { }
+        return null;
     })();
+    this._avatarsEnabled = !!this._avatarLib;
     this.users = [];
     this.sortMode = null;
     this.whichUsers = 'all' // 'all', 'online'
@@ -169,7 +216,7 @@ Users.prototype._drawTile = function (index, user) {
     if (header.length > meta.tileW) header = header.substr(0, meta.tileW);
     try { lf.gotoxy(x, y); lf.putmsg((selected ? '\x01h' : '') + header + '\x01n'); } catch (e) { }
     // Avatar area (lines y+1 .. y+avatarHeight)
-    if (this.showAvatars) {
+    if (this.showAvatars && this._avatarsEnabled) {
         try {
             var avatarLines = this._getAvatar(user) || [];
             if (avatarLines.length) {

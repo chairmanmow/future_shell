@@ -10,7 +10,7 @@
 // [Item.files]\n type=command\n command=exec_xtrn:ANSIVIEW\n label=Files\n icon=folder
 // [Item.settings]\n type=builtin\n builtin=settings\n label=Settings\n icon=settings
 // [Item.exit]\n type=builtin\n builtin=exit\n label=Exit\n icon=exit
-var debug_icsh = true;
+var debug_icsh = false;
 var debug_theme = true;
 function _icsh_log(msg) {
 	try {
@@ -120,18 +120,35 @@ function SubprogramActionHandler(descriptor, options) {
 		if (instance && shouldCreateNew && shouldCreateNew.call(shell, instance, opts)) instance = null;
 		var isNew = false;
 		if (!instance) {
-			instance = new Ctor(opts);
-			isNew = true;
-			if (instanceField) shell[instanceField] = instance;
-			if (afterCreate) afterCreate.call(shell, instance, opts);
-		} else if (onReuse) {
-			onReuse.call(shell, instance, opts);
-		} else if (autoAssign) {
-			for (var key in opts) if (opts.hasOwnProperty(key)) instance[key] = opts[key];
+			try {
+				instance = new Ctor(opts);
+				isNew = true;
+			} catch (eCtor) {
+				_icsh_err('Subprogram constructor failed for ' + (className || 'unknown') + ': ' + eCtor);
+				instance = null;
+			}
+			if (instance) {
+				if (instanceField) shell[instanceField] = instance;
+				try { if (afterCreate) afterCreate.call(shell, instance, opts); } catch (eAC) { _icsh_err('afterCreate error: ' + eAC); }
+			}
+		} else if (instance) {
+			if (onReuse) {
+				try { onReuse.call(shell, instance, opts); } catch (eOR) { _icsh_err('onReuse error: ' + eOR); }
+			} else if (autoAssign) {
+				for (var key in opts) if (opts.hasOwnProperty(key)) instance[key] = opts[key];
+			}
+		}
+		// Validate instance shape (basic): ensure common lifecycle methods present if expected
+		if (instance && typeof instance.enter !== 'function') {
+			_icsh_warn('Instance for ' + (className || 'subprogram') + ' missing enter(); possible partial construction. Discarding.');
+			if (instanceField) delete shell[instanceField];
+			instance = null;
 		}
 
-		if (afterEnsure) afterEnsure.call(shell, instance, opts, isNew);
-		if (typeof shell.queueSubprogramLaunch === 'function' && queueName) shell.queueSubprogramLaunch(queueName, instance);
+		if (instance) {
+			try { if (afterEnsure) afterEnsure.call(shell, instance, opts, isNew); } catch (eAE) { _icsh_err('afterEnsure error: ' + eAE); }
+			if (typeof shell.queueSubprogramLaunch === 'function' && queueName) shell.queueSubprogramLaunch(queueName, instance);
+		}
 	};
 
 	return handler;
@@ -838,6 +855,16 @@ var ICSH_VALS = ICSH_DEFAULTS;
 if (typeof ThemeRegistry !== 'undefined') {
 	ThemeRegistry.registerPalette('icsh', ICSH_DEFAULTS);
 	ICSH_VALS = ThemeRegistry.get('icsh');
+}
+
+var SHARED_THEME_DEFAULTS = {
+	WARNING: { BG: BG_RED, FG: WHITE },
+	INFO: { FG: LIGHTCYAN },
+	SUCCESS: { FG: LIGHTGREEN },
+	MUTED: { FG: LIGHTMAGENTA }
+};
+if (typeof ThemeRegistry !== 'undefined') {
+	ThemeRegistry.registerPalette('shared', SHARED_THEME_DEFAULTS);
 }
 
 // Helper: resolve full attribute (BG|FG) from semantic key

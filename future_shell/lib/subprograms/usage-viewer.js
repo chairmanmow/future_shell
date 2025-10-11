@@ -32,7 +32,17 @@ function UsageViewer(opts) {
     this.registerColors({
         ICON: { BG: BG_BLACK, FG: LIGHTGRAY },
         LIST: { BG: BG_RED, FG: BLACK },
-        GAME_TITLE: { BG: BG_BROWN, FG: LIGHTBLUE }
+        GAME_TITLE: { BG: BG_BROWN, FG: LIGHTBLUE },
+        SORT_DEFAULT: { FG: LIGHTGRAY },
+        SORT_TIME: { FG: LIGHTGREEN },
+        SORT_RECENT: { FG: LIGHTRED },
+        SORT_NAME: { FG: LIGHTCYAN },
+        SORT_UNIQUE: { FG: LIGHTBLUE },
+        LABEL_MUTED: { FG: LIGHTMAGENTA },
+        TEXT_TIME: { FG: LIGHTGREEN },
+        TEXT_RECENT: { FG: LIGHTRED },
+        TEXT_TOP: { FG: LIGHTMAGENTA },
+        TEXT_TOTAL: { FG: LIGHTBLUE }
     });
     var modsDir = system.mods_dir;
     if (modsDir && modsDir.slice(-1) !== '/' && modsDir.slice(-1) !== '\\') modsDir += '/';
@@ -92,6 +102,19 @@ UsageViewer.prototype.enter = function (done) {
     this._ensureVersion();
     this._loadData();
     Subprogram.prototype.enter.call(this, done);
+};
+
+UsageViewer.prototype._ensureSelectionVisible = function () {
+    if (!this.listFrame) return;
+    if (!this._currentVisiblePrograms) return;
+    var visible = this._currentVisiblePrograms();
+    if (!visible || !visible.length) { this.programTop = 0; return; }
+    if (this.programIndex < this.programTop) this.programTop = this.programIndex;
+    var maxVisible = Math.max(1, this.listFrame.height - 2);
+    if (this.programIndex >= this.programTop + maxVisible) this.programTop = this.programIndex - maxVisible + 1;
+    if (this.programTop < 0) this.programTop = 0;
+    var maxTop = Math.max(0, visible.length - maxVisible);
+    if (this.programTop > maxTop) this.programTop = maxTop;
 };
 
 UsageViewer.prototype._ensureVersion = function (frame) {
@@ -256,10 +279,17 @@ UsageViewer.prototype.ensureFrames = function () {
     if (!host) return;
     var width = host.width;
     var height = host.height;
+    // Defensive guard: if host not yet opened or has invalid dimensions, skip this cycle
+    if (typeof width !== 'number' || typeof height !== 'number' || width <= 0 || height <= 0) {
+        try { log('[usage-viewer] ensureFrames skipped (host dims invalid w=' + width + ' h=' + height + ')'); } catch (_) { }
+        return;
+    }
     if (height < 2) height = 2;
     // New layout: list consumes full height minus 1 header row (or 2 rows). We'll use 2-line header.
     var headerHeight = 1;  // doesn't look like we are using a frame for this.
     var listHeight = Math.max(1, height - headerHeight);
+    // Ensure we never create a frame taller than the host, otherwise Synchronet frame.js throws
+    if (listHeight > height) listHeight = height;
     var detailHeight = 0; // deprecated (still keep frame for compatibility)
     var detailY = host.y + height; // off-screen effectively
     if (this.listFrame) {
@@ -273,7 +303,6 @@ UsageViewer.prototype.ensureFrames = function () {
     if (!this.listFrame) {
         var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
         this.listFrame = new Frame(host.x, host.y, width, listHeight, attr, host);
-        log("Created list frame at y=" + host.y + ", height=" + listHeight);
 
         this.listFrame.open();
         this.registerFrame(this.listFrame);
@@ -289,7 +318,6 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.detailFrame) { // stub frame retained for legacy refs; not displayed
         this.detailFrame = new Frame(host.x, detailY, width, Math.max(1, detailHeight), BG_BLACK | LIGHTGRAY, host);
-        log("Created detail frame at y=" + detailY + ", height=" + detailHeight);
         try { this.detailFrame.open(); } catch (eDF) { }
         this.registerFrame(this.detailFrame);
     }
@@ -348,18 +376,18 @@ UsageViewer.prototype.draw = function () {
     }
 
     // Color-coded sort mode
-    var sortColor = '\x01h\x01w'; // default for launches (white/gray)
-    if (this._sortMode === 'time') sortColor = '\x01h\x01g'; // light green
-    else if (this._sortMode === 'recent') sortColor = '\x01h\x01r'; // bright red
-    else if (this._sortMode === 'name') sortColor = '\x01h\x01c'; // light cyan
-    else if (this._sortMode === 'launches') sortColor = '\x01h\x01w'; // white / gray
-    else if (this._sortMode === 'unique') sortColor = '\x01h\x01b'; // light blue
+    var sortColor = this.colorCode('SORT_DEFAULT') || '';
+    if (this._sortMode === 'time') sortColor = this.colorCode('SORT_TIME') || sortColor;
+    else if (this._sortMode === 'recent') sortColor = this.colorCode('SORT_RECENT') || sortColor;
+    else if (this._sortMode === 'name') sortColor = this.colorCode('SORT_NAME') || sortColor;
+    else if (this._sortMode === 'launches') sortColor = this.colorCode('SORT_DEFAULT') || sortColor;
+    else if (this._sortMode === 'unique') sortColor = this.colorCode('SORT_UNIQUE') || sortColor;
     var sortLabel = (this._sortMode === 'unique') ? 'uniquePlayers' : this._sortMode;
 
     var headerParts = [];
     headerParts.push(monthNav);
-    // Force the 'Sort:' label itself to white, then apply color to the mode value
-    headerParts.push('\x01h\x01wSort:\x01n' + sortColor + sortLabel + '\x01n');
+    var sortLabelPrefix = this.colorize('LABEL_MUTED', 'Sort:', { reset: true });
+    headerParts.push(sortLabelPrefix + ' ' + sortColor + sortLabel + this.colorReset());
     var displayLaunches = current.count;
     var displaySeconds = current.seconds;
     if (this._userFilter) {
@@ -439,7 +467,7 @@ UsageViewer.prototype.draw = function () {
         this.programIndex = 0;
         this.programTop = 0;
         // Show a simple message when nothing is available
-        try { lf.gotoxy(1, startRow); lf.putmsg('\x01h\x01c(No accessible icon programs)\x01n'); } catch (_m) { }
+        try { lf.gotoxy(1, startRow); lf.putmsg(this.colorizeShared('WARNING', '(No accessible icon programs)')); } catch (_m) { }
         try { lf.cycle(); } catch (_mc) { }
         return;
     }
@@ -573,6 +601,14 @@ UsageViewer.prototype._formatDuration = function (seconds) {
 
 UsageViewer.prototype.handleKey = function (key) {
     if (!key) return;
+    try {
+        if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG) {
+            var code = (typeof key === 'string' && key.length) ? key.charCodeAt(0) : key;
+            log('[usage-viewer] handleKey start key=' + JSON.stringify(key) + ' code=' + code + ' idx=' + this.programIndex + ' top=' + this.programTop);
+        }
+    } catch (_) { }
+    var visible = (this._currentVisiblePrograms) ? this._currentVisiblePrograms() : [];
+    var maxIndex = Math.max(0, visible.length - 1);
     // Hotspot activation: if key corresponds to a hotspot index (1-9) in _programHotspots
     if (typeof key === 'string' && key.length === 1 && (key >= '1' && key <= '9') && this._programHotspots && this._programHotspots[key] !== undefined) {
         var idx = this._programHotspots[key];
@@ -598,20 +634,41 @@ UsageViewer.prototype.handleKey = function (key) {
             log("Launching from Enter/Return key" + key + String.charCodeAt(0));
             this._launchSelected();
             return;
-        case KEY_LEFT: if (this.index > 0) { this.index--; this.programIndex = 0; this.programTop = 0; this.draw(); } return;
-        case KEY_RIGHT: if (this.index < this.months.length - 1) { this.index++; this.programIndex = 0; this.programTop = 0; this.draw(); } return;
+        case KEY_LEFT:
+            if (this.index > 0) {
+                this.index--; this.programIndex = 0; this.programTop = 0; this.draw();
+            } return;
+        case KEY_RIGHT:
+            if (this.index < this.months.length - 1) {
+                this.index++; this.programIndex = 0; this.programTop = 0; this.draw();
+            } return;
         case KEY_UP:
+        case "\u001e":
+            log("KEY_UP received");
             if (this.programIndex > 0) {
-                this.programIndex--; this.draw();
+                this.programIndex--;
+                this._ensureSelectionVisible();
+                this.draw();
             } return;
         case KEY_DOWN:
-            var progs = (this.months[this.index] && this.months[this.index].programs) ? this.months[this.index].programs : [];
-            if (this.programIndex < progs.length - 1) { this.programIndex++; this.draw(); }
+        case '\u000a':
+            log("KEY_DOWN received");
+            if (this.programIndex < maxIndex) {
+                this.programIndex++;
+                this._ensureSelectionVisible();
+                this.draw();
+            }
             return;
-        case KEY_PGUP: this.programIndex = Math.max(0, this.programIndex - (this.listFrame ? this.listFrame.height - 2 : 5)); this.draw(); return;
+        case KEY_PGUP:
+            this.programIndex = Math.max(0, this.programIndex - (this.listFrame ? Math.max(1, this.listFrame.height - 2) : 5));
+            if (this.programIndex > maxIndex) this.programIndex = maxIndex;
+            this._ensureSelectionVisible();
+            this.draw();
+            return;
         case KEY_PGDN: {
-            var progs2 = (this.months[this.index] && this.months[this.index].programs) ? this.months[this.index].programs : [];
-            this.programIndex = Math.min(progs2.length - 1, this.programIndex + (this.listFrame ? this.listFrame.height - 2 : 5));
+            this.programIndex = Math.min(maxIndex, this.programIndex + (this.listFrame ? Math.max(1, this.listFrame.height - 2) : 5));
+            if (this.programIndex < 0) this.programIndex = 0;
+            this._ensureSelectionVisible();
             this.draw(); return;
         }
         default: return;
@@ -1025,7 +1082,6 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     var width = df.width;
     if (width <= 0 || height <= 0) return;
     var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
-    log("GOT ATTRIBUTE FROM PALETTE: " + JSON.stringify(attr));
     var blockFrame = new Frame(1, baseY + 1, width, height + 1, attr, df);
     blockFrame.transparent = true;
     try { blockFrame.open(); } catch (e) { }
@@ -1074,12 +1130,12 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
         nameStr = '\x01h\x01c' + display.displayName + '\x01n';
         lines.push(rankStr + ' ' + nameStr);
     }
-    lines.push('\x01gTime Played:\x01n  \x01h\x01g' + this._formatDuration(prog.seconds) + '\x01n');
+    lines.push(this.colorize('TEXT_TIME', 'Time Played:', { reset: false }) + '  ' + this.colorize('TEXT_TIME', this._formatDuration(prog.seconds)));
     lines.push('Launches:     ' + prog.count);
-    lines.push('\x01rLast Played:\x01n  \x01h\x01r' + this._formatTimestamp(prog.lastTimestamp) + '\x01n');
-    lines.push('\x01mTop Players:\x01n  \x01h\x01m' + this._getTopPlayersString(prog.id) + '\x01n');
+    lines.push(this.colorize('TEXT_RECENT', 'Last Played:', { reset: false }) + '  ' + this.colorize('TEXT_RECENT', this._formatTimestamp(prog.lastTimestamp)));
+    lines.push(this.colorize('TEXT_TOP', 'Top Players:', { reset: false }) + '  ' + this.colorize('TEXT_TOP', this._getTopPlayersString(prog.id)));
     var uCount = (typeof prog.uniqueUsers === 'number') ? prog.uniqueUsers : 0;
-    lines.push('\x01bTotal players:\x01n  \x01h\x01b' + uCount + '\x01n');
+    lines.push(this.colorize('TEXT_TOTAL', 'Total players:', { reset: false }) + '  ' + this.colorize('TEXT_TOTAL', uCount + ''));
     lines.push('');
     for (var row = 0; row < height && row < lines.length; row++) {
         var line = lines[row] || '';

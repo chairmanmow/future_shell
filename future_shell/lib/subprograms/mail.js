@@ -8,7 +8,7 @@ require('sbbsdefs.js', 'MAIL_SENT', 'MAIL_YOUR', 'LM_REVERSE', 'LM_UNREAD', 'LM_
 require('smbdefs.js', 'NET_FIDO', 'NETMSG_INTRANSIT', 'NETMSG_SENT', 'NETMSG_KILLSENT', 'NETMSG_HOLD', 'NETMSG_CRASH', 'NETMSG_IMMEDIATE', 'NETMSG_DIRECT', 'NETMSG_ARCHIVESENT');
 require('userdefs.js', 'U_NAME');
 require('msgdefs.js', 'MM_REALNAME');
-if (typeof NET_NONE === 'undefined') var NET_NONE = 0;
+
 // Fallback key codes if not defined globally (Synchronet usually defines in sbbsdefs.js)
 if (typeof KEY_PGUP === 'undefined') var KEY_PGUP = 0x4900;
 if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = 0x5100;
@@ -186,7 +186,7 @@ Mail.prototype._scanMessagesAddressedToUser = function () {
 Mail.prototype._renderNetmailList = function (opts) {
 	opts = opts || {};
 	console.clear();
-	console.print('\1n\1h' + (opts.title || 'Fido Netmail') + '\1n\r\n\r\n');
+	console.print('\x01n\x01h' + (opts.title || 'Fido Netmail') + '\x01n\r\n\r\n');
 	if (typeof MsgBase !== 'function') {
 		console.print('Mail base access is unavailable in this runtime.\r\n');
 		console.pause();

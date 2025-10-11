@@ -31,6 +31,11 @@ Icon.prototype.render = function () {
     if (loaded) this._applyIconTransparency();
     this.iconFrame.transparent = true;
     if (typeof this.iconFrame.cycle === 'function') this.iconFrame.cycle();
+    if (this.data && this.data._fileAreaInstance) {
+        try {
+            log('[FileArea#' + this.data._fileAreaInstance + '] Icon.render complete labelAttr=' + (this.labelFrame ? this.labelFrame.attr : 'n/a') + ' absIndex=' + (this.data._cellAbsIndex !== undefined ? this.data._cellAbsIndex : 'n/a'));
+        } catch (_) { }
+    }
 };
 
 Icon.prototype._renderAvatar = function (iconW, iconH) {

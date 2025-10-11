@@ -14,8 +14,29 @@ function Toast(options) {
     this._avatarData = null;
     this.title = options.title || false;
     this._avatarLib = (function () {
-        try { return lazyLoadModule('avatar_lib.js', { cacheKey: 'avatar_lib' }); }
-        catch (e) { return null; }
+        try {
+            if (typeof bbs !== 'undefined') {
+                if (!bbs.mods) bbs.mods = {};
+                if (bbs.mods.avatar_lib) return bbs.mods.avatar_lib;
+            }
+        } catch (_) { }
+        function attempt(path, key) {
+            try {
+                var lib = (typeof lazyLoadModule === 'function') ? lazyLoadModule(path, { cacheKey: key || path }) : load(path);
+                if (lib && (typeof lib.read === 'function' || typeof lib.get === 'function')) {
+                    try { if (typeof bbs !== 'undefined') { if (!bbs.mods) bbs.mods = {}; if (!bbs.mods.avatar_lib) bbs.mods.avatar_lib = lib; } } catch (_) { }
+                    return lib;
+                }
+            } catch (e) { try { log('[Chat] avatar_lib miss ' + path + ': ' + e); } catch (_) { } }
+            return null;
+        }
+        var candidates = ['avatar_lib.js', '../exec/load/avatar_lib.js', '../../exec/load/avatar_lib.js'];
+        for (var i = 0; i < candidates.length; i++) {
+            var lib = attempt(candidates[i], 'avatar_lib.chat:' + i);
+            if (lib) { try { log('[Chat] avatar_lib loaded from ' + candidates[i]); } catch (_) { } return lib; }
+        }
+        try { log('[Chat] avatar_lib unavailable after attempts: ' + candidates.join(', ')); } catch (_) { }
+        return null;
     })();
     if (options.avatar && this._avatarLib) {
         if (options.avatar.netaddr === system.name) {

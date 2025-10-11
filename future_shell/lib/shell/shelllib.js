@@ -70,6 +70,13 @@ IconShell.prototype.init = function () {
     this._inactivityEvent = null;
     this._toastCycleEvent = null;
     this._folderFlushEvent = null;
+    // Explicit modal tracking (replaces blind static dispatch). Stack is LIFO.
+    this._modalStack = [];
+    // Publish active shell instance globally for modal registration without circular import.
+    try {
+        global.__ICSH_ACTIVE_SHELL__ = this;
+        if (typeof globalThis !== 'undefined') globalThis.__ICSH_ACTIVE_SHELL__ = this;
+    } catch (_) { }
     // === End instance state ===
     // Inactivity tracking for background effects
     this._lastActivityTs = Date.now();
@@ -106,6 +113,7 @@ IconShell.prototype.init = function () {
             }
         }); // 60 seconds
         this._resizePollEvent = this.timer.addEvent(3000, true, function () {
+            log("Polling for console resize");
             self._checkConsoleResize();
         });
         this._nodeMsgEvent = this.timer.addEvent(5000, true, function () {
@@ -135,7 +143,7 @@ IconShell.prototype.init = function () {
             self._pollChatBackend();
         });
         this._subprogramCycleEvent = this.timer.addEvent(50, true, function () {
-            self._cycleActiveSubprogram();
+            // self._cycleActiveSubprogram();
         });
         this._inactivityEvent = this.timer.addEvent(1000, true, function () {
             self._handleInactivity(Date.now());
@@ -477,16 +485,57 @@ IconShell.prototype._processKeyQueue = function (keys, nowTs) {
             }
         }
         this._lastKeyTimestamp = nowTs;
-        // Modal interception: if a modal is active, route key there first
-        var modalConsumed = false;
-        try {
-            if (typeof Modal !== 'undefined' && Modal && typeof Modal.handleGlobalKey === 'function') {
-                modalConsumed = Modal.handleGlobalKey(key);
-            }
-        } catch (_mk) { }
-        if (modalConsumed) continue;
+        // Modal interception via explicit shell-managed stack (only if top modal wants capture)
+        var topModal = this.activeModal && this.activeModal();
+        if (topModal && topModal.captureKeys) {
+            if (this._dispatchModalKey(key)) continue;
+        }
         this.processKeyboardInput(key);
     }
+};
+
+// Modal integration hooks (called from modal.js when a modal registers/unregisters)
+IconShell.prototype._modalRegistered = function (modal) {
+    if (!modal) return;
+    this._modalStack.push(modal);
+};
+
+IconShell.prototype._modalUnregistered = function (modal) {
+    if (!modal) return;
+    for (var i = this._modalStack.length - 1; i >= 0; i--) {
+        if (this._modalStack[i] === modal) {
+            this._modalStack.splice(i, 1);
+            break;
+        }
+    }
+};
+
+IconShell.prototype._dispatchModalKey = function (key) {
+    if (!this._modalStack.length) return false;
+    var top = this._modalStack[this._modalStack.length - 1];
+    if (!top || typeof top.handleKey !== 'function') return false;
+    return top.handleKey(key) === true;
+};
+
+IconShell.prototype.hasActiveModal = function () {
+    for (var i = this._modalStack.length - 1; i >= 0; i--) {
+        var m = this._modalStack[i];
+        if (m && m._open) return true;
+    }
+    return false;
+};
+
+IconShell.prototype.activeModal = function () {
+    for (var i = this._modalStack.length - 1; i >= 0; i--) {
+        var m = this._modalStack[i];
+        if (m && m._open) return m;
+    }
+    return null;
+};
+
+IconShell.prototype.setModalCapture = function (modal, capture) {
+    if (!modal) return;
+    try { modal.captureKeys = !!capture; } catch (_) { }
 };
 
 IconShell.prototype._handleInactivity = function (nowTs) {
@@ -524,9 +573,11 @@ IconShell.prototype._flushPendingFolderRedraw = function () {
     }
 };
 IconShell.prototype._checkConsoleResize = function () {
+    if (this._pendingSubLaunch) return;
     var dims = this._getConsoleDimensions();
     var last = this._lastConsoleDimensions;
     if (!last || dims.cols !== last.cols || dims.rows !== last.rows) {
+        log("Console resize detected: " + last.cols + "x" + last.rows + " -> " + dims.cols + "x" + dims.rows);
         this._handleConsoleResize(dims);
     }
 };
