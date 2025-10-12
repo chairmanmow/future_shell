@@ -312,12 +312,15 @@ Chat.prototype.initFrames = function () {
         this.setBackgroundFrame(this.chatOutputFrame || this.parentFrame);
     } else {
         var resized = false;
-        if (typeof this.chatOutputFrame.resize === 'function') {
-            try {
-                this.chatOutputFrame.resize(1, 1, w, outputH);
-                resized = true;
-            } catch (e) { }
-        }
+        this.chatOutputFrame.width = w;
+        this.chatOutputFrame.height = outputH;
+        // Remove frame.resize is not a thing.
+        // if (typeof this.chatOutputFrame.resize === 'function') {
+        //     try {
+        //         this.chatOutputFrame.resize(1, 1, w, outputH);
+        //         resized = true;
+        //     } catch (e) { }
+        // }
         if (!resized && (this.chatOutputFrame.width !== w || this.chatOutputFrame.height !== outputH)) {
             try { this.chatOutputFrame.close(); } catch (e) { }
             this.chatOutputFrame = new Frame(1, 1, w, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);

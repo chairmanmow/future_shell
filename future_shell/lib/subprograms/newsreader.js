@@ -1802,9 +1802,12 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
             if (typeof this.articleLinkButtonFrame.moveTo === 'function') {
                 this.articleLinkButtonFrame.moveTo(buttonX, buttonY);
             }
-            if (typeof this.articleLinkButtonFrame.resize === 'function') {
-                this.articleLinkButtonFrame.resize(buttonWidth, 2);
-            }
+            this.articleLinkButtonFrame.width = buttonWidth;
+            this.articleLinkButtonFrame.height = 2;
+            // remove: frame resize is not a function use width / height setters
+            // if (typeof this.articleLinkButtonFrame.resize === 'function') {
+            //     this.articleLinkButtonFrame.resize(buttonWidth, 2);
+            // }
             if (typeof this.articleLinkButtonFrame.clear === 'function') {
                 this.articleLinkButtonFrame.clear(buttonAttr);
             }

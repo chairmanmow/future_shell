@@ -64,6 +64,9 @@ function Modal(opts) {
     this.titleAttr = (typeof opts.titleAttr === 'number') ? opts.titleAttr : ((WHITE & 0x0F) | (this.attr & 0x70));
     this.buttonAttr = (typeof opts.buttonAttr === 'number') ? opts.buttonAttr : this.attr;
     this.buttonFocusAttr = (typeof opts.buttonFocusAttr === 'number') ? opts.buttonFocusAttr : (((WHITE & 0x0F) | (BG_BLACK & 0x70)));
+    this.buttonDisabledAttr = (typeof opts.buttonDisabledAttr === 'number') ? opts.buttonDisabledAttr : this.buttonAttr;
+    this.buttonMaskAttr = (typeof opts.buttonMaskAttr === 'number') ? opts.buttonMaskAttr : null;
+    this.buttonShadowAttr = (typeof opts.buttonShadowAttr === 'number') ? opts.buttonShadowAttr : null;
     this.parentFrame = opts.parentFrame || null;
     this._ownsParent = false;
     this._buttons = [];
@@ -416,42 +419,40 @@ Modal.prototype._renderPromptInput = function (y) {
 Modal.prototype._buildButtons = function () {
     this._destroyButtons();
     if (!this._buttonDefs.length) return;
-    var gap = 2;
     // Desired layout: dock buttons to bottom-right with 1 row padding above bottom border
     // Button height is 2; bottom border is last row; place top row of buttons at height-2
     var y = this.height - 2; // second-to-last row
     if (y < 2) y = 2;
-    var totalWidth = 0;
-    var widths = [];
-    for (var i = 0; i < this._buttonDefs.length; i++) {
-        var b = this._buttonDefs[i];
-        var w = Math.max(6, b.label.length + 4);
-        widths.push(w);
-        totalWidth += w;
-    }
-    totalWidth += gap * (this._buttonDefs.length - 1);
-    // Right alignment with 2 column padding (border at width). Border inside frame so keep >=2 and <= width-1
-    var rightPad = 2; // space before right border
-    var startX = this.width - rightPad - totalWidth + 1; // +1 because frame coords start at 1
-    if (startX < 2) startX = 2; // fallback to left if not enough space
+    var buttonPalette = this._resolveButtonPalette();
     for (var j = 0; j < this._buttonDefs.length; j++) {
         var def = this._buttonDefs[j];
+        var baseAttr = (typeof def.attr === 'number') ? def.attr : buttonPalette.attr;
+        var focusAttr = (typeof def.focusAttr === 'number') ? def.focusAttr : buttonPalette.focusAttr;
+        var disabledAttr = (typeof def.disabledAttr === 'number') ? def.disabledAttr : buttonPalette.disabledAttr;
+        var maskAttr = (typeof this.buttonMaskAttr === 'number') ? this.buttonMaskAttr : baseAttr;
+        var backgroundColors = this._deriveButtonColors(maskAttr, baseAttr);
+        var shadowAttr = (typeof this.buttonShadowAttr === 'number') ? this.buttonShadowAttr : null;
+        var shadowColors = this._deriveButtonShadow(shadowAttr);
+        var width = Math.max(6, (def.label || '').length + 4);
         var btn = new Button({
             parentFrame: this.frame,
-            x: startX,
+            x: 2,
             y: y,
-            width: widths[j],
+            width: width,
             label: def.label,
-            attr: def.attr,
-            focusAttr: def.focusAttr,
-            disabledAttr: def.attr,
+            attr: baseAttr,
+            focusAttr: focusAttr,
+            disabledAttr: disabledAttr,
+            backgroundColors: backgroundColors,
+            shadowColors: shadowColors,
             enabled: !def.disabled,
             focused: false,
             onClick: this._makeButtonHandler(def)
         });
+        btn._layoutWidth = width;
         this._buttons.push(btn);
-        startX += widths[j] + gap;
     }
+    this._layoutButtons();
     this._focusIndex = this._resolveInitialFocus();
     this._applyButtonFocus();
     this._registerButtonHotspots();
@@ -472,12 +473,80 @@ Modal.prototype._registerButtonHotspots = function () {
         if (!btn || !btn.frame) continue;
         var hotKey = this._buttonDefs[i] && this._buttonDefs[i].hotKey ? this._buttonDefs[i].hotKey : null;
         var cmd = hotKey || String.fromCharCode(1 + i); // fallback
-        var r = absRect(btn.frame);
-        // Buttons are visually 2 rows tall; register both rows.
-        try { console.add_hotspot(cmd, true, r.x, r.x + r.w - 1, r.y); } catch (_) { }
-        try { console.add_hotspot(cmd, true, r.x, r.x + r.w - 1, r.y + 1); } catch (_) { }
+        var stored = btn._absHotspot;
+        var r = stored ? { x: stored.x, y: stored.y, w: stored.w, h: stored.h } : absRect(btn.frame);
+        var startY = Math.max(1, r.y - 1);
+        var secondY = startY + 1;
+        try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, startY); } catch (_) { }
+        try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, secondY); } catch (_) { }
         if (!this._hotspotMap) this._hotspotMap = {}; // correct map init
         this._hotspotMap[cmd] = i;
+    }
+};
+
+Modal.prototype._resolveButtonPalette = function () {
+    var baseAttr = (typeof this.buttonAttr === 'number') ? this.buttonAttr : this.attr;
+    var focusAttr = (typeof this.buttonFocusAttr === 'number') ? this.buttonFocusAttr : baseAttr;
+    var disabledAttr = (typeof this.buttonDisabledAttr === 'number') ? this.buttonDisabledAttr : baseAttr;
+    return {
+        attr: baseAttr,
+        focusAttr: focusAttr,
+        disabledAttr: disabledAttr
+    };
+};
+
+Modal.prototype._deriveButtonColors = function (attr, fallbackAttr) {
+    var base = (typeof attr === 'number') ? attr : fallbackAttr;
+    if (typeof base !== 'number') return null;
+    return [base, base];
+};
+
+Modal.prototype._deriveButtonShadow = function (attr) {
+    var base;
+    if (typeof attr === 'number') base = attr;
+    else {
+        base = 0;
+        if (typeof BG_BLACK === 'number') base |= BG_BLACK;
+        if (typeof BLACK === 'number') base |= BLACK;
+    }
+    return [base, base];
+};
+
+Modal.prototype._layoutButtons = function () {
+    if (!this._buttons || !this._buttons.length) return;
+    if (!this.frame) return;
+    var gap = 2;
+    var rightPad = 2;
+    var yLocal = this.frame.height - 2;
+    if (yLocal < 2) yLocal = 2;
+    var totalWidth = 0;
+    for (var i = 0; i < this._buttons.length; i++) {
+        var frame = this._buttons[i] && this._buttons[i].frame;
+        if (frame && frame.width > 0) totalWidth += frame.width;
+        else totalWidth += Math.max(6, (this._buttonDefs[i].label || '').length + 4);
+    }
+    totalWidth += gap * (this._buttons.length - 1);
+    var startLocalX = this.frame.width - rightPad - totalWidth + 1;
+    if (startLocalX < 2) startLocalX = 2;
+    var cursor = startLocalX;
+    for (var j = 0; j < this._buttons.length; j++) {
+        var btn = this._buttons[j];
+        if (!btn || !btn.frame) continue;
+        var btnFrame = btn.frame;
+        var width = btn._layoutWidth || btnFrame.width || Math.max(6, (this._buttonDefs[j].label || '').length + 4);
+        var absX = this.frame.x + cursor - 1;
+        var absY = this.frame.y + yLocal - 1;
+        if (typeof btnFrame.moveTo === 'function') {
+            try { btnFrame.moveTo(absX, absY); } catch (_) { }
+        } else {
+            btnFrame.x = cursor;
+            btnFrame.y = yLocal;
+        }
+        btn._absHotspot = { x: absX, y: absY, w: width, h: btnFrame.height || 2 };
+        if (typeof btnFrame.top === 'function') {
+            try { btnFrame.top(); } catch (_) { }
+        }
+        cursor += width + gap;
     }
 };
 

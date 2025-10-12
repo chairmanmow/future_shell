@@ -88,6 +88,11 @@ function Users(opts) {
         TEXT_HOTKEY: { FG: YELLOW },
         TEXT_NORMAL: { FG: WHITE },
         TEXT_BOLD: { FG: LIGHTCYAN },
+        MODAL_BUTTON: { BG: BG_MAGENTA, FG: WHITE },
+        MODAL_BUTTON_FOCUS: { BG: BG_MAGENTA, FG: WHITE },
+        MODAL_BUTTON_DISABLED: { BG: BG_BLUE, FG: LIGHTGRAY },
+        MODAL_BUTTON_MASK: { BG: BG_BLUE, FG: BLUE },
+        MODAL_BUTTON_SHADOW: { BG: BG_BLACK, FG: BLACK },
     });
     // Planned UI additions:
     // - Grid tile layout (reusing logic style from WhoOnline but simplified for both all + online modes)
@@ -708,18 +713,33 @@ Users.prototype._openModal = function (user) {
     var FIXED_HEIGHT = 16; // matches earlier multi-frame vertical footprint
     // Build minimal placeholder string (runtime may not support String.repeat)
     var placeholder = (function (n) { var s = ''; while (n-- > 0) s += ' '; return s; })(10);
+    var modalParent = this.parentFrame;
+    if (modalParent && modalParent.parent) {
+        while (modalParent.parent) modalParent = modalParent.parent;
+    }
+    if (!modalParent && this.shell && this.shell.root) modalParent = this.shell.root;
+    var modalButtonAttr = this.paletteAttr('MODAL_BUTTON', ((typeof BG_MAGENTA !== 'undefined' ? BG_MAGENTA : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7)));
+    var modalButtonFocusAttr = this.paletteAttr('MODAL_BUTTON_FOCUS', modalButtonAttr);
+    var modalButtonDisabledAttr = this.paletteAttr('MODAL_BUTTON_DISABLED', modalButtonAttr);
+    var modalButtonMaskAttr = this.paletteAttr('MODAL_BUTTON_MASK', ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof BLUE !== 'undefined' ? BLUE : 1)));
+    var modalButtonShadowAttr = this.paletteAttr('MODAL_BUTTON_SHADOW', ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof BLACK !== 'undefined' ? BLACK : 0)));
     this.modal = new Modal({
         type: 'custom',
         title: 'User Detail',
         message: placeholder, // minimal placeholder; we fully custom render
-        parentFrame: this.parentFrame,
+        parentFrame: modalParent || this.parentFrame,
         overlay: false,
         width: FIXED_WIDTH,
         height: FIXED_HEIGHT,
         attr: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7),
         contentAttr: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7),
-        buttonAttr: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7),
+        buttonAttr: modalButtonAttr,
+        buttonFocusAttr: modalButtonFocusAttr,
+        buttonDisabledAttr: modalButtonDisabledAttr,
+        buttonMaskAttr: modalButtonMaskAttr,
+        buttonShadowAttr: modalButtonShadowAttr,
         buttons: [{ label: 'Close', value: true, default: true }],
+        captureKeys: true,
         render: function (frame, modal) {
             // Clear content area (leave border handled by Modal)
             try { frame.clear(); } catch (_) { }
