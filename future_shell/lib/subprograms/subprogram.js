@@ -28,15 +28,15 @@ FG_CTRL_MAP[YELLOW & 0x0F] = '\x01h\x01y';
 FG_CTRL_MAP[WHITE & 0x0F] = '\x01h\x01w';
 
 function _colorCtrlFromEntry(entry) {
-	if (entry === null || entry === undefined) return '';
-	var fg = null;
-	if (typeof entry === 'number') fg = entry & 0x0F;
-	else if (typeof entry === 'object') {
-		if (typeof entry.FG === 'number') fg = entry.FG & 0x0F;
-		else if (typeof entry.COLOR === 'number') fg = entry.COLOR & 0x0F;
-	}
-	if (fg === null) return '';
-	return FG_CTRL_MAP.hasOwnProperty(fg) ? FG_CTRL_MAP[fg] : '';
+    if (entry === null || entry === undefined) return '';
+    var fg = null;
+    if (typeof entry === 'number') fg = entry & 0x0F;
+    else if (typeof entry === 'object') {
+        if (typeof entry.FG === 'number') fg = entry.FG & 0x0F;
+        else if (typeof entry.COLOR === 'number') fg = entry.COLOR & 0x0F;
+    }
+    if (fg === null) return '';
+    return FG_CTRL_MAP.hasOwnProperty(fg) ? FG_CTRL_MAP[fg] : '';
 }
 
 // Provide sensible defaults when sbbsdefs.js hasn't populated key constants yet.
@@ -62,107 +62,108 @@ function Subprogram(opts) {
     this.running = false;
     this._done = null;
     // Optional reference to the parent shell (IconShell) so subprograms can access shared services
-    this.shell = opts.shell; 
+    this.shell = opts.shell;
     this._myFrames = [];
     this.timer = opts.timer || (this.shell && this.shell.timer) || null;
     this.blockScreenSaver = false;
     this.id = opts.id || this.name || 'subprogram';
     this.themeNamespace = opts.themeNamespace || this.id;
+    this._framesInitialized = false;
 }
 
 Subprogram.registerColors = function (namespace, defaults) {
-	if (!namespace) {
-		throw new Error('Subprogram.registerColors requires a namespace');
-	}
-	var base = defaults || {};
-	if (typeof ThemeRegistry === 'undefined') return base;
-	ThemeRegistry.registerPalette(namespace, base);
-	return ThemeRegistry.get(namespace) || base;
+    if (!namespace) {
+        throw new Error('Subprogram.registerColors requires a namespace');
+    }
+    var base = defaults || {};
+    if (typeof ThemeRegistry === 'undefined') return base;
+    ThemeRegistry.registerPalette(namespace, base);
+    return ThemeRegistry.get(namespace) || base;
 };
 
 Subprogram.getColors = function (namespace) {
     if (typeof ThemeRegistry === 'undefined') return {};
-	if (!namespace) return {};
-	return ThemeRegistry.get(namespace) || {};
+    if (!namespace) return {};
+    return ThemeRegistry.get(namespace) || {};
 };
 
 Subprogram.prototype.resolveColor = function (namespace, key, fallback) {
-	if (arguments.length === 1) {
-		key = namespace;
-		namespace = null;
-		fallback = undefined;
-	} else if (arguments.length === 2) {
-		fallback = key;
-		key = namespace;
-		namespace = null;
-	}
-	var ns = namespace || this.themeNamespace || this.id;
-	if (!ns || typeof ThemeRegistry === 'undefined') return fallback;
-	return ThemeRegistry.get(ns, key, fallback);
+    if (arguments.length === 1) {
+        key = namespace;
+        namespace = null;
+        fallback = undefined;
+    } else if (arguments.length === 2) {
+        fallback = key;
+        key = namespace;
+        namespace = null;
+    }
+    var ns = namespace || this.themeNamespace || this.id;
+    if (!ns || typeof ThemeRegistry === 'undefined') return fallback;
+    return ThemeRegistry.get(ns, key, fallback);
 };
 
 Subprogram.prototype.colorPalette = function (namespace) {
-	var ns = namespace;
-	if (arguments.length === 0 || namespace === null) ns = this.themeNamespace || this.id;
-	if (!ns || typeof ThemeRegistry === 'undefined') return {};
-	return ThemeRegistry.get(ns) || {};
+    var ns = namespace;
+    if (arguments.length === 0 || namespace === null) ns = this.themeNamespace || this.id;
+    if (!ns || typeof ThemeRegistry === 'undefined') return {};
+    return ThemeRegistry.get(ns) || {};
 };
 
 Subprogram.prototype.paletteAttr = function (namespace, key, fallback) {
-	if (arguments.length === 1) {
-		key = namespace;
-		namespace = null;
-		fallback = undefined;
-	} else if (arguments.length === 2) {
-		fallback = key;
-		key = namespace;
-		namespace = null;
-	}
-	var entry = this.resolveColor(namespace, key, null);
-	if (!entry) return (typeof fallback === 'number') ? fallback : (fallback || 0);
-	if (typeof entry === 'number') return entry;
-	var bg = entry.BG || 0;
-	var fg = entry.FG || entry.COLOR || 0;
-	return bg | fg;
+    if (arguments.length === 1) {
+        key = namespace;
+        namespace = null;
+        fallback = undefined;
+    } else if (arguments.length === 2) {
+        fallback = key;
+        key = namespace;
+        namespace = null;
+    }
+    var entry = this.resolveColor(namespace, key, null);
+    if (!entry) return (typeof fallback === 'number') ? fallback : (fallback || 0);
+    if (typeof entry === 'number') return entry;
+    var bg = entry.BG || 0;
+    var fg = entry.FG || entry.COLOR || 0;
+    return bg | fg;
 };
 
 Subprogram.prototype.colorReset = function () {
-	return '\x01n';
+    return '\x01n';
 };
 
 Subprogram.prototype.colorCode = function (key) {
-	return _colorCtrlFromEntry(this.resolveColor(key));
+    return _colorCtrlFromEntry(this.resolveColor(key));
 };
 
 Subprogram.prototype.colorCodeNamespace = function (namespace, key) {
-	return _colorCtrlFromEntry(this.resolveColor(namespace, key, null));
+    return _colorCtrlFromEntry(this.resolveColor(namespace, key, null));
 };
 
 Subprogram.prototype.colorCodeShared = function (key) {
-	return _colorCtrlFromEntry(this.resolveColor('shared', key, null));
+    return _colorCtrlFromEntry(this.resolveColor('shared', key, null));
 };
 
 Subprogram.prototype.colorize = function (key, text, opts) {
-	return this.colorizeNamespace(this.themeNamespace, key, text, opts);
+    return this.colorizeNamespace(this.themeNamespace, key, text, opts);
 };
 
 Subprogram.prototype.colorizeNamespace = function (namespace, key, text, opts) {
-	var prefix = this.colorCodeNamespace(namespace, key) || '';
-	if (!prefix) return text;
-	var reset = true;
-	if (opts && opts.reset === false) reset = false;
-	return prefix + text + (reset ? this.colorReset() : '');
+    var prefix = this.colorCodeNamespace(namespace, key) || '';
+    if (!prefix) return text;
+    var reset = true;
+    if (opts && opts.reset === false) reset = false;
+    return prefix + text + (reset ? this.colorReset() : '');
 };
 
 Subprogram.prototype.colorizeShared = function (key, text, opts) {
-	return this.colorizeNamespace('shared', key, text, opts);
+    return this.colorizeNamespace('shared', key, text, opts);
 };
 
 Subprogram.prototype.registerColors = function (defaults, namespace) {
-	var ns = namespace || this.themeNamespace || this.id;
-	if (!ns) throw new Error('registerColors requires a namespace');
-	this.themeNamespace = ns;
-	return Subprogram.registerColors(ns, defaults || {});
+    var ns = namespace || this.themeNamespace || this.id;
+    if (!ns) throw new Error('registerColors requires a namespace');
+    this.themeNamespace = ns;
+    return Subprogram.registerColors(ns, defaults || {});
 };
 
 Subprogram.prototype.enter = function (done) {
@@ -329,6 +330,17 @@ Subprogram.prototype._ensureHostFrame = function () {
     if (this.hostFrame && this.hostFrame.is_open) return this.hostFrame;
     if (!this.parentFrame) return null;
     var pf = this.parentFrame;
+    try {
+        log((this.name || 'subprogram') + ' _ensureHostFrame parent', JSON.stringify({
+            open: !!pf.is_open,
+            x: pf.x,
+            y: pf.y,
+            width: pf.width,
+            height: pf.height,
+            consoleCols: (typeof console !== 'undefined' && console) ? console.screen_columns : null,
+            consoleRows: (typeof console !== 'undefined' && console) ? console.screen_rows : null
+        }));
+    } catch (_logErr) { }
     var width = Math.max(1, pf.width || console.screen_columns || 80);
     var height = Math.max(1, pf.height || console.screen_rows || 24);
     var attr;
@@ -339,12 +351,21 @@ Subprogram.prototype._ensureHostFrame = function () {
     try {
         this.hostFrame = new Frame(1, 1, width, height, attr, pf);
         this.hostFrame.open();
+        this.hostFrame.cycle();
         this.setBackgroundFrame(this.hostFrame);
         if (this._myFrames.indexOf(this.hostFrame) === -1) this._myFrames.push(this.hostFrame);
+        try {
+            log((this.name || 'subprogram') + ' _ensureHostFrame created', JSON.stringify({
+                width: this.hostFrame.width,
+                height: this.hostFrame.height,
+                attr: this.hostFrame.attr
+            }));
+        } catch (_logCreatedErr) { }
     } catch (e) {
         log('Subprogram ' + (this.name || 'unknown') + ' failed to create hostFrame: ' + e);
         this.hostFrame = null;
     }
+    log("CREATED HOST FRAME MESSAGE BOARD");
     return this.hostFrame;
 };
 

@@ -1,8 +1,19 @@
 load('sbbsdefs.js');
 
 (function (global) {
-    function FrameSet(board) {
+    function FrameSet(board, paletteAttr) {
         this.board = board;
+        if (typeof paletteAttr === 'function') {
+            this.paletteAttr = paletteAttr.bind(board);
+        } else if (board && typeof board.paletteAttr === 'function') {
+            this.paletteAttr = board.paletteAttr.bind(board);
+        } else {
+            this.paletteAttr = function (_, __, fallback) {
+                if (typeof fallback === 'number') return fallback;
+                if (typeof __ === 'number') return __;
+                return 0;
+            };
+        }
     }
 
     FrameSet.prototype.ensure = function () {
@@ -11,28 +22,95 @@ load('sbbsdefs.js');
             return board.outputFrame;
         }
         var pf = board.hostFrame || board.rootFrame || null;
-        var x = pf ? pf.x : 1;
-        var y = pf ? pf.y : 1;
-        var w = pf ? pf.width : console.screen_columns;
-        var h = pf ? pf.height : console.screen_rows;
+        if (pf && typeof pf.is_open === 'function' && !pf.is_open()) return null;
+        if (!pf || !pf.is_open) {
+            log('FrameSet.ensure missing parent frame', {
+                hasHost: !!board.hostFrame,
+                hasRoot: !!board.rootFrame,
+                view: board.view,
+                epoch: board._epoch
+            });
+        }
+        var x = (pf && typeof pf.x === 'number') ? pf.x : 1;
+        var y = (pf && typeof pf.y === 'number') ? pf.y : 1;
+        var w = (pf && typeof pf.width === 'number' && pf.width > 0)
+            ? pf.width
+            : ((typeof console !== 'undefined' && console && typeof console.screen_columns === 'number' && console.screen_columns > 0) ? console.screen_columns : 80);
+        var h = (pf && typeof pf.height === 'number' && pf.height > 0)
+            ? pf.height
+            : ((typeof console !== 'undefined' && console && typeof console.screen_rows === 'number' && console.screen_rows > 0) ? console.screen_rows : 24);
         if (board.outputFrame && !board.outputFrame.is_open) {
             try { board.outputFrame.close(); } catch (_oe) { }
             board.outputFrame = null;
+        }
+        if (board.titleFrame && !board.titleFrame.is_open) {
+            try { board.titleFrame.close(); } catch (_oe) { }
+            board.titleFrame = null;
         }
         if (board.inputFrame && !board.inputFrame.is_open) {
             try { board.inputFrame.close(); } catch (_ie) { }
             board.inputFrame = null;
         }
+        var titleAttr = this.paletteAttr('TITLE_FRAME');
+        if (!titleAttr && typeof BG_BROWN === 'number' && typeof WHITE === 'number') titleAttr = BG_BROWN | WHITE;
+        var titleWasMissing = !board.titleFrame;
+        if (titleWasMissing) {
+            board.titleFrame = new Frame(x, y, w, 1, titleAttr, pf);
+            try { board.titleFrame.open(); } catch (_e1a) { }
+        }
+        var prevTitleAttr = board.titleFrame ? board.titleFrame.attr : null;
+        if (board.titleFrame) board.titleFrame.attr = titleAttr;
+        if (titleWasMissing || prevTitleAttr !== titleAttr) {
+            try { board.titleFrame.clear(titleAttr); } catch (_e1b) { }
+        }
+
+        var outputAttr = this.paletteAttr('OUTPUT_FRAME');
+        if (!outputAttr && typeof BG_BLACK === 'number' && typeof LIGHTGRAY === 'number') outputAttr = BG_BLACK | LIGHTGRAY;
+        var titleHeight = 1;
+        var inputHeight = 1;
+        var outputHeight = Math.max(1, h - titleHeight - inputHeight);
+        var outputY = y + titleHeight;
+        if (board.outputFrame && (board.outputFrame.height !== outputHeight || board.outputFrame.y !== outputY || board.outputFrame.x !== x || board.outputFrame.width !== w)) {
+            try { board.outputFrame.close(); } catch (_resizeClose) { }
+            board.outputFrame = null;
+        }
+        var outputWasMissing = !board.outputFrame;
         if (!board.outputFrame) {
-            board.outputFrame = new Frame(x, y, w, h - 1, BG_BLACK | LIGHTGRAY, pf);
-            try { board.outputFrame.open(); board.outputFrame.clear(); } catch (_e1) { }
+            board.outputFrame = new Frame(x, outputY, w, outputHeight, outputAttr, pf);
+            try { board.outputFrame.open(); } catch (_e2a) { }
             if (typeof board.setBackgroundFrame === 'function') {
-                try { board.setBackgroundFrame(board.outputFrame); } catch (_e2) { }
+                try { board.setBackgroundFrame(board.outputFrame); } catch (_e2b) { }
             }
         }
+        var prevOutputAttr = board.outputFrame ? board.outputFrame.attr : null;
+        if (board.outputFrame) board.outputFrame.attr = outputAttr;
+        if (outputWasMissing || prevOutputAttr !== outputAttr) {
+            try { board.outputFrame.clear(outputAttr); } catch (_e2c) { }
+        }
+
+        var inputAttr = this.paletteAttr('INPUT_FRAME');
+        if (!inputAttr && typeof BG_BROWN === 'number' && typeof WHITE === 'number') inputAttr = BG_BROWN | WHITE;
+        var baseInputY = y + h - inputHeight;
+        var reserveRowForRead = (board && board.view === 'read');
+        if (reserveRowForRead && baseInputY - 1 >= outputY) {
+            baseInputY = baseInputY - 1;
+        }
+        var inputY = Math.max(baseInputY, outputY);
+        var maxInputY = y + h - inputHeight;
+        if (inputY > maxInputY) inputY = maxInputY;
+        if (board.inputFrame && (board.inputFrame.height !== 1 || board.inputFrame.y !== inputY || board.inputFrame.x !== x || board.inputFrame.width !== w)) {
+            try { board.inputFrame.close(); } catch (_inputClose) { }
+            board.inputFrame = null;
+        }
+        var inputWasMissing = !board.inputFrame;
         if (!board.inputFrame) {
-            board.inputFrame = new Frame(x, y + h - 1, w, 1, BG_BLUE | WHITE, pf);
-            try { board.inputFrame.open(); board.inputFrame.clear(BG_BLUE | WHITE); } catch (_e3) { }
+            board.inputFrame = new Frame(x, inputY, w, 1, inputAttr, pf);
+            try { board.inputFrame.open(); } catch (_e3a) { }
+        }
+        var prevInputAttr = board.inputFrame ? board.inputFrame.attr : null;
+        if (board.inputFrame) board.inputFrame.attr = inputAttr;
+        if (inputWasMissing || prevInputAttr !== inputAttr) {
+            try { board.inputFrame.clear(inputAttr); } catch (_e3b) { }
         }
         if (typeof board._writeStatus === 'function') {
             try { board._writeStatus('Message Boards: ' + (board.view || '')); } catch (_e4) { }

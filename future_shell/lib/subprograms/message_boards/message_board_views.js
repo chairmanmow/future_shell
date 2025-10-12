@@ -630,13 +630,26 @@ if (typeof lazyLoadModule !== 'function') {
             board._avatarLib = bbs.mods.avatar_lib || null;
             var avh = (board._avatarLib && board._avatarLib.defs && board._avatarLib.defs.height) || 6;
             var headerH = Math.min(avh, f ? f.height - 1 : avh);
-            var headerFrame = f ? new Frame(f.x, f.y, f.width, headerH, BG_BLUE | WHITE, f.parent) : null;
+            var headerAttr = (board && typeof board.paletteAttr === 'function')
+                ? board.paletteAttr('READ_HEADER', BG_BLUE | WHITE)
+                : (BG_BLUE | WHITE);
+            var headerFrame = f ? new Frame(f.x, f.y, f.width, headerH, headerAttr, f.parent) : null;
             var bodyY = headerFrame ? headerFrame.y + headerFrame.height : (f ? f.y : 1);
-            var bodyH = f ? Math.max(1, f.y + f.height - bodyY) : 1;
-            var bodyFrame = f ? new Frame(f.x, bodyY, f.width, bodyH, f.attr || (BG_BLACK | LIGHTGRAY), f.parent) : null;
+            var bodyAvailable = f ? Math.max(1, f.y + f.height - bodyY) : 1;
+            var reserveInputRow = (board && board.inputFrame);
+            var bodyH = reserveInputRow && bodyAvailable > 1 ? bodyAvailable - 1 : bodyAvailable;
+            var bodyAttr = (board && typeof board.paletteAttr === 'function')
+                ? board.paletteAttr('OUTPUT_FRAME', (f && typeof f.attr === 'number') ? f.attr : (BG_BLACK | LIGHTGRAY))
+                : ((f && typeof f.attr === 'number') ? f.attr : (BG_BLACK | LIGHTGRAY));
+            var bodyFrame = f ? new Frame(f.x, bodyY, f.width, bodyH, bodyAttr, f.parent) : null;
             try { if (headerFrame) headerFrame.open(); if (bodyFrame) bodyFrame.open(); } catch (_e2) { }
             board._readHeaderFrame = headerFrame;
             board._readBodyFrame = bodyFrame;
+            if (board.inputFrame && bodyFrame) {
+                var inputY = bodyFrame.y + bodyFrame.height;
+                try { board.inputFrame.move(board.inputFrame.x, inputY); } catch (_readMoveErr) { }
+                try { board.inputFrame.clear(board.inputFrame.attr); } catch (_readClrErr) { }
+            }
             if (board._ensureReadBodyCanvas) board._ensureReadBodyCanvas();
             if (board._paintReadHeader) board._paintReadHeader(msg);
             var code = board.cursub || (msg.sub || null) || board._lastActiveSubCode || bbs.cursub_code;

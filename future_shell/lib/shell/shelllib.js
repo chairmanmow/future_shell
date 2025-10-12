@@ -113,7 +113,6 @@ IconShell.prototype.init = function () {
             }
         }); // 60 seconds
         this._resizePollEvent = this.timer.addEvent(3000, true, function () {
-            log("Polling for console resize");
             self._checkConsoleResize();
         });
         this._nodeMsgEvent = this.timer.addEvent(5000, true, function () {
@@ -143,7 +142,7 @@ IconShell.prototype.init = function () {
             self._pollChatBackend();
         });
         this._subprogramCycleEvent = this.timer.addEvent(50, true, function () {
-            // self._cycleActiveSubprogram();
+            self._cycleActiveSubprogram();
         });
         this._inactivityEvent = this.timer.addEvent(1000, true, function () {
             self._handleInactivity(Date.now());
@@ -577,7 +576,6 @@ IconShell.prototype._checkConsoleResize = function () {
     var dims = this._getConsoleDimensions();
     var last = this._lastConsoleDimensions;
     if (!last || dims.cols !== last.cols || dims.rows !== last.rows) {
-        log("Console resize detected: " + last.cols + "x" + last.rows + " -> " + dims.cols + "x" + dims.rows);
         this._handleConsoleResize(dims);
     }
 };

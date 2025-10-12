@@ -4,7 +4,7 @@ load("future_shell/lib/util/debug.js");
 load('future_shell/lib/subprograms/message_boards/message_board_ui.js');
 load('future_shell/lib/subprograms/message_boards/message_board_views.js');
 if (typeof lazyLoadModule !== 'function' || typeof registerModuleExports !== 'function') {
-	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
+    try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';
@@ -165,6 +165,9 @@ function _renderAnsiIntoFrame(frame, contents, widthOverride, heightOverride, op
     var lines = contents.split(/\r\n|\n|\r/);
     var opts = options || {};
     var board = opts.board || null;
+    if (board && typeof board.paletteAttr !== 'function' && typeof this.paletteAttr === 'function') {
+        board.paletteAttr = this.paletteAttr;
+    }
     var highlightQuotes = !!(opts.highlightQuotes && board && typeof board._quoteColorAttrFor === 'function');
     var attr = (typeof frame.attr === 'number') ? frame.attr : ((typeof BG_BLACK === 'number' ? BG_BLACK : 0) | (typeof LIGHTGRAY === 'number' ? LIGHTGRAY : 7));
     var bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
@@ -655,6 +658,14 @@ function MessageBoard(opts) {
     this.currentMessageHeader = null;
     this.currentMessageBody = '';
     this.currentMessageRawBody = '';
+    this.id = "message_board";
+    this.registerColors({
+        TITLE_FRAME: { bg: BG_BLUE, fg: WHITE },
+        OUTPUT_FRAME: { bg: BG_GREEN, fg: LIGHTGRAY },
+        INPUT_FRAME: { bg: BG_BLUE, fg: WHITE },
+        READ_HEADER: { bg: BG_BLUE, fg: WHITE },
+    });
+    this.parentFrame = opts.parentFrame || null;
     Subprogram.call(this, { name: 'message-board', parentFrame: opts.parentFrame, shell: opts.shell });
     this._init();
 }
@@ -708,7 +719,7 @@ MessageBoard.prototype._paintInlineSearchPrompt = function (message) {
     }
     if (!isPlaceholder && this._navSearchActive) buffer = buffer + '_';
     try {
-        this.inputFrame.clear(BG_BLUE | WHITE);
+        this.inputFrame.clear(this.paletteAttr('INPUT_FRAME'));
         this.inputFrame.home();
         var text = prompt + buffer;
         if (text.length > this.inputFrame.width) text = text.substr(text.length - this.inputFrame.width);
@@ -807,6 +818,8 @@ MessageBoard.prototype._pumpFrameCycle = function () {
     var currentEpoch = this._epoch;
     try { if (this.outputFrame && this._epoch === currentEpoch) this.outputFrame.cycle(); } catch (e) { }
     try { if (this.inputFrame && this._epoch === currentEpoch) this.inputFrame.cycle(); } catch (e) { }
+    try { if (this.titleFrame && this._epoch === currentEpoch) this.titleFrame.cycle(); } catch (e) { }
+
 };
 
 MessageBoard.prototype._cancelFrameCycle = function () {
@@ -816,13 +829,56 @@ MessageBoard.prototype._cancelFrameCycle = function () {
 };
 
 MessageBoard.prototype._ensureFrames = function () {
+    this._ensureHostFrame();
+    var targetCols = (typeof console !== 'undefined' && console && typeof console.screen_columns === 'number' && console.screen_columns > 0) ? console.screen_columns : null;
+    var targetRows = (typeof console !== 'undefined' && console && typeof console.screen_rows === 'number' && console.screen_rows > 0) ? console.screen_rows : null;
+    var resizeFrame = function (frame, cols, rows) {
+        if (!frame) return;
+        var changed = false;
+        if (cols && cols > 0 && frame.width !== cols) {
+            frame.width = cols;
+            changed = true;
+        }
+        if (rows && rows > 0 && frame.height !== rows) {
+            frame.height = rows;
+            changed = true;
+        }
+        if (!changed) return;
+        try { frame.cycle(); } catch (_resizeErr) { }
+    };
+    if (targetCols || targetRows) {
+        resizeFrame(this.parentFrame, targetCols, targetRows);
+        resizeFrame(this.hostFrame, targetCols, targetRows);
+    }
+    log('ensureFrames start', JSON.stringify({
+        hostFrame: this.hostFrame ? {
+            open: !!this.hostFrame.is_open,
+            x: this.hostFrame.x,
+            y: this.hostFrame.y,
+            width: this.hostFrame.width,
+            height: this.hostFrame.height
+        } : null,
+        parentFrame: this.parentFrame ? {
+            open: !!this.parentFrame.is_open,
+            x: this.parentFrame.x,
+            y: this.parentFrame.y,
+            width: this.parentFrame.width,
+            height: this.parentFrame.height
+        } : null,
+        view: this.view,
+        firstLaunch: !this._framesInitialized
+    }));
     if (this.frameSet) {
         this.frameSet.ensure();
+        this._framesInitialized = true;
         return;
     }
     if (typeof MessageBoardUI !== 'undefined' && MessageBoardUI && MessageBoardUI.FrameSet) {
-        this.frameSet = new MessageBoardUI.FrameSet(this);
+        var self = this;
+        this.frameSet = new MessageBoardUI.FrameSet(this,
+            function (namespace, key) { return self.paletteAttr(namespace, key); });
         this.frameSet.ensure();
+        this._framesInitialized = true;
         return;
     }
     // Fallback to legacy behaviour if FrameSet unavailable
@@ -832,16 +888,21 @@ MessageBoard.prototype._ensureFrames = function () {
     var y = pf ? pf.y : 1;
     var w = pf ? pf.width : console.screen_columns;
     var h = pf ? pf.height : console.screen_rows;
-    this.outputFrame = new Frame(x, y, w, h - 1, BG_BLACK | LIGHTGRAY, pf);
+    this.titleFrame = new Frame(1, 1, w, 1, this.paletteAttr('TITLE_FRAME'), pf);
+    this.outputFrame = new Frame(x, 2, w, h - 2, this.paletteAttr('OUTPUT_FRAME'), pf);
     this.setBackgroundFrame(this.outputFrame);
-    this.inputFrame = new Frame(x, y + h - 1, w, 1, BG_BLUE | WHITE, pf);
+    this.inputFrame = new Frame(x, y + h - 1, w, 1, this.paletteAttr('INPUT_FRAME'), pf);
+    this.titleFrame.center("Message Boards")
+    this.titleFrame.open();
     this.outputFrame.open();
     this.inputFrame.open();
+    this.headerFrame.open();
     if (typeof ICSH_PERF_TAG !== 'undefined') {
         try { this.outputFrame.__perfTag = 'mb-output'; } catch (_pt1) { }
         try { this.inputFrame.__perfTag = 'mb-input'; } catch (_pt2) { }
     }
     this._writeStatus('Message Boards: ' + this.view);
+    this._framesInitialized = true;
 };
 
 MessageBoard.prototype._ensureViewControllers = function () {
@@ -1095,8 +1156,10 @@ MessageBoard.prototype._cleanup = function () {
     } else {
         try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
         try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
+        try { if (this.titleFrame) this.titleFrame.close(); } catch (e) { }
         this.outputFrame = null;
         this.inputFrame = null;
+        this.titleFrame = null;
     }
     this._resetState();
 };
@@ -1106,6 +1169,7 @@ MessageBoard.prototype._resetState = function () {
     this._hideTransitionNotice({ skipRepaint: true });
     this.outputFrame = null;
     this.inputFrame = null;
+    this.titleFrame = null;
     this.view = 'group';
     this._activeViewController = null;
     this._activeViewId = null;
@@ -1169,11 +1233,13 @@ MessageBoard.prototype._releaseHotspots = function () {
 };
 
 MessageBoard.prototype._init = function (reentry) {
+    this._ensureHostFrame();
     // New lifecycle instance: bump epoch so any stale async callbacks can bail.
     try { this._epoch++; } catch (_eEpoch) { this._epoch = (this._epoch || 0) + 1; }
     this._alive = true;
     if (!this.frameSet && typeof MessageBoardUI !== 'undefined' && MessageBoardUI && MessageBoardUI.FrameSet) {
-        this.frameSet = new MessageBoardUI.FrameSet(this);
+        var self = this;
+        this.frameSet = new MessageBoardUI.FrameSet(this, function (namespace, key) { return self.paletteAttr(namespace, key); });
     }
     if (!this.overlay && typeof MessageBoardUI !== 'undefined' && MessageBoardUI && MessageBoardUI.TransitionOverlay) {
         this.overlay = new MessageBoardUI.TransitionOverlay(this);
@@ -1277,6 +1343,8 @@ MessageBoard.prototype._renderCurrentView = function (view) {
     var args = [];
     for (var i = 1; i < arguments.length; i++) args.push(arguments[i]);
     var controller = this._activateViewController(view, args);
+    this.titleFrame && this.titleFrame.clear();
+    this.titleFrame && this.titleFrame.center("Message Boards - " + view.toUpperCase());
     if (controller && typeof controller.enter === 'function') {
         this._navigationLock = true;
         try {
@@ -1309,6 +1377,7 @@ MessageBoard.prototype._openSubReader = function (subCode, options) {
     var resolved = this._syncSubState ? this._syncSubState(candidateCode) : { code: candidateCode };
     var code = (resolved && resolved.code) ? resolved.code : candidateCode;
     if (!code) return false;
+
     this._lastActiveSubCode = code;
 
     var subName = this._getSubNameByCode ? this._getSubNameByCode(code) : code;
@@ -1529,6 +1598,9 @@ MessageBoard.prototype._renderReadBodyContent = function (text) {
         }
     }
     var attr = (typeof canvas.attr === 'number') ? canvas.attr : ((typeof BG_BLACK === 'number' ? BG_BLACK : 0) | (typeof LIGHTGRAY === 'number' ? LIGHTGRAY : 7));
+    var defaultFg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+    if ((attr & 0x0F) === 0) attr = (attr & 0xF0) | defaultFg;
+    canvas.attr = attr;
     try { canvas.clear(attr); } catch (_clearErr) { }
     if (canvas.__properties__) {
         canvas.__properties__.data = [];
@@ -2659,9 +2731,40 @@ MessageBoard.prototype._threadSearchHandleKey = function (key) {
 // Static convenience launcher so shell code can do: MessageBoard.launch(shell, cb)
 MessageBoard.launch = function (shell, cb, opts) {
     opts = opts || {};
-    opts.parentFrame = opts.parentFrame || (shell && shell.subFrame) || (shell && shell.root) || null;
+    var createdParent = null;
+    if (!opts.parentFrame && shell && shell.root) {
+        var root = shell.root;
+        if (root && typeof root.width === 'number' && typeof root.height === 'number') {
+            var attr = (typeof root.attr === 'number') ? root.attr
+                : ((typeof ICSH_VALS !== 'undefined' && ICSH_VALS.VIEW && typeof ICSH_VALS.VIEW.BG === 'number' && typeof ICSH_VALS.VIEW.FG === 'number')
+                    ? (ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG)
+                    : ((typeof BG_BLACK !== 'undefined' && typeof LIGHTGRAY !== 'undefined') ? (BG_BLACK | LIGHTGRAY) : 0));
+            try {
+                createdParent = new Frame(root.x, root.y, root.width, root.height, attr, root);
+                createdParent.open();
+                opts.parentFrame = createdParent;
+            } catch (_createParentErr) {
+                if (createdParent && typeof createdParent.close === 'function') {
+                    try { createdParent.close(); } catch (_closeErr) { }
+                }
+                createdParent = null;
+            }
+        }
+    }
+    if (!opts.parentFrame) opts.parentFrame = (shell && shell.subFrame) || (shell && shell.root) || null;
     opts.shell = shell || opts.shell;
-    var mb = new MessageBoard(opts);
+    var mb;
+    try {
+        mb = new MessageBoard(opts);
+    } catch (err) {
+        if (createdParent && typeof createdParent.close === 'function') {
+            try { createdParent.close(); } catch (_cleanupErr) { }
+        }
+        throw err;
+    }
+    if (createdParent) {
+        mb._ownsParentFrame = true; // ensure cleanup closes our custom parent frame
+    }
     mb.enter(function () { if (typeof cb === 'function') cb(); });
     if (opts.autoCycle) mb.autoCycle = true;
     if (mb.autoCycle) mb.cycle();
@@ -2678,7 +2781,7 @@ MessageBoard.prototype._writeStatus = function (msg) {
     var prefix = this._getCurrentSubName();
     var text = msg || '';
     if (prefix && prefix.length) text = prefix + ' | ' + text;
-    this.inputFrame.clear(BG_BLUE | WHITE); this.inputFrame.home();
+    this.inputFrame.clear(this.paletteAttr('INPUT_FRAME')); this.inputFrame.home();
     this.inputFrame.putmsg(truncsp(text).substr(0, this.inputFrame.width));
 };
 
@@ -3011,19 +3114,20 @@ MessageBoard.prototype._paintIconGrid = function () {
         var isSubIcon = (inSubView && itemData.type === 'sub');
         var baseX = this.outputFrame.x + x - 1;
         var baseY = this.outputFrame.y + y - 1;
+        // we add an extra pixel of Y offset when in sub-view to account for the title row above the icons
         var iconYOffset = inSubView ? 1 : 0;
         var iconFrame = new Frame(baseX, baseY + iconYOffset, metrics.iconW, metrics.iconH, (itemData.iconBg || 0) | (itemData.iconFg || 0), this.outputFrame);
         if (typeof ICSH_PERF_TAG !== 'undefined') { try { iconFrame.__perfTag = 'mb-icon'; } catch (_ptI) { } }
         var labelFrame = new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, BG_BLACK | LIGHTGRAY, this.outputFrame);
         if (typeof ICSH_PERF_TAG !== 'undefined') { try { labelFrame.__perfTag = 'mb-icon-label'; } catch (_ptIL) { } }
-        var titleFrame = null;
+        var iconTitleFrame = null;
         if (inSubView) {
             var titleColor = (typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : (typeof CYAN !== 'undefined' ? CYAN : WHITE);
-            titleFrame = new Frame(iconFrame.x, iconFrame.y - 1, metrics.iconW, 1, BG_BLACK | titleColor, this.outputFrame);
-            if (typeof ICSH_PERF_TAG !== 'undefined') { try { titleFrame.__perfTag = 'mb-icon-title'; } catch (_ptIT) { } }
-            titleFrame.transparent = false;
-            if (typeof titleFrame.word_wrap !== 'undefined') titleFrame.word_wrap = false;
-            try { titleFrame.open(); } catch (_ignoredOpen) { }
+            iconTitleFrame = new Frame(iconFrame.x, iconFrame.y - 1, metrics.iconW, 1, BG_BLACK | titleColor, this.outputFrame);
+            if (typeof ICSH_PERF_TAG !== 'undefined') { try { iconTitleFrame.__perfTag = 'mb-icon-title'; } catch (_ptIT) { } }
+            iconTitleFrame.transparent = false;
+            if (typeof iconTitleFrame.word_wrap !== 'undefined') iconTitleFrame.word_wrap = false;
+            try { iconTitleFrame.open(); } catch (_ignoredOpen) { }
         }
         if (itemData.type === 'sub' && itemData.subCode) {
             var updated = this._getSubMessageCount(itemData.subCode);
@@ -3038,7 +3142,7 @@ MessageBoard.prototype._paintIconGrid = function () {
         var iconObj = new this._Icon(iconFrame, labelFrame, itemData);
         iconObj.render();
         var isSelected = (globalIndex === this.selection);
-        if (titleFrame) {
+        if (iconTitleFrame) {
             try {
                 var titleAttr = isSelected
                     ? ((typeof WHITE !== 'undefined') ? WHITE : ((typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : LIGHTCYAN))
@@ -3046,19 +3150,19 @@ MessageBoard.prototype._paintIconGrid = function () {
                 var titleText = '';
                 if (itemData.type === 'sub') titleText = itemData._labelBase || itemData.title || itemData.label || '';
                 else titleText = itemData.title || itemData.label || '';
-                titleFrame.clear(BG_BLACK | titleAttr);
-                titleFrame.attr = BG_BLACK | titleAttr;
-                titleFrame.gotoxy(1, 1);
-                if (this._center) titleText = this._center(titleText, titleFrame.width);
-                else if (titleText.length > titleFrame.width) titleText = titleText.substr(0, titleFrame.width);
+                iconTitleFrame.clear(BG_BLACK | titleAttr);
+                iconTitleFrame.attr = BG_BLACK | titleAttr;
+                iconTitleFrame.gotoxy(1, 1);
+                if (this._center) titleText = this._center(titleText, iconTitleFrame.width);
+                else if (titleText.length > iconTitleFrame.width) titleText = titleText.substr(0, iconTitleFrame.width);
                 var colorSeq = isSelected
                     ? '\x01n\x01h\x01w'
                     : '\x01n\x01h\x01c';
-                titleFrame.putmsg(colorSeq + titleText + '\x01n');
-                try { titleFrame.cycle(); } catch (_ignoredCycle) { }
+                iconTitleFrame.putmsg(colorSeq + titleText + '\x01n');
+                try { iconTitleFrame.cycle(); } catch (_ignoredCycle) { }
             } catch (_ignoredTitle) { }
         }
-        this._iconCells.push({ icon: iconFrame, label: labelFrame, title: titleFrame, item: itemData, iconObj: iconObj });
+        this._iconCells.push({ icon: iconFrame, label: labelFrame, title: iconTitleFrame, item: itemData, iconObj: iconObj });
         try {
             this._renderIconLabel(labelFrame, itemData, isSelected, metrics.iconW);
         } catch (e) { }
