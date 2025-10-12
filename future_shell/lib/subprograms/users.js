@@ -952,5 +952,11 @@ Users.prototype._blitAvatarToFrame = function (frame, binData, w, h, dstX, dstY)
     frame.top();
 };
 
+Users.prototype.resumeForReason = function (reason) {
+    if (reason === 'screensaver_off') {
+        this.hostFrame.clear();
+        this.hostFrame.cycle();
+    }
+}
 // Export
 registerModuleExports({ Users: Users });
