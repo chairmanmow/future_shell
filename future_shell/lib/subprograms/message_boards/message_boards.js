@@ -2760,9 +2760,19 @@ MessageBoard.prototype._calcGridMetrics = function () {
     var iconW = ICSH_CONSTANTS ? ICSH_CONSTANTS.ICON_W : 10;
     var iconH = ICSH_CONSTANTS ? ICSH_CONSTANTS.ICON_H : 6;
     var cellW = iconW + 2; var cellH = iconH + 1 + 2; // +label +padding
+    var topPadding = 1; // leave one row blank above the grid for visual breathing room
+    var usableHeight = Math.max(0, h - topPadding);
     var cols = Math.max(1, Math.floor(w / cellW));
-    var rows = Math.max(1, Math.floor(h / cellH));
-    return { iconW: iconW, iconH: iconH, cols: cols, rows: rows, cellW: cellW, cellH: cellH };
+    var rows = Math.max(1, Math.floor(usableHeight / cellH));
+    return {
+        iconW: iconW,
+        iconH: iconH,
+        cols: cols,
+        rows: rows,
+        cellW: cellW,
+        cellH: cellH,
+        topPadding: topPadding
+    };
 };
 
 MessageBoard.prototype._ensureSubIndex = function () {
@@ -3078,7 +3088,9 @@ MessageBoard.prototype._paintIconGrid = function () {
     for (var v = 0; v < visible.length; v++) {
         var globalIndex = this.scrollOffset + v;
         var col = idx % metrics.cols; var row = Math.floor(idx / metrics.cols);
-        var x = (col * metrics.cellW) + 2; var y = (row * metrics.cellH) + 1;
+        var topPad = metrics.topPadding || 0;
+        var x = (col * metrics.cellW) + 2;
+        var y = topPad + (row * metrics.cellH) + 1;
         var itemData = visible[v];
         var inSubView = (this.view === 'sub');
         var isSubIcon = (inSubView && itemData.type === 'sub');

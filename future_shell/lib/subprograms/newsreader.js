@@ -1279,7 +1279,7 @@ NewsReader.prototype._renderCategoryIcons = function () {
     }
 
     var metrics = this._getIconMetrics();
-    var topPadding = 1;
+    var topPadding = 2;
     var labelHeight = 1;
     var cellW = metrics.width + 4;
     var cellH = metrics.height + labelHeight + 2;
@@ -1370,7 +1370,7 @@ NewsReader.prototype._renderFeedIcons = function () {
     if (this.selectedIndex < 0) this.selectedIndex = 0;
 
     var metrics = this._getIconMetrics();
-    var topPadding = 1;
+    var topPadding = 2;
     var labelHeight = 1;
     var cellW = metrics.width + 4;
     var cellH = metrics.height + labelHeight + 2;
@@ -1469,10 +1469,11 @@ NewsReader.prototype._ensureFrames = function () {
         if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
     }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 2);
+        var h = Math.max(1, this.parentFrame.height - 1);
         this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, this.paletteAttr('CONTENT_FRAME'), this.parentFrame);
         this.listFrame.open();
-        this.listFrame.word_wrap = false;
+        this.listFrame.word_wrap = true;
+        this.setBackgroundFrame(this.listFrame)
         if (typeof this.registerFrame === 'function') this.registerFrame(this.listFrame);
     }
 };

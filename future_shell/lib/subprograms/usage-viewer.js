@@ -43,7 +43,12 @@ function UsageViewer(opts) {
         TEXT_RECENT: { FG: LIGHTRED },
         TEXT_TOP: { FG: LIGHTMAGENTA },
         TEXT_TOTAL: { FG: LIGHTBLUE },
-        DETAIL_FRAME: { BG: BG_BLUE, FG: WHITE },
+        HEADER_FRAME: { BG: BG_GREEN, FG: WHITE },
+        FOOTER_FRAME: { BG: BG_BLACK, FG: LIGHTGREEN },
+        LIGHTBAR: { BG: GREEN, FG: WHITE },
+        TEXT_HOTKEY: { FG: LIGHTGREEN },
+        TEXT_NORMAL: { FG: LIGHTGRAY },
+        TEXT_BOLD: { FG: LIGHTBLUE },
     });
     var modsDir = system.mods_dir;
     if (modsDir && modsDir.slice(-1) !== '/' && modsDir.slice(-1) !== '\\') modsDir += '/';
@@ -52,7 +57,8 @@ function UsageViewer(opts) {
     this.index = 0; // month index (0 = All Time)
     this.top = 0; // scroll offset for program list
     this.listFrame = null;
-    this.detailFrame = null;
+    this.headerFrame = null;
+    this.footerFrame = null;
     this.message = '';
     this.focus = 'program'; // unified list focus (no separate month/program focus now)
     this.programIndex = 0; // highlighted program row
@@ -95,7 +101,8 @@ UsageViewer.prototype.setParentFrame = function (frame) {
     this.parentFrame = frame;
     this._ownsParentFrame = !frame;
     this.listFrame = null;
-    this.detailFrame = null;
+    this.headerFrame = null;
+    this.footerFrame = null;
     this._clearProgramResources();
 };
 
@@ -122,9 +129,11 @@ UsageViewer.prototype._ensureVersion = function (frame) {
     if (this._version === USAGE_VIEWER_VERSION) return;
     try { this._clearProgramResources(); } catch (e1) { }
     if (this.listFrame) { try { this.listFrame.close(); } catch (e2) { } }
-    if (this.detailFrame) { try { this.detailFrame.close(); } catch (e3) { } }
+    if (this.headerFrame) { try { this.headerFrame.close(); } catch (e3) { } }
+    if (this.footerFrame) { try { this.footerFrame.close(); } catch (e4) { } }
     this.listFrame = null;
-    this.detailFrame = null;
+    this.headerFrame = null;
+    this.footerFrame = null;
     var opts = {
         parentFrame: (typeof frame !== 'undefined') ? frame : this.parentFrame,
         shell: this.shell,
@@ -292,7 +301,7 @@ UsageViewer.prototype.ensureFrames = function () {
     // Ensure we never create a frame taller than the host, otherwise Synchronet frame.js throws
     if (listHeight > height) listHeight = height;
     var detailHeight = 0; // deprecated (still keep frame for compatibility)
-    var detailY = host.y + height; // off-screen effectively
+    var headerY = host.y + height; // off-screen effectively
     if (this.listFrame) {
         var needsListRebuild = this.listFrame.width !== width || this.listFrame.height !== listHeight
             || this.listFrame.x !== host.x || this.listFrame.y !== host.y;
@@ -309,25 +318,43 @@ UsageViewer.prototype.ensureFrames = function () {
         this.registerFrame(this.listFrame);
     }
     this.setBackgroundFrame(this.listFrame);
-    if (this.detailFrame) {
-        var needsDetailRebuild = this.detailFrame.width !== width || this.detailFrame.height !== detailHeight
-            || this.detailFrame.x !== host.x || this.detailFrame.y !== detailY;
-        if (needsDetailRebuild) {
-            try { this.detailFrame.close(); } catch (eCloseDetail) { }
-            this.detailFrame = null;
+    if (this.headerFrame) {
+        var needsHeaderRebuild = this.headerFrame.width !== width || this.headerFrame.height !== headerHeight
+            || this.headerFrame.x !== host.x || this.headerFrame.y !== headerY;
+        if (needsHeaderRebuild) {
+            try { this.headerFrame.close(); } catch (eCloseHeader) { }
+            this.headerFrame = null;
         }
     }
-    if (!this.detailFrame) { // stub frame retained for legacy refs; not displayed
-        var attr = this.paletteAttr('DETAIL_FRAME') || (BG_BLUE | LIGHTGRAY);
-        this.detailFrame = new Frame(host.x, 1, width, Math.max(1, detailHeight), attr, host);
-        try { this.detailFrame.open(); } catch (eDF) { }
-        this.registerFrame(this.detailFrame);
+    if (!this.headerFrame) {
+        var attr = this.paletteAttr('HEADER_FRAME') || (BG_BLUE | LIGHTGRAY);
+        this.headerFrame = new Frame(host.x, 1, width, Math.max(1, detailHeight), attr, host);
+        try { this.headerFrame.open(); } catch (eDF) { }
+        this.registerFrame(this.headerFrame);
+    }
+    if (this.footerFrame) {
+        var needsFooterRebuild = this.footerFrame.width !== width || this.footerFrame.height !== detailHeight
+            || this.footerFrame.x !== host.x || this.footerFrame.y !== host.y + host.height - detailHeight;
+        if (needsFooterRebuild) {
+            try { this.footerFrame.close(); } catch (eCloseFooter) { }
+            this.footerFrame = null;
+        }
+    }
+    if (!this.footerFrame) {
+        var footerAttr = this.paletteAttr('FOOTER_FRAME') || (BG_BLUE | LIGHTGRAY);
+        var footerY = host.y + host.height - detailHeight;
+        this.footerFrame = new Frame(host.x, footerY, width, Math.max(1, detailHeight), footerAttr, host);
+        try { this.footerFrame.open(); } catch (eFF) { }
+        this.registerFrame(this.footerFrame);
     }
 };
 
 UsageViewer.prototype.draw = function () {
     this.ensureFrames();
     if (!this.listFrame) return;
+    if (this.footerFrame) {
+        try { this.footerFrame.clear(this.footerFrame.attr); } catch (_ffClear) { }
+    }
     var lf = this.listFrame;
     lf.attr = BG_BLACK | LIGHTGRAY;
     lf.clear(BG_BLACK | LIGHTGRAY);
@@ -567,9 +594,11 @@ UsageViewer.prototype._formatMonthLine = function (item) {
 };
 
 UsageViewer.prototype._drawDetail = function () {
-    if (!this.detailFrame) return;
-    this.detailFrame.center("Top Programs");
-    this.detailFrame.cycle();
+    if (!this.headerFrame) return;
+    this.headerFrame.center("Top Programs");
+    var hotkeys = [{ val: "LEFT/RIGHT", action: "Timeframe" }, { val: "S", action: "Sort" }, { val: "U", action: "User filter" }, { val: "ESC", action: "Exit" }];
+    this.footerFrame.center(this._generateHotkeyLine(hotkeys));
+    this.hostFrame.cycle();
 };
 
 UsageViewer.prototype._formatDuration = function (seconds) {
@@ -739,8 +768,9 @@ UsageViewer.prototype._launchProgram = function (programId) {
 UsageViewer.prototype.cleanup = function () {
     this._clearProgramResources();
     if (this.listFrame) { try { this.listFrame.close(); } catch (e) { } }
-    if (this.detailFrame) { try { this.detailFrame.close(); } catch (e) { } }
-    this.listFrame = this.detailFrame = null;
+    if (this.headerFrame) { try { this.headerFrame.close(); } catch (e) { } }
+    if (this.footerFrame) { try { this.footerFrame.close(); } catch (e) { } }
+    this.listFrame = this.headerFrame = this.footerFrame = null;
     Subprogram.prototype.cleanup.call(this);
 };
 
@@ -1122,7 +1152,7 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
         var line = lines[row] || '';
         if (row === 0 && iconError) line += ' [icon error]';
         if (textWidth > 0) {
-            var lineAttr = (isSelected && row === 0) ? (BG_BLUE | LIGHTGRAY) : baseAttr;
+            var lineAttr = (isSelected && row === 0) ? this.paletteAttr('LIGHTBAR') : baseAttr;
             blockFrame.attr = lineAttr;
             blockFrame.gotoxy(textStart, row + 1);
             // var padded = this._padColoredLine(line, textWidth);
@@ -1182,7 +1212,7 @@ UsageViewer.prototype._getTopPlayersString = function (programId) {
     var players = this._getTopPlayers(month, programId);
     if (!players || !players.length) return 'None';
     var joined = players.join(', ');
-    var maxLen = this.detailFrame ? this.detailFrame.width - 5 : 40;
+    var maxLen = this.headerFrame ? this.headerFrame.width - 5 : 40;
     if (joined.length > maxLen) joined = joined.substr(0, maxLen);
     return joined;
 };
