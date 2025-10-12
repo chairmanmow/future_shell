@@ -291,11 +291,6 @@ function getNewsreaderConfig(forceReload) {
         categories: newsreaderCloneCategoryMap(_newsreaderConfigCache.categories)
     };
 }
-
-var LIST_ACTIVE = resolveAttr('NEWSREADER_ACTIVE', (BG_GREEN | WHITE));
-var LIST_INACTIVE = resolveAttr('NEWSREADER_INACTIVE', (BG_BLACK | LIGHTGRAY));
-var HEADER_ATTR = resolveAttr('NEWSREADER_HEADER', (BG_MAGENTA | WHITE));
-var STATUS_ATTR = resolveAttr('NEWSREADER_FOOTER', (BG_BLACK | LIGHTGRAY));
 var IMAGE_CACHE_LIMIT = 4;
 var NEWSREADER_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 var NEWSREADER_ASCII_ENTITY_MAP = {
@@ -380,21 +375,26 @@ function NewsReader(opts) {
     this._resetState();
     this.id = 'newsreader';
     this.registerColors({
-        LIGHTBAR: { BG: BG_BLUE, FG: WHITE },
-        LIST_ACTIVE: { BG: BG_GREEN, FG: WHITE },
+        LIGHTBAR: { BG: BG_RED, FG: WHITE },
+        LIST_ACTIVE: { BG: BG_RED, FG: WHITE },
+        LINK_BUTTON: { BG: BG_CYAN, FG: WHITE },
         LIST_INACTIVE: { BG: BG_BLACK, FG: LIGHTGRAY },
         HEADER: { BG: BG_MAGENTA, FG: WHITE },
-        STATUS: { BG: BG_BLACK, FG: LIGHTGRAY }
+        STATUS: { BG: BG_BLACK, FG: LIGHTGRAY },
+        TITLE_FRAME: { BG: BG_RED, FG: WHITE },
+        CONTENT_FRAME: { BG: BG_BLACK, FG: LIGHTGRAY },
+        FOOTER_FRAME: { BG: BG_BLACK, FG: LIGHTRED },
+        READ_HEADER: { BG: BG_RED, FG: WHITE },
+        TEXT_HOTKEY: { FG: YELLOW },
+        TEXT_NORMAL: { FG: LIGHTGRAY },
+        TEXT_BOLD: { FG: LIGHTMAGENTA },
+        LIST_TIME: { FG: CYAN },
+        LOADING_MODAL: { BG: BG_RED, FG: WHITE }
     });
 }
 extend(NewsReader, Subprogram);
 
 NewsReader.prototype._resetState = function () {
-    LIST_ACTIVE = resolveAttr('NEWSREADER_ACTIVE', (BG_GREEN | WHITE));
-    LIST_INACTIVE = resolveAttr('NEWSREADER_INACTIVE', (BG_BLACK | LIGHTGRAY));
-    HEADER_ATTR = resolveAttr('NEWSREADER_HEADER', (BG_MAGENTA | WHITE));
-    STATUS_ATTR = resolveAttr('NEWSREADER_FOOTER', (BG_BLACK | LIGHTGRAY));
-
     this._destroyArticleIcon();
     this._destroyCategoryIcons();
     this._destroyFeedIcons();
@@ -642,8 +642,8 @@ NewsReader.prototype._destroyLoadingOverlay = function () {
     }
     // Mitigation (Option 1): ensure any residual background from the loading modal
     // is overwritten with the inactive list background before next render.
-    if (this.listFrame && typeof LIST_INACTIVE !== 'undefined') {
-        try { this.listFrame.clear(LIST_INACTIVE); this.listFrame.home(); } catch (_eClr) { }
+    if (this.listFrame && typeof this.paletteAttr('LIST_INACTIVE') !== 'undefined') {
+        try { this.listFrame.clear(this.paletteAttr('LIST_INACTIVE')); this.listFrame.home(); } catch (_eClr) { }
     }
     this.parentFrame.cycle();
 };
@@ -661,9 +661,9 @@ NewsReader.prototype._showLoadingOverlay = function (message) {
         overlay: true,
         // Mitigation (Option 3): use LIST_INACTIVE so the spinner overlay background
         // matches final surface and does not leave a contrasting (blue) residue.
-        attr: LIST_INACTIVE,
-        contentAttr: LIST_INACTIVE,
-        buttonAttr: LIST_INACTIVE,
+        attr: this.paletteAttr('LOADING_MODAL'),
+        contentAttr: this.paletteAttr('LIST_INACTIVE'),
+        buttonAttr: this.paletteAttr('LINK_BUTTON'),
         autoOpen: true,
         spinnerFrames: ['|', '/', '-', '\\'],
         spinnerInterval: 120,
@@ -1263,7 +1263,7 @@ NewsReader.prototype._renderCategoryIcons = function () {
     this._gridLayout = null;
     if (!this.listFrame) return;
     var items = this.categories ? this.categories.slice(0) : [];
-    items.unshift({ _type: 'exit', name: 'Exit', icon: 'exit' });
+    items.unshift({ _type: 'exit', name: 'Exit', icon: 'back' });
     this._categoryGridItems = items;
     if (!items.length) {
         this.listFrame.clear();
@@ -1305,10 +1305,8 @@ NewsReader.prototype._renderCategoryIcons = function () {
     var endRow = Math.min(totalRows, startRow + visibleRows);
     var cells = [];
     // Use the background nibble from LIST_INACTIVE so theme / attr.ini overrides apply.
-    var bgVal = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70)
-        : ((typeof BG_BLACK === 'number') ? BG_BLACK : 0);
-    var fgVal = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F)
-        : ((typeof WHITE === 'number') ? WHITE : (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    var bgVal = this.paletteAttr('LIST_INACTIVE').BG;
+    var fgVal = this.paletteAttr('LIST_INACTIVE').FG;
 
     for (var row = startRow; row < endRow; row++) {
         for (var col = 0; col < cols; col++) {
@@ -1319,8 +1317,8 @@ NewsReader.prototype._renderCategoryIcons = function () {
             var y = 1 + topPadding + (row - startRow) * cellH;
             if (y + metrics.height + labelHeight - 1 > frameHeight) continue;
 
-            var iconFrame = new Frame(x, y, metrics.width, metrics.height, LIST_INACTIVE, this.listFrame);
-            var labelFrame = new Frame(x, y + metrics.height, metrics.width, labelHeight, LIST_INACTIVE, this.listFrame);
+            var iconFrame = new Frame(x, y, metrics.width, metrics.height, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
+            var labelFrame = new Frame(x, y + metrics.height, metrics.width, labelHeight, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
             iconFrame.open();
             labelFrame.open();
 
@@ -1398,10 +1396,8 @@ NewsReader.prototype._renderFeedIcons = function () {
     var endRow = Math.min(totalRows, startRow + visibleRows);
     var cells = [];
     // Do not force blue for feed icons either; respect LIST_INACTIVE background.
-    var bgVal = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x70)
-        : ((typeof BG_BLACK === 'number') ? BG_BLACK : 0);
-    var fgVal = (typeof LIST_INACTIVE === 'number') ? (LIST_INACTIVE & 0x0F)
-        : ((typeof WHITE === 'number') ? WHITE : (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    var bgVal = this.paletteAttr('LIST_INACTIVE').BG;
+    var fgVal = this.paletteAttr('LIST_INACTIVE').FG;
 
     for (var row = startRow; row < endRow; row++) {
         for (var col = 0; col < cols; col++) {
@@ -1412,8 +1408,8 @@ NewsReader.prototype._renderFeedIcons = function () {
             var y = 1 + topPadding + (row - startRow) * cellH;
             if (y + metrics.height + labelHeight - 1 > frameHeight) continue;
 
-            var iconFrame = new Frame(x, y, metrics.width, metrics.height, LIST_INACTIVE, this.listFrame);
-            var labelFrame = new Frame(x, y + metrics.height, metrics.width, labelHeight, LIST_INACTIVE, this.listFrame);
+            var iconFrame = new Frame(x, y, metrics.width, metrics.height, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
+            var labelFrame = new Frame(x, y + metrics.height, metrics.width, labelHeight, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
             iconFrame.open();
             labelFrame.open();
 
@@ -1462,19 +1458,19 @@ NewsReader.prototype._toDisplayText = function (text) {
 NewsReader.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
     if (!this.headerFrame) {
-        this.headerFrame = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width, 1, HEADER_ATTR, this.parentFrame);
+        this.headerFrame = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width, 1, this.paletteAttr('TITLE_FRAME'), this.parentFrame);
         this.headerFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.headerFrame);
         this._headerDefaultAttr = this.headerFrame.attr;
     }
     if (!this.statusFrame) {
-        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.y + this.parentFrame.height - 1, this.parentFrame.width, 1, STATUS_ATTR, this.parentFrame);
+        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.y + this.parentFrame.height, this.parentFrame.width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame);
         this.statusFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
     }
     if (!this.listFrame) {
         var h = Math.max(1, this.parentFrame.height - 2);
-        this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, LIST_INACTIVE, this.parentFrame);
+        this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, this.paletteAttr('CONTENT_FRAME'), this.parentFrame);
         this.listFrame.open();
         this.listFrame.word_wrap = false;
         if (typeof this.registerFrame === 'function') this.registerFrame(this.listFrame);
@@ -1515,14 +1511,18 @@ NewsReader.prototype.draw = function () {
 NewsReader.prototype._drawCategories = function () {
     this._setHeader('');
     this._renderCategoryIcons();
-    this._setStatus('Select a news category  |  ENTER=open  ESC=exit  CLICK=select  Exit tile=leave');
+    var hotkeys = [{ val: 'ENTER', action: 'open' }, { val: 'CLICK', action: 'select' }, { val: 'ESCAPE', action: 'exit' }, { val: 'ESC', action: 'back' }];
+    var hint = this._generateHotkeyLine(hotkeys);
+    this._setStatus('Select a news category  |  ' + hint);
 };
 
 NewsReader.prototype._drawFeeds = function () {
     var name = this.currentCategory ? this.currentCategory.name : '';
     this._setHeader('');
     this._renderFeedIcons();
-    this._setStatus((name ? name + '  |  ' : '') + 'ENTER=open feed  BACKSPACE=categories  R=refresh  CLICK=select  ESC=back  Back tile=return');
+    var hotkeys = [{ val: 'ENTER', action: 'open feed' }, { val: 'BACKSPACE', action: 'Categories' }, { val: 'ESC', action: 'back' }];
+    var hint = this._generateHotkeyLine(hotkeys);
+    this._setStatus((name ? name + '  |  ' : '') + hint);
 };
 
 NewsReader.prototype._drawArticles = function () {
@@ -1532,7 +1532,7 @@ NewsReader.prototype._drawArticles = function () {
     this._destroyArticleLinkButton();
     this._setHeader((this.currentFeed ? this.currentFeed.label : 'Feed') + ' Articles');
     if (!this.currentArticles.length) {
-        this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
+        this._resetFrameSurface(this.listFrame, this.paletteAttr('LIST_INACTIVE'));
         this.listFrame.gotoxy(1, 1);
         this.listFrame.putmsg('No articles available.');
         return;
@@ -1544,7 +1544,9 @@ NewsReader.prototype._drawArticles = function () {
         }
     }
     this._renderArticleListWithDates();
-    this._setStatus('ENTER=view article  BACKSPACE=feeds');
+    var hotkeys = [{ val: 'ENTER', action: 'view article' }, { val: 'BACKSPACE', action: 'Feeds' }];
+    var hint = this._generateHotkeyLine(hotkeys);
+    this._setStatus(hint);
 };
 
 
@@ -1559,7 +1561,7 @@ NewsReader.prototype._drawArticleImages = function () {
     var articleTitle = article ? (article.title || '') : '';
 
     this._setHeader(this._toDisplayText(articleTitle ? 'Images: ' + articleTitle : 'Article Images'));
-    this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
+    this._resetFrameSurface(this.listFrame, this.paletteAttr('LIST_INACTIVE'));
 
     if (!images.length) {
         this._ensureArticleIcon({ showIcon: false, headerLines: ['No images available'], forceHeight: 1 });
@@ -1617,9 +1619,9 @@ NewsReader.prototype._drawArticleImages = function () {
     if (this.imagePreviewScroll > maxPreviewScroll) this.imagePreviewScroll = maxPreviewScroll;
 
     this._destroyArticlePreviewFrame();
-    var previewFrame = new Frame(1, headerRows + 1, this.listFrame.width, previewRows, LIST_INACTIVE, this.listFrame);
+    var previewFrame = new Frame(1, headerRows + 1, this.listFrame.width, previewRows, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
     previewFrame.open();
-    previewFrame.clear(LIST_INACTIVE);
+    previewFrame.clear(this.paletteAttr('LIST_INACTIVE'));
     if (typeof this.registerFrame === 'function') this.registerFrame(previewFrame);
     this.articleImagePreviewFrame = previewFrame;
 
@@ -1631,14 +1633,14 @@ NewsReader.prototype._drawArticleImages = function () {
             });
         } catch (_renderErr) {
             previewData = null;
-            previewFrame.clear(LIST_INACTIVE);
+            previewFrame.clear(this.paletteAttr('LIST_INACTIVE'));
             previewFrame.gotoxy(1, 1);
             previewFrame.putmsg('Preview not available.');
         }
     }
     if (!previewData) {
         this.imagePreviewScroll = 0;
-        previewFrame.clear(LIST_INACTIVE);
+        previewFrame.clear(this.paletteAttr('LIST_INACTIVE'));
         previewFrame.gotoxy(1, 1);
         var errMsg = this._imageAnsiErrors ? this._imageAnsiErrors[selectedUrl] : null;
         previewFrame.putmsg(errMsg ? ('Preview failed: ' + errMsg) : 'Preview not available.');
@@ -1676,14 +1678,16 @@ NewsReader.prototype._drawArticleImages = function () {
             this.listFrame.putmsg(display);
             previewHotspots.push({ type: 'thumb', index: idx, y: targetRow });
         }
-        this.listFrame.attr = LIST_INACTIVE;
+        this.listFrame.attr = this.paletteAttr('LIST_INACTIVE');
     } else {
         this.imageScrollOffset = 0;
-        this.listFrame.attr = LIST_INACTIVE;
+        this.listFrame.attr = this.paletteAttr('LIST_INACTIVE');
     }
 
     var statusIndicator = 'Image ' + (this.imageSelection + 1) + '/' + images.length + '  ';
-    this._setStatus(statusIndicator + 'LEFT/RIGHT=change image  UP/DOWN=scroll preview  ENTER=read article  BACKSPACE=articles');
+    var hotkeys = [{ val: 'UP/DOWN', action: 'scroll' }, { val: 'LEFT/RIGHT', action: 'change image' }, { val: 'ENTER', action: 'read article' }, { val: 'BACKSPACE', action: 'articles' }];
+    var hint = this._generateHotkeyLine(hotkeys);
+    this._setStatus(statusIndicator + hint);
 
     this._registerImageHotspots(previewHotspots, thumbStartRow, visibleRows);
 };
@@ -1701,7 +1705,7 @@ NewsReader.prototype._drawArticle = function () {
         header = article.title;
     }
     this._setHeader(this._toDisplayText(header));
-    this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
+    this._resetFrameSurface(this.listFrame, this.paletteAttr('LIST_INACTIVE'));
     if (!this.articleLines.length) {
         this.listFrame.gotoxy(1, 1);
         this.listFrame.putmsg('No content available.');
@@ -1727,21 +1731,21 @@ NewsReader.prototype._drawArticle = function () {
 };
 
 NewsReader.prototype._composeArticleStatus = function (article) {
-    var parts = ['UP/DOWN=scroll', 'LEFT/RIGHT=change'];
+    var parts = [];
     var pageSize = (typeof this._articleContentVisibleRows === 'number' && this._articleContentVisibleRows > 0)
         ? this._articleContentVisibleRows
         : (this.listFrame ? Math.max(1, this.listFrame.height - 1) : 1);
     var maxScroll = Math.max(0, this.articleLines.length - pageSize);
-    if (this.articleScroll < maxScroll) parts.push('ENTER=jump to end');
-    else parts.push('ENTER=next');
-    parts.push('BACKSPACE=previous');
-    parts.push('ESC=articles');
-    if (this.articleImages && this.articleImages.length) parts.push('I/i=images');
+    if (this.articleScroll < maxScroll) parts.push({ val: 'ENTER', action: 'jump to end' });
+    else parts.push({ val: 'RIGHT/ENTER', action: 'next' });
+    parts.push({ val: 'LEFT/BACKSPACE', action: 'previous' });
+    parts.push({ val: 'ESC', action: 'articles' });
+    if (this.articleImages && this.articleImages.length) parts.push({ val: 'I/i', action: 'images' });
     var link = article && article.link ? String(article.link).trim() : '';
     if (link || this._articleButtonHotkey) {
-        parts.push('R=read link');
+        parts.push({ val: 'R', action: 'read link' });
     }
-    return parts.join('  ');
+    return this._generateHotkeyLine(parts);
 };
 
 NewsReader.prototype._renderArticleLinkButton = function (article) {
@@ -1775,8 +1779,8 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
     var buttonY = baseline - 1;
     if (buttonY < 1) buttonY = 1;
     if (buttonY + 1 > this.articleHeaderFrame.height) buttonY = Math.max(1, this.articleHeaderFrame.height - 1);
-    var baseAttr = LIST_INACTIVE;
-    var focusAttr = this.paletteAttr('LIST_ACTIVE');
+    var baseAttr = this.paletteAttr('LIST_INACTIVE');
+    var focusAttr = this.paletteAttr('LINK_BUTTON');
     var fgRead = (typeof WHITE === 'number') ? WHITE : null;
     var buttonAttr = this._composeAttrWithFg(baseAttr, fgRead);
     var shadowFg = (typeof DARKGRAY === 'number') ? DARKGRAY : null;
@@ -1818,7 +1822,7 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
                 frame: this.articleLinkButtonFrame,
                 parentFrame: this.articleHeaderFrame,
                 label: 'Read Link',
-                attr: buttonAttr,
+                attr: WHITE | BG_CYAN,
                 focusAttr: focusAttr,
                 shadowAttr: shadowAttr,
                 backgroundColors: [RED, BG_RED],
@@ -1942,7 +1946,7 @@ NewsReader.prototype._renderArticleListWithDates = function () {
     this._articleListVisibleRows = height;
 
     this._ensureArticleScrollVisibility(height);
-    this._resetFrameSurface(frame, LIST_INACTIVE);
+    this._resetFrameSurface(frame, this.paletteAttr('LIST_INACTIVE'));
 
     var rowHotspots = [];
     if (!articles.length || height <= 0) {
@@ -1969,7 +1973,7 @@ NewsReader.prototype._renderArticleListWithDates = function () {
 
         if (shouldRenderDate && rowsRemaining > 0) {
             frame.gotoxy(1, row + 1);
-            var dividerAttr = this._composeAttrWithFg(LIST_INACTIVE, (typeof LIGHTMAGENTA === 'number') ? LIGHTMAGENTA : null);
+            var dividerAttr = this._composeAttrWithFg(this.paletteAttr('LIST_INACTIVE'), (typeof LIGHTMAGENTA === 'number') ? LIGHTMAGENTA : null);
             frame.attr = dividerAttr;
             var dividerText = this._toDisplayText(dateLabel);
             if (dividerText.length > frame.width) dividerText = dividerText.substr(0, frame.width);
@@ -2005,7 +2009,7 @@ NewsReader.prototype._renderArticleListWithDates = function () {
         };
 
         if (timeSegment && timeSegment.length) {
-            var timeAttr = this._composeAttrWithFg(baseAttr, (typeof MAGENTA === 'number') ? MAGENTA : null);
+            var timeAttr = this._composeAttrWithFg(baseAttr, this.paletteAttr('LIST_TIME'));
             writeSegment(timeSegment, timeAttr);
         }
         if (timeSegment && timeSegment.length && remaining > 0) {
@@ -2026,7 +2030,7 @@ NewsReader.prototype._renderArticleListWithDates = function () {
             writeSegment(']', bracketAttr);
         }
 
-        frame.attr = LIST_INACTIVE;
+        frame.attr = this.paletteAttr('LIST_INACTIVE');
 
         rowHotspots.push({ index: idx, y: row + 1 });
         row++;
@@ -2034,7 +2038,7 @@ NewsReader.prototype._renderArticleListWithDates = function () {
         lastKey = dateKey;
     }
 
-    frame.attr = LIST_INACTIVE;
+    frame.attr = this.paletteAttr('LIST_INACTIVE');
     this._registerListHotspots(rowHotspots);
 };
 
@@ -2111,7 +2115,7 @@ NewsReader.prototype._renderList = function (items, formatter) {
     var height = this.listFrame.height;
     if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
     if (this.selectedIndex >= this.scrollOffset + height) this.scrollOffset = Math.max(0, this.selectedIndex - height + 1);
-    this._resetFrameSurface(this.listFrame, LIST_INACTIVE);
+    this._resetFrameSurface(this.listFrame, this.paletteAttr('LIST_INACTIVE'));
     var rowHotspots = [];
     for (var row = 0; row < height; row++) {
         var idx = this.scrollOffset + row;
@@ -2124,7 +2128,7 @@ NewsReader.prototype._renderList = function (items, formatter) {
         this.listFrame.putmsg(line);
         rowHotspots.push({ index: idx, y: row + 1 });
     }
-    this.listFrame.attr = LIST_INACTIVE;
+    this.listFrame.attr = this.paletteAttr('LIST_INACTIVE');
     this._registerListHotspots(rowHotspots);
 };
 
@@ -2154,7 +2158,7 @@ NewsReader.prototype._setHeader = function (text) {
     if (!text) text = 'News';
     text = this._toDisplayText(text);
     if (text.length > this.headerFrame.width) text = text.substr(0, this.headerFrame.width);
-    this.headerFrame.putmsg(text);
+    this.headerFrame.center(text);
 };
 
 NewsReader.prototype._setStatus = function (text) {
@@ -2168,7 +2172,7 @@ NewsReader.prototype._refreshStatus = function () {
     if (!this.statusFrame) return;
     var text = this.statusMessage || '';
     text = this._toDisplayText(text);
-    if (text.length > this.statusFrame.width) text = text.substr(0, this.statusFrame.width);
+    // if (text.length > this.statusFrame.width) text = text.substr(0, this.statusFrame.width);
     this.statusFrame.clear();
     this.statusFrame.gotoxy(1, 1);
     this.statusFrame.putmsg(text);
@@ -2866,7 +2870,7 @@ NewsReader.prototype._ensureArticleIcon = function (options) {
     this._articleHeaderIconWidth = useIcon ? metrics.width : 0;
     this._articleHeaderHeight = containerHeight;
 
-    var bgRed = (typeof BG_RED === 'number') ? BG_RED : ((typeof RED === 'number') ? (RED << 4) : ((typeof LIST_ACTIVE === 'number') ? (LIST_ACTIVE & 0x70) : 0));
+    var bgRed = BG_RED;
     var fgBlack = (typeof BLACK === 'number') ? BLACK : 0;
     var containerAttr = bgRed | fgBlack;
 
@@ -2880,8 +2884,8 @@ NewsReader.prototype._ensureArticleIcon = function (options) {
         if (this.headerFrame && typeof this.headerFrame.clear === 'function') {
             try { this.headerFrame.clear(containerAttr); } catch (_eClrHdr) { }
         }
-        if (this.headerFrame && typeof this.headerFrame.putmsg === 'function') {
-            try { this.headerFrame.putmsg(''); } catch (_eHdrMsg) { }
+        if (this.headerFrame && typeof this.headerFrame.center === 'function') {
+            try { this.headerFrame.center(''); } catch (_eHdrMsg) { }
         }
         if (this.articleHeaderFrame && typeof this.articleHeaderFrame.clear === 'function') {
             try { this.articleHeaderFrame.clear(containerAttr); } catch (_eClrCont) { }
@@ -3123,12 +3127,15 @@ NewsReader.prototype._handleArticleNavigation = function (key) {
                 this.state = 'article_images';
                 this.imageSelection = 0;
                 this.imageScrollOffset = 0;
-                this._setStatus('ENTER=read article  BACKSPACE=articles');
+                var hotkeys = [{ val: 'ENTER', action: 'Read Article' }, { val: 'BACKSPACE', action: 'Articles' }];
+                var hint = this._generateHotkeyLine(hotkeys);
+                this._setStatus(hint);
                 this.draw();
             }
             break;
     }
 };
+
 
 NewsReader.prototype._returnToArticleListFromContent = function () {
     this._destroyArticleIcon();
@@ -3242,11 +3249,10 @@ NewsReader.prototype._openFeed = function (feed, forceRefresh) {
     if (data.timestamp) {
         statusParts.push('Loaded at ' + this._formatTimestamp(data.timestamp));
     }
-    statusParts.push('ENTER=view article');
-    statusParts.push('BACKSPACE=feeds');
-    statusText = statusParts.join(' | ');
+    var hotkeys = [{ val: 'ENTER', action: 'view article' }, { val: 'BACKSPACE', action: 'articles' }];
+    var hint = this._generateHotkeyLine(hotkeys);
     this.draw();
-    this._setStatus(statusText);
+    this._setStatus(hint);
 };
 
 NewsReader.prototype._openArticle = function (index, options) {
@@ -3279,7 +3285,9 @@ NewsReader.prototype._openArticle = function (index, options) {
         this.imageSelection = 0;
         this.imageScrollOffset = 0;
         this.scrollOffset = 0;
-        this._setStatus('ENTER=read article  BACKSPACE=articles');
+        var hotkeys = [{ val: 'ENTER', action: 'Read article' }, { val: 'BACKSPACE', action: 'articles' }];
+        var hint = this._generateHotkeyLine(hotkeys);
+        this._setStatus(hint);
         this.draw();
         return;
     }
@@ -3599,35 +3607,7 @@ NewsReader.prototype._formatTimestamp = function (ts) {
     }
 };
 
-NewsReader.prototype._renderCategories = function () {
-    // TODO: iterate through configured feeds and render a grid of icons. fallback to colored frame if no icon
-    // for our icon naming format, let's create a concatenated lowercase version prefixed by newsfeed_
-    // e.g. newsfeed_bbc_world_news
-    // icons should be the same size as everywhere else in the app (e.g. 12 x 6) [don't hardcode, use constants in shelllib.js or maybe config.js where we define it]
-    // use similar grid rendering and navigation logic to other areas of the app.
-    // icons use same loading mechanism and folder as everywhere else in the app, load bin, use ansi fallback
 
-}
 
-NewsReader.prototype._renderCategory = function (category) {
-    // TODO: iterate through configured feeds and filter by category, then render a list of feeds in that category, showing the icons
-    // user can select a feed to view articles from that feed
-    // use a fallback for icons
-    // icons should be the same size as everywhere else in the app (e.g. 12 x 6) [don't hardcode, use constants in shelllib.js or maybe config.js where we define it]
-    // icons use same loading mechanism and folder as everywhere else in the app, load bin, use ansi fallback
-    // If an RSS feed is broken or unreachable, we should indicate that in the UI, and then the user can hit a key to go back.
-}
-
-NewsReader.prototype._showArticles = function (feed) {
-    // TODO: for now we can implement as a simple list of article titles, user can select one to view more details
-    // using a lightbar or tree + mouse navigation would be useful though
-    // later we can implement pagination, article summaries, etc.
-}
-
-NewsReader.prototype._showArticle = function (article) {
-    // TODO: I want to implement this as a two phase view:
-    // 1. Show a summary view with the article title and a brief excerpt (I want to expand this later to include images + figlet if possible, but keep simple for now)
-    // 2. On selection, show the full article content
-};
 
 registerModuleExports({ NewsReader: NewsReader });

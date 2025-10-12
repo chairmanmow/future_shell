@@ -369,6 +369,19 @@ Subprogram.prototype._ensureHostFrame = function () {
     return this.hostFrame;
 };
 
+Subprogram.prototype._generateHotkeyLine = function (hotkeys) {
+    var text = '';
+    var self = this;
+    hotkeys.forEach(function (key) {
+        var hint = self.colorize('TEXT_HOTKEY', key.val) +
+            self.colorize('TEXT_NORMAL', '=') +
+            self.colorize('TEXT_BOLD', key.action);
+        if (text.length) text += '  ';
+        text += hint;
+    });
+    return text;
+}
+
 // Unified toast helper available to every subprogram.
 // Usage: this._showToast({ message:'Hello', timeout:5000, position:'bottom-right' })
 Subprogram.prototype._showToast = function (opts) {

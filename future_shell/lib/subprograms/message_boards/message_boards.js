@@ -830,44 +830,6 @@ MessageBoard.prototype._cancelFrameCycle = function () {
 
 MessageBoard.prototype._ensureFrames = function () {
     this._ensureHostFrame();
-    var targetCols = (typeof console !== 'undefined' && console && typeof console.screen_columns === 'number' && console.screen_columns > 0) ? console.screen_columns : null;
-    var targetRows = (typeof console !== 'undefined' && console && typeof console.screen_rows === 'number' && console.screen_rows > 0) ? console.screen_rows : null;
-    var resizeFrame = function (frame, cols, rows) {
-        if (!frame) return;
-        var changed = false;
-        if (cols && cols > 0 && frame.width !== cols) {
-            frame.width = cols;
-            changed = true;
-        }
-        if (rows && rows > 0 && frame.height !== rows) {
-            frame.height = rows;
-            changed = true;
-        }
-        if (!changed) return;
-        try { frame.cycle(); } catch (_resizeErr) { }
-    };
-    if (targetCols || targetRows) {
-        resizeFrame(this.parentFrame, targetCols, targetRows);
-        resizeFrame(this.hostFrame, targetCols, targetRows);
-    }
-    log('ensureFrames start', JSON.stringify({
-        hostFrame: this.hostFrame ? {
-            open: !!this.hostFrame.is_open,
-            x: this.hostFrame.x,
-            y: this.hostFrame.y,
-            width: this.hostFrame.width,
-            height: this.hostFrame.height
-        } : null,
-        parentFrame: this.parentFrame ? {
-            open: !!this.parentFrame.is_open,
-            x: this.parentFrame.x,
-            y: this.parentFrame.y,
-            width: this.parentFrame.width,
-            height: this.parentFrame.height
-        } : null,
-        view: this.view,
-        firstLaunch: !this._framesInitialized
-    }));
     if (this.frameSet) {
         this.frameSet.ensure();
         this._framesInitialized = true;
@@ -1340,11 +1302,10 @@ MessageBoard.prototype._changeGroup = function (group) {
 
 MessageBoard.prototype._renderCurrentView = function (view) {
     if (!view) view = this.view || 'group';
+
     var args = [];
     for (var i = 1; i < arguments.length; i++) args.push(arguments[i]);
     var controller = this._activateViewController(view, args);
-    this.titleFrame && this.titleFrame.clear();
-    this.titleFrame && this.titleFrame.center("Message Boards - " + view.toUpperCase());
     if (controller && typeof controller.enter === 'function') {
         this._navigationLock = true;
         try {
@@ -1362,6 +1323,14 @@ MessageBoard.prototype._renderThreadsView = function () {
         return controller.enter.apply(controller, arguments);
     }
     return undefined;
+};
+
+MessageBoard.prototype._renderTitleFrame = function () {
+    if (this.titleFrame) {
+        this.titleFrame.clear();
+        this.titleFrame.center("Message Boards - " + (this.view || 'group').toUpperCase());
+        this.titleFrame.cycle();
+    }
 };
 
 MessageBoard.prototype._openSubReader = function (subCode, options) {
@@ -2783,6 +2752,7 @@ MessageBoard.prototype._writeStatus = function (msg) {
     if (prefix && prefix.length) text = prefix + ' | ' + text;
     this.inputFrame.clear(this.paletteAttr('INPUT_FRAME')); this.inputFrame.home();
     this.inputFrame.putmsg(truncsp(text).substr(0, this.inputFrame.width));
+    this._renderTitleFrame();
 };
 
 MessageBoard.prototype._calcGridMetrics = function () {
