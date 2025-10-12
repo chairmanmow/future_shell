@@ -1,6 +1,7 @@
 if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
+try { load('future_shell/lib/shell/icon.js'); } catch (_) { }
 
 function Users(opts) {
     opts = opts || {};
@@ -68,7 +69,24 @@ function Users(opts) {
     this.avatarWidth = 10;
     this.avatarHeight = 6;
     this._avatarCache = {}; // usernum -> array lines
-
+    this._tileIconFrames = [];
+    this._currentTiles = [];
+    this.registerColors({
+        ICON: { BG: BG_BLACK, FG: LIGHTGRAY },
+        LIST: { BG: BG_BLACK, FG: WHITE },
+        LABEL_MUTED: { FG: LIGHTMAGENTA },
+        TEXT_TIME: { FG: LIGHTCYAN },
+        TEXT_RECENT: { FG: LIGHTRED },
+        TEXT_TOP: { FG: LIGHTMAGENTA },
+        TEXT_TOTAL: { FG: LIGHTBLUE },
+        HEADER_FRAME: { BG: BG_LIGHTGRAY, FG: BLACK },
+        MAIN_FRAME: { BG: BG_BLACK, FG: LIGHTGRAY },
+        FOOTER_FRAME: { BG: BG_LIGHTGRAY, FG: BLACK },
+        LIGHTBAR: { BG: BG_CYAN, FG: WHITE },
+        TEXT_HOTKEY: { FG: LIGHTCYAN },
+        TEXT_NORMAL: { FG: LIGHTGRAY },
+        TEXT_BOLD: { FG: LIGHTBLUE },
+    });
     // Planned UI additions:
     // - Grid tile layout (reusing logic style from WhoOnline but simplified for both all + online modes)
     // - Pagination when user count exceeds visible tile capacity (PgUp/PgDn)
@@ -154,28 +172,63 @@ Users.prototype._filterUsers = function () {
 
 Users.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
+    if (!this.headerFrame) {
+        this.headerFrame = new Frame(1, 1, this.parentFrame.width, 1, this.paletteAttr('HEADER_FRAME'), this.parentFrame); this.headerFrame.open();
+        this.registerFrame(this.headerFrame);
+    }
     if (!this.listFrame) {
         var h = Math.max(1, this.parentFrame.height - 1);
-        this.listFrame = new Frame(1, 1, this.parentFrame.width, h, ICSH_ATTR('USERS_LIST'), this.parentFrame); this.listFrame.open();
+        this.listFrame = new Frame(1, 2, this.parentFrame.width, h, this.paletteAttr('MAIN_FRAME'), this.parentFrame); this.listFrame.open();
         this.registerFrame(this.listFrame);
         this.listFrame.bottom();
         this.setBackgroundFrame(this.listFrame);
     }
     if (!this.statusFrame) {
-        this.statusFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, ICSH_ATTR('USERS_STATUS'), this.parentFrame); this.statusFrame.open();
+        this.statusFrame = new Frame(1, this.parentFrame.height + 1, this.parentFrame.width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame); this.statusFrame.open();
         this.registerFrame(this.statusFrame);
     }
 };
 
 Users.prototype._recomputeLayout = function () {
     if (!this.listFrame) { this.pageSize = 0; return; }
-    var tileH = (this.showAvatars ? this.avatarHeight : 1) + 2; // header + footer
-    var tileW = Math.max(this.avatarWidth, 10); // ensure min width for alias
-    var gap = 1;
-    var cols = Math.max(1, Math.floor((this.listFrame.width + gap) / (tileW + gap)));
-    var rows = Math.max(1, Math.floor(this.listFrame.height / tileH));
-    this._tileMeta = { tileH: tileH, tileW: tileW, gap: gap, cols: cols, rows: rows };
-    this.pageSize = cols * rows;
+    var topMargin = 1;   // gap below header frame
+    var bottomMargin = 1; // gap above status frame
+    var rowGap = 1;      // single blank row between tile rows
+    var headerHeight = 1;
+    var bodyHeight = Math.max(this.showAvatars ? this.avatarHeight : 1, 6); // 6 rows covers avatar or icon cells
+    var footerHeight = 1;
+    var innerTop = 0;
+    var innerBottom = 0;
+    var contentHeight = headerHeight + bodyHeight + footerHeight;
+    var avatarSpan = this.avatarWidth + 2;
+    var tileW = Math.max(avatarSpan, 12);
+    var horizontalGap = 1;
+
+    var cols = Math.max(1, Math.floor((this.listFrame.width + horizontalGap) / (tileW + horizontalGap)));
+    var usableHeight = Math.max(0, this.listFrame.height - topMargin - bottomMargin);
+    var stepHeight = contentHeight + rowGap;
+    var rows = Math.max(1, Math.floor((usableHeight + rowGap) / (stepHeight || 1)));
+    var slots = cols * rows;
+
+    this._tileMeta = {
+        tileHeight: contentHeight,
+        stepHeight: stepHeight,
+        tileW: tileW,
+        gap: horizontalGap,
+        cols: cols,
+        rows: rows,
+        slots: slots,
+        avatarSpan: avatarSpan,
+        topMargin: topMargin,
+        bottomMargin: bottomMargin,
+        rowGap: rowGap,
+        headerHeight: headerHeight,
+        bodyHeight: bodyHeight,
+        footerHeight: footerHeight,
+        innerTop: innerTop,
+        innerBottom: innerBottom
+    };
+    this.pageSize = Math.max(0, slots - 1);
 };
 
 Users.prototype._visibleUsers = function () {
@@ -183,8 +236,22 @@ Users.prototype._visibleUsers = function () {
     if (this.sortMode === 'L') list.sort(function (a, b) { return b.laston - a.laston; });
     else if (this.sortMode === 'N') list.sort(function (a, b) { var A = a.alias.toLowerCase(), B = b.alias.toLowerCase(); if (A > B) return 1; if (A < B) return -1; return 0; });
     this._sortedFiltered = list;
-    var start = this.page * this.pageSize;
-    return list.slice(start, start + this.pageSize);
+    var perPage = Math.max(0, this.pageSize);
+    if (!perPage) return [];
+    var start = this.page * perPage;
+    return list.slice(start, start + perPage);
+};
+
+Users.prototype._buildTiles = function (users) {
+    var tiles = [];
+    tiles.push({ type: 'back' });
+    for (var i = 0; i < users.length; i++) tiles.push({ type: 'user', user: users[i] });
+    return tiles;
+};
+
+Users.prototype._getTileAtIndex = function (index) {
+    if (!this._currentTiles || index < 0 || index >= this._currentTiles.length) return null;
+    return this._currentTiles[index];
 };
 
 Users.prototype.draw = function () {
@@ -192,52 +259,126 @@ Users.prototype.draw = function () {
     this._recomputeLayout();
     if (!this.listFrame) return;
     var lf = this.listFrame; lf.clear();
+    this._destroyTileIcons();
     var users = this._visibleUsers();
     this._hotspotMap = {};
     if (typeof console.clear_hotspots === 'function') try { console.clear_hotspots(); } catch (e) { }
-    for (var i = 0; i < users.length; i++) this._drawTile(i, users[i]);
+    var tiles = this._buildTiles(users);
+    var meta = this._tileMeta || { slots: tiles.length };
+    var maxTiles = meta.slots || tiles.length;
+    this._currentTiles = tiles.slice(0, maxTiles);
+    if (this.selectedIndex >= this._currentTiles.length) this.selectedIndex = Math.max(this._currentTiles.length - 1, 0);
+    if (this.selectedIndex < 0) this.selectedIndex = 0;
+    for (var i = 0; i < this._currentTiles.length && i < maxTiles; i++) {
+        this._drawTile(i, this._currentTiles[i]);
+    }
     this._drawStatus();
     try { lf.cycle(); } catch (e) { }
 };
 
-Users.prototype._drawTile = function (index, user) {
+Users.prototype._drawTile = function (index, tile) {
+    if (!tile) return;
     var meta = this._tileMeta; if (!meta) return;
     var lf = this.listFrame; if (!lf) return;
     var col = index % meta.cols; var row = Math.floor(index / meta.cols);
     var x = 1 + col * (meta.tileW + meta.gap);
-    var y = 1 + row * meta.tileH;
+    var yBase = 1 + (meta.topMargin || 0) + row * (meta.stepHeight || meta.tileHeight || 0);
+    var contentHeight = meta.tileHeight || 0;
+    if (contentHeight < 1) contentHeight = 1;
+    var innerTop = meta.innerTop || 0;
+    var innerBottom = meta.innerBottom || 0;
+    var headerHeight = meta.headerHeight || 0;
+    var bodyHeight = meta.bodyHeight || 0;
+    var footerHeight = meta.footerHeight || 0;
+    var headerY = yBase + innerTop;
+    var bodyStartY = headerY + headerHeight;
+    var footerY = bodyStartY + bodyHeight;
     var selected = (index === this.selectedIndex);
-    // Background block
-    for (var yy = 0; yy < meta.tileH; yy++) {
-        try { lf.gotoxy(x, y + yy); lf.putmsg('\x01' + (selected ? '4' : '0') + repeat(meta.tileW, ' ') + '\x01n'); } catch (e) { }
+    var tileW = meta.tileW;
+
+    var originalAttr = lf.attr;
+    var fallbackAttr = (typeof originalAttr === 'number') ? originalAttr : 0;
+    var listAttr = this.paletteAttr('LIST', fallbackAttr);
+    var selectedAttr = this.paletteAttr('LIGHTBAR', listAttr);
+    var tileAttr = selected ? selectedAttr : listAttr;
+    var blank = tileW > 0 ? repeat(tileW, ' ') : '';
+    var restoreAttr = false;
+    if (blank) {
+        lf.attr = tileAttr;
+        restoreAttr = true;
+        for (var yy = 0; yy < contentHeight; yy++) {
+            try {
+                lf.gotoxy(x, yBase + yy);
+                lf.putmsg(blank);
+            } catch (e) { }
+        }
     }
-    // Header line
+    if (restoreAttr) lf.attr = originalAttr;
+
+    if (tile.type === 'back') {
+        var iconWidth = 12;
+        var iconHeight = 6;
+        var iconAttr = this.paletteAttr('ICON') || (BG_BLACK | LIGHTGRAY);
+        var iconBg = iconAttr & 0xF0;
+        var iconFg = iconAttr & 0x0F;
+        var iconOffset = Math.max(0, Math.floor((tileW - iconWidth) / 2));
+        var iconX = lf.x + x - 1 + iconOffset;
+        var iconY = lf.y + bodyStartY - 2;
+        var iconFrame = new Frame(iconX, iconY, iconWidth, iconHeight, iconAttr, lf);
+        try { iconFrame.open(); } catch (e) { }
+        var labelFrame = new Frame(iconX, iconY + iconHeight + 1, iconWidth, 1, iconAttr, lf);
+        try { labelFrame.open(); } catch (e) { }
+        var iconData = { iconFile: 'back_red', label: 'Back', iconBg: iconBg, iconFg: iconFg };
+        try {
+            var iconObj = new Icon(iconFrame, labelFrame, iconData);
+            log(iconData.iconFile + " Rendering icon in Icon Frame size " + iconFrame.width + "x" + iconFrame.height + " at " + iconX + "," + iconY);
+            iconObj.render();
+            try { iconFrame.top(); } catch (_) { }
+            try { labelFrame.top(); } catch (_) { }
+        } catch (e) { }
+        this._tileIconFrames.push(iconFrame, labelFrame);
+
+        // Hotspots for back tile
+        if (typeof console.add_hotspot === 'function') {
+            var backCommands = ['0', 'B', 'b'];
+            for (var bc = 0; bc < backCommands.length; bc++) {
+                var cmdB = backCommands[bc];
+                for (var by = 0; by < iconHeight + 1; by++) {
+                    try { console.add_hotspot(cmdB, false, iconX, iconX + iconWidth - 1, iconY + by); } catch (e) { }
+                }
+                this._hotspotMap[cmdB] = index;
+            }
+        }
+        return;
+    }
+
+    var user = tile.user;
+    if (!user) return;
     var header = user.alias + ' #' + user.number;
-    if (header.length > meta.tileW) header = header.substr(0, meta.tileW);
-    try { lf.gotoxy(x, y); lf.putmsg((selected ? '\x01h' : '') + header + '\x01n'); } catch (e) { }
-    // Avatar area (lines y+1 .. y+avatarHeight)
+    if (header.length > tileW) header = header.substr(0, tileW);
+    try { lf.gotoxy(x, headerY); lf.putmsg((selected ? '\x01h' : '') + header + '\x01n'); } catch (e) { }
+
     if (this.showAvatars && this._avatarsEnabled) {
         try {
             var avatarLines = this._getAvatar(user) || [];
             if (avatarLines.length) {
-                // Assume first line is potential base64 bindata for attr-pair avatar
                 var base64Candidate = avatarLines[0];
-                this.putAvatarBindataIntoFrame(base64Candidate, lf, x, y + 1, avatarLines);
+                var avatarX = x + Math.max(0, Math.floor((tileW - this.avatarWidth) / 2));
+                this.putAvatarBindataIntoFrame(base64Candidate, lf, avatarX, headerY + 1, avatarLines);
             }
         } catch (e) {
-            log("Error drawing avatar for user #" + user.number + " " + user.alias + ": " + e);
+            try { log("Error drawing avatar for user #" + user.number + " " + user.alias + ": " + e); } catch (_) { }
         }
     }
-    // Footer (online badge / laston date)
-    var footerY = y + meta.tileH - 1;
+
     var footer = (user.online !== -1) ? '[ON]' : system.datestr(user.laston);
-    if (footer.length > meta.tileW) footer = footer.substr(0, meta.tileW);
+    if (footer.length > tileW) footer = footer.substr(0, tileW);
     try { lf.gotoxy(x, footerY); lf.putmsg((selected ? '\x01h' : '') + footer + '\x01n'); } catch (e) { }
-    // Hotspot mapping
+
     if (typeof console.add_hotspot === 'function' && index < 36) {
         var cmd = (index < 10) ? String(index) : String.fromCharCode('A'.charCodeAt(0) + (index - 10));
-        for (var yy2 = 0; yy2 < meta.tileH; yy2++) {
-            try { console.add_hotspot(cmd, false, x + lf.x - 1, x + lf.x + meta.tileW - 2, y + lf.y + yy2 - 1); } catch (e) { }
+        for (var yy2 = 0; yy2 < contentHeight; yy2++) {
+            try { console.add_hotspot(cmd, false, x + lf.x - 1, x + lf.x + tileW - 2, yBase + lf.y + yy2 - 1); } catch (e) { }
         }
         this._hotspotMap[cmd] = index;
     }
@@ -247,52 +388,41 @@ Users.prototype._drawStatus = function (msg) {
     if (!this.statusFrame) return;
     // Guard against uninitialized page/pageSize to prevent NaN
     if (typeof this.page !== 'number' || this.page < 0) this.page = 0;
-    if (!this.pageSize || isNaN(this.pageSize)) this.pageSize = (this._tileMeta ? this._tileMeta.cols * this._tileMeta.rows : 0) || 1;
+    var perPage = this.pageSize;
+    if (!perPage || isNaN(perPage)) {
+        var fallbackSlots = this._tileMeta ? this._tileMeta.slots || 1 : 1;
+        perPage = Math.max(1, fallbackSlots - 1);
+    }
     var total = this._sortedFiltered ? this._sortedFiltered.length : this.users.length;
-    var showingStart = this.page * this.pageSize + 1;
-    var showingEnd = Math.min(total, showingStart + this.pageSize - 1);
+    var showingStart = total ? (this.page * perPage + 1) : 0;
+    var showingEnd = Math.min(total, showingStart + perPage - 1);
     if (total === 0) { showingStart = 0; showingEnd = 0; }
     var info = (msg ? msg + '  ' : '') + 'Users ' + showingStart + '-' + showingEnd + '/' + total + '  Mode:' + this.whichUsers + '  Sort:' + (this.sortMode || '-') + '  Online:' + this.onlineUsers + '  (O=Toggle N=Name L=Last PgUp/PgDn=Page ENTER=Details Q=Quit)';
     if (info.length > this.statusFrame.width) info = info.substr(0, this.statusFrame.width);
     try { this.statusFrame.clear(); this.statusFrame.gotoxy(1, 1); this.statusFrame.putmsg(info); this.statusFrame.cycle(); } catch (e) { }
 };
 
+Users.prototype._destroyTileIcons = function () {
+    if (!this._tileIconFrames) return;
+    for (var i = 0; i < this._tileIconFrames.length; i++) {
+        try { this._tileIconFrames[i].close(); } catch (e) { }
+    }
+    this._tileIconFrames = [];
+    this._currentTiles = [];
+};
+
 // Simple repeat helper
 function repeat(n, ch) { var s = ''; while (n-- > 0) s += ch; return s; }
 
-Users.prototype.handleKey = function (k) {
-    if (!k) return;
-    if (this._hotspotMap && this._hotspotMap[k] !== undefined) { this.selectedIndex = this._hotspotMap[k]; this.draw(); return; }
-    switch (k) {
-        case '\x1B': case 'Q': case 'q': this.exit(); return;
-        case 'O': case 'o': this._toggleWhichUsers(); this.page = 0; this.selectedIndex = 0; this.draw(); return;
-        case 'N': case 'n': this.sortMode = 'N'; this.page = 0; this.selectedIndex = 0; this.draw(); return;
-        case 'L': case 'l': this.sortMode = 'L'; this.page = 0; this.selectedIndex = 0; this.draw(); return;
-        case KEY_LEFT: if (this.selectedIndex > 0) { this.selectedIndex--; this.draw(); } return;
-        case KEY_RIGHT: if (this.selectedIndex < Math.min(this.pageSize - 1, (this._visibleUsers().length - 1))) { this.selectedIndex++; this.draw(); } return;
-        case KEY_UP: {
-            var meta = this._tileMeta; if (!meta) return; var target = this.selectedIndex - meta.cols; if (target >= 0) { this.selectedIndex = target; this.draw(); } return;
-        }
-        case KEY_DOWN: {
-            var meta = this._tileMeta; if (!meta) return; var target = this.selectedIndex + meta.cols; if (target < Math.min(this.pageSize, this._visibleUsers().length)) { this.selectedIndex = target; this.draw(); } return;
-        }
-        case KEY_PGUP: if (this.page > 0) { this.page--; this.selectedIndex = 0; this.draw(); } return;
-        case KEY_PGDN: {
-            var total = this._sortedFiltered ? this._sortedFiltered.length : this._filterUsers().length;
-            var maxPage = total ? Math.floor((total - 1) / this.pageSize) : 0;
-            if (this.page < maxPage) { this.page++; this.selectedIndex = 0; this.draw(); }
-            return;
-        }
-        case '\r': case '\n': this._openModalForSelected(); return;
-    }
-};
-
 Users.prototype._openModalForSelected = function () {
-    var vis = this._visibleUsers();
-    if (!vis.length) return;
-    var u = vis[this.selectedIndex];
-    if (!u) return;
-    this._openModal(u);
+    var tile = this._getTileAtIndex(this.selectedIndex);
+    if (!tile) return;
+    if (tile.type === 'back') {
+        this.exit();
+        return;
+    }
+    if (!tile.user) return;
+    this._openModal(tile.user);
 };
 
 Users.prototype._openModal = function (user) {
@@ -417,27 +547,49 @@ Users.prototype.handleKey = function (k) {
 Users.prototype._handleMainKey = function (k) {
     if (!k) return;
     if (this._hotspotMap && this._hotspotMap[k] !== undefined) {
-        this.selectedIndex = this._hotspotMap[k];
+        var tilesHot = this._currentTiles || [];
+        var mapped = this._hotspotMap[k];
+        if (tilesHot.length) {
+            if (mapped >= tilesHot.length) mapped = tilesHot.length - 1;
+            if (mapped < 0) mapped = 0;
+        } else mapped = 0;
+        this.selectedIndex = mapped;
         this.draw();
-        // Auto-open modal for hotspot activation
         this._openModalForSelected();
         return;
     }
+    var tiles = this._currentTiles || [];
+    var tileCount = tiles.length;
+    var meta = this._tileMeta;
     switch (k) {
         case '\x1B': case 'Q': case 'q': this.exit(); return;
         case 'O': case 'o': this._toggleWhichUsers(); this.page = 0; this.selectedIndex = 0; this.draw(); return;
         case 'N': case 'n': this.sortMode = 'N'; this.page = 0; this.selectedIndex = 0; this.draw(); return;
         case 'L': case 'l': this.sortMode = 'L'; this.page = 0; this.selectedIndex = 0; this.draw(); return;
-        case KEY_LEFT: if (this.selectedIndex > 0) { this.selectedIndex--; this.draw(); } return;
-        case KEY_RIGHT: if (this.selectedIndex < Math.min(this.pageSize - 1, (this._visibleUsers().length - 1))) { this.selectedIndex++; this.draw(); } return;
+        case KEY_LEFT:
+            if (this.selectedIndex > 0) { this.selectedIndex--; this.draw(); }
+            return;
+        case KEY_RIGHT:
+            if (tileCount && this.selectedIndex < tileCount - 1) { this.selectedIndex++; this.draw(); }
+            return;
         case KEY_UP: {
-            var meta = this._tileMeta; if (!meta) return; var target = this.selectedIndex - meta.cols; if (target >= 0) { this.selectedIndex = target; this.draw(); } return;
+            if (!meta) return;
+            var target = this.selectedIndex - meta.cols;
+            if (target >= 0 && (!tileCount || target < tileCount)) { this.selectedIndex = target; this.draw(); }
+            return;
         }
         case KEY_DOWN: {
-            var meta = this._tileMeta; if (!meta) return; var target = this.selectedIndex + meta.cols; if (target < Math.min(this.pageSize, this._visibleUsers().length)) { this.selectedIndex = target; this.draw(); } return;
+            if (!meta) return;
+            var target = this.selectedIndex + meta.cols;
+            if (tileCount && target < tileCount) { this.selectedIndex = target; this.draw(); }
+            return;
         }
-        case KEY_PGUP: if (this.page > 0) { this.page--; this.selectedIndex = 0; this.draw(); } return;
+        case KEY_PGUP:
+            if (!this.pageSize) return;
+            if (this.page > 0) { this.page--; this.selectedIndex = 0; this.draw(); }
+            return;
         case KEY_PGDN: {
+            if (!this.pageSize) return;
             var total = this._sortedFiltered ? this._sortedFiltered.length : this._filterUsers().length;
             var maxPage = total ? Math.floor((total - 1) / this.pageSize) : 0;
             if (this.page < maxPage) { this.page++; this.selectedIndex = 0; this.draw(); }
@@ -449,10 +601,12 @@ Users.prototype._handleMainKey = function (k) {
 
 Users.prototype.cleanup = function () {
     if (typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch (e) { } }
+    this._destroyTileIcons();
     try { if (this.listFrame) this.listFrame.close(); } catch (e) { }
     try { if (this.statusFrame) this.statusFrame.close(); } catch (e) { }
+    try { if (this.headerFrame) this.headerFrame.close(); } catch (e) { }
     try { if (this.modal && this.modal.frame) this.modal.frame.close(); } catch (e) { }
-    this.listFrame = this.statusFrame = null; this.modal = null;
+    this.listFrame = this.statusFrame = null; this.modal = null; this.headerFrame = null;
     this._avatarCache = {};
     Subprogram.prototype.cleanup.call(this);
 };

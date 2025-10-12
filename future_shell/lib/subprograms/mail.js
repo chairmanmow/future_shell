@@ -676,8 +676,11 @@ Mail.prototype.drawIconGrid = function (o) {
 	this.updateUnreadCount();
 	var cellW = ICON_W + 2; // padding similar to main shell
 	var cellH = ICON_H + labelH + 1; // top/bottom padding
-	var cols = Math.max(1, Math.floor((o.width - 2) / cellW));
-	var maxIcons = cols * Math.max(1, Math.floor((o.height - 3) / cellH));
+    var topPadding = 1; // leave an extra blank row above the icon grid
+    var cols = Math.max(1, Math.floor((o.width - 2) / cellW));
+    var availableHeight = Math.max(0, o.height - (topPadding + 2));
+    var usableRows = Math.max(1, Math.floor(availableHeight / cellH));
+    var maxIcons = cols * usableRows;
 	var needRebuild = false;
 	if (!this.iconCells || this.iconCells.length === 0) needRebuild = true;
 	// Rebuild if column count changed or menu length changed
@@ -689,7 +692,7 @@ Mail.prototype.drawIconGrid = function (o) {
 			var col = i % cols;
 			var row = Math.floor(i / cols);
 			var x = (col * cellW) + 2;
-			var y = (row * cellH) + 1; // leave header row
+			var y = topPadding + (row * cellH) + 1;
 			if (y + ICON_H + labelH > o.height) break;
 			var opt = this.menuOptions[i];
 			var labelText = this.renderOptionLabel(opt, i);
@@ -716,7 +719,8 @@ Mail.prototype.drawIconGrid = function (o) {
 			this._drawMailLabel(cell.label, cell.item, j === this.selectedIndex);
 		} catch (e) { }
 	}
-	return { heightUsed: (Math.ceil(this.iconCells.length / cols) * cellH) + 3 };
+	var rowsUsed = Math.ceil(this.iconCells.length / cols);
+	return { heightUsed: topPadding + (rowsUsed * cellH) + 2 };
 };
 
 Mail.prototype._drawMailLabel = function (frame, item, isSelected) {

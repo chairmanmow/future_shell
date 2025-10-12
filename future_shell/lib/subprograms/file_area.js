@@ -120,6 +120,7 @@ FileArea.prototype._ensureFrames = function () {
         this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, la, this.parentFrame);
         this.listFrame.open();
         this.listFrame.word_wrap = false;
+        this.setBackgroundFrame(this.listFrame)
         if (typeof this.registerFrame === 'function') this.registerFrame(this.listFrame);
     }
 };
