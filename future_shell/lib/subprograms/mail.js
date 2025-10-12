@@ -76,7 +76,8 @@ function Mail(opts) {
 	Subprogram.call(this, { name: 'mail', parentFrame: opts.parentFrame, shell: opts.shell });
 	this.shell = opts.shell || this.shell; // preserve any provided shell reference
 	this.outputFrame = null;
-	this.inputFrame = null;
+	this.footerFrame = null;
+	this.headerFrame = null;
 	this.selectedIndex = 0;
 	this.lastMessage = '';
 	this.mode = 'icon'; // icon | confirm | promptRecipient
@@ -159,6 +160,22 @@ function Mail(opts) {
 	this.updateUnreadCount();
 	// icon cell cache
 	this.iconCells = [];
+	this.registerColors({
+		ICON: { BG: BG_BLACK, FG: LIGHTGRAY },
+		LIST: { BG: BG_RED, FG: BLACK },
+		LABEL_MUTED: { FG: LIGHTMAGENTA },
+		TEXT_TIME: { FG: LIGHTCYAN },
+		TEXT_RECENT: { FG: LIGHTRED },
+		TEXT_TOP: { FG: LIGHTMAGENTA },
+		TEXT_TOTAL: { FG: LIGHTBLUE },
+		HEADER_FRAME: { BG: BG_CYAN, FG: WHITE },
+		MAIN_FRAME: { BG: BG_BLACK, FG: LIGHTGRAY },
+		FOOTER_FRAME: { BG: BG_BLACK, FG: LIGHTCYAN },
+		LIGHTBAR: { BG: CYAN, FG: WHITE },
+		TEXT_HOTKEY: { FG: LIGHTCYAN },
+		TEXT_NORMAL: { FG: LIGHTGRAY },
+		TEXT_BOLD: { FG: LIGHTBLUE },
+	});
 }
 
 extend(Mail, Subprogram);
@@ -433,23 +450,27 @@ Mail.prototype._toastSent = function (dest) {
 Mail.prototype._ensureFrames = function () {
 	var host = this.hostFrame || this.parentFrame;
 	if (!host) return;
+	if (!this.headerFrame) {
+		this.headerFrame = new Frame(host.x, host.y, host.width, 1, this.paletteAttr('HEADER_FRAME'), host);
+		this.headerFrame.open();
+	}
 	if (!this.outputFrame) {
-		var h = Math.max(1, host.height - 1);
-		this.outputFrame = new Frame(host.x, host.y, host.width, h, BG_BLACK | LIGHTGRAY, host);
+		var h = Math.max(1, host.height - 2);
+		this.outputFrame = new Frame(host.x, host.y + 1, host.width, h, this.paletteAttr('MAIN_FRAME'), host);
 		this.outputFrame.open();
 		this.setBackgroundFrame(this.outputFrame);
 	}
-	if (!this.inputFrame) {
-		var inputY = host.y + host.height - 1;
+	if (!this.footerFrame) {
+		var inputY = host.height;
 		var parentForInput = host.parent || host;
-		this.inputFrame = new Frame(host.x, inputY, host.width, 1, BG_BLUE | WHITE, parentForInput);
-		this.inputFrame.open();
+		this.footerFrame = new Frame(host.x, inputY, host.width, 1, this.paletteAttr('FOOTER_FRAME'), parentForInput);
+		this.footerFrame.open();
 	}
 };
 
 Mail.prototype.draw = function () {
 	this._ensureFrames();
-	if (!this.outputFrame || !this.inputFrame) return;
+	if (!this.outputFrame || !this.footerFrame) return;
 	// Ensure our parent frame (and thus subprogram visuals) stays above shell folder frames
 	try { if (this.parentFrame && typeof this.parentFrame.top === 'function') this.parentFrame.top(); } catch (e) { }
 	var o = this.outputFrame; o.clear();
@@ -481,12 +502,13 @@ Mail.prototype.draw = function () {
 		o.putmsg('\r\nConfirm ' + (this.confirmFor.baseLabel || 'action') + '? (Y/N)\r\n');
 	}
 	this._drawInput();
+	this.headerFrame.center("Mail (" + (this.unreadCount || 0) + " new, " + (this.totalMailCount || 0) + " total)");
 	this.parentFrame.cycle();
 };
 
 Mail.prototype._drawInput = function () {
-	if (!this.inputFrame) return;
-	var f = this.inputFrame; f.clear(); f.gotoxy(1, 1);
+	if (!this.footerFrame) return;
+	var f = this.footerFrame; f.clear(); f.gotoxy(1, 1);
 	var prompt = '';
 	if (this.mode === 'promptRecipient') prompt = 'Type recipient, ENTER=send, ESC=cancel';
 	else if (this.mode === 'confirm') prompt = 'Y/N confirm';
@@ -799,10 +821,15 @@ Mail.prototype._cleanup = function () {
 		try { this.outputFrame.close(); } catch (_e2) { }
 		this.outputFrame = null;
 	}
-	if (this.inputFrame) {
-		try { this.inputFrame.clear(); } catch (_e3) { }
-		try { this.inputFrame.close(); } catch (_e4) { }
-		this.inputFrame = null;
+	if (this.footerFrame) {
+		try { this.footerFrame.clear(); } catch (_e3) { }
+		try { this.footerFrame.close(); } catch (_e4) { }
+		this.footerFrame = null;
+	}
+	if (this.headerFrame) {
+		try { this.headerFrame.clear(); } catch (_e6) { }
+		try { this.headerFrame.close(); } catch (_e7) { }
+		this.headerFrame = null;
 	}
 	if (this.parentFrame) {
 		try { this.parentFrame.cycle(); } catch (_e5) { }
