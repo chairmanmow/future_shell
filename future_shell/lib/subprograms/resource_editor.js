@@ -314,13 +314,8 @@ ResourceEditor.prototype._drawHeader = function () {
 };
 
 ResourceEditor.prototype._highlightAttr = function (attr) {
-    if (typeof attr !== 'number') return this.paletteAttr('CURSOR', BG_CYAN | BLACK);
-    var fg = attr & 0x0F;
-    var bg = attr & 0x70;
-    var blink = attr & 0x80;
-    var toggled = fg ^ 0x08;
-    if ((toggled & 0x0F) === fg) toggled = (fg + 1) & 0x07;
-    return bg | blink | (toggled & 0x0F);
+    if (typeof attr !== 'number') return attr;
+    return attr | 0x80;
 };
 
 ResourceEditor.prototype._drawCanvas = function () {
@@ -775,6 +770,11 @@ ResourceEditor.prototype._saveResource = function () {
 
 ResourceEditor.prototype._writeResource = function (path) {
     if (!path) return;
+    var file = new File(path);
+    if (file_exists(path)) {
+        this._updateStatus('File exists: ' + file_getname(path), 'error');
+        return;
+    }
     var ext = file_getext(path).toLowerCase();
     var success = false;
     if (ext === '.bin') success = this._writeBin(path);
@@ -953,10 +953,9 @@ ResourceEditor.prototype._resolvePath = function (input) {
     var trimmed = input.replace(/^\s+|\s+$/g, '');
     if (!trimmed.length) return null;
     if (trimmed.indexOf(':') !== -1 || trimmed.charAt(0) === '/' || trimmed.charAt(0) === '\\') return trimmed;
-    var base = system && system.mods_dir ? system.mods_dir : system.data_dir;
-    if (!base) base = '.';
+    var base = (system && system.data_dir) ? system.data_dir : '.';
     if (base.slice(-1) !== '/' && base.slice(-1) !== '\\') base += '/';
-    return base + 'future_shell/assets/' + trimmed;
+    return base + 'dirs/uploads/' + trimmed;
 };
 
 ResourceEditor.prototype._clearHotspots = function () {

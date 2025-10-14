@@ -762,7 +762,11 @@ Modal.prototype._makeButtonHandler = function (def) {
                 if (maybe === false) return;
             } catch (_) { }
         }
-        self._emit(def.value);
+        if (self.type === 'prompt') {
+            self._emit('submit');
+        } else {
+            self._emit(def.value);
+        }
     };
 };
 
