@@ -184,13 +184,13 @@ Users.prototype._ensureFrames = function () {
         this.registerFrame(this.headerFrame);
     }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 1);
+        var h = Math.max(1, this.parentFrame.height - 2);
         this.listFrame = new Frame(1, 2, this.parentFrame.width, h, this.paletteAttr('MAIN_FRAME'), this.parentFrame); this.listFrame.open();
         this.registerFrame(this.listFrame);
         this.listFrame.bottom();
     }
     if (!this.statusFrame) {
-        this.statusFrame = new Frame(1, this.parentFrame.height + 1, this.parentFrame.width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame); this.statusFrame.open();
+        this.statusFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame); this.statusFrame.open();
         this.registerFrame(this.statusFrame);
     }
 };

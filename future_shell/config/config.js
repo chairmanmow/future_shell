@@ -161,7 +161,7 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'sysopCommand',
 		loadFailureMessage: 'Failed loading sysop_commands.js ',
 		missingMessage: 'SysopCommand class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		options: function () { return { parentFrame: this.root, shell: this }; },
 		onReuse: function (instance) {
 			instance.parentFrame = this.root;
 			instance.shell = this;
@@ -175,7 +175,7 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'ircChatSub',
 		loadFailureMessage: 'Failed loading irc.js ',
 		missingMessage: 'IrcSection class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		options: function () { return { parentFrame: this.root, shell: this }; },
 		onReuse: function (instance) {
 			instance.parentFrame = this.root;
 			instance.shell = this;
@@ -199,7 +199,7 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'msgBoardSub',
 		loadFailureMessage: 'Failed loading message_boards.js ',
 		missingMessage: 'MessageBoard class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this, timer: this.timer }; },
+		options: function () { return { parentFrame: this.root, shell: this, timer: this.timer }; },
 		onReuse: function (instance) {
 			instance.parentFrame = this.root;
 			instance.shell = this;
@@ -213,33 +213,33 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'privateMsg',
 		loadFailureMessage: 'Failed loading private_msg.js ',
 		missingMessage: 'PrivateMsg class missing after load',
-		options: function () { return { parentFrame: this.subFrame }; },
+		options: function () { return { parentFrame: this.root }; },
 		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 		}
-	}),
+}),
 	users: new SubprogramActionHandler('Users', {
 		module: 'future_shell/lib/subprograms/users.js',
 		queueName: 'users',
 		instanceProperty: 'Users',
 		loadFailureMessage: 'Failed loading user_list.js ',
 		missingMessage: 'Users class missing after load',
-		options: function () { return { parentFrame: this.subFrame }; },
+		options: function () { return { parentFrame: this.root }; },
 		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 		}
-	}),
+}),
 	userlist: new SubprogramActionHandler('UserList', {
 		module: 'future_shell/lib/subprograms/user_list.js',
 		queueName: 'user-list',
 		instanceProperty: 'userList',
 		loadFailureMessage: 'Failed loading user_list.js ',
 		missingMessage: 'UserList class missing after load',
-		options: function () { return { parentFrame: this.subFrame }; },
+		options: function () { return { parentFrame: this.root }; },
 		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
-		}
-	}),
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
+	}
+}),
 	filearea: new SubprogramActionHandler('FileArea', {
 		module: 'future_shell/lib/subprograms/file_area.js',
 		queueName: 'file-area',
@@ -248,21 +248,21 @@ var BUILTIN_ACTIONS = {
 		missingMessage: 'FileArea class missing after load',
 		options: function () {
 			var icons = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.fileAreaIcons) ? ICSH_SETTINGS.fileAreaIcons : null;
-			return { parentFrame: this.subFrame, shell: this, iconMap: icons };
-		},
+			return { parentFrame: this.root, shell: this, iconMap: icons };
+	},
 		afterEnsure: function (instance, opts) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 			instance.shell = this;
-			if (typeof instance.setIconMap === 'function') instance.setIconMap(opts.iconMap);
-		}
-	}),
+		if (typeof instance.setIconMap === 'function') instance.setIconMap(opts.iconMap);
+	}
+}),
 	usage_viewer: new SubprogramActionHandler('UsageViewer', {
 		module: 'future_shell/lib/subprograms/usage-viewer.js',
 		queueName: 'usage-viewer',
 		instanceProperty: 'usageViewer',
 		loadFailureMessage: 'Failed loading usage-viewer.js ',
 		missingMessage: 'UsageViewer class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this, timer: this.timer }; },
+		options: function () { return { parentFrame: this.root, shell: this, timer: this.timer }; },
 		shouldCreateNew: function (instance) {
 			if (!instance) return false;
 			if (typeof UsageViewer !== 'undefined' && typeof UsageViewer.VERSION !== 'undefined') {
@@ -271,7 +271,7 @@ var BUILTIN_ACTIONS = {
 			return false;
 		},
 		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 			instance.shell = this;
 			instance.timer = this.timer;
 			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
@@ -283,13 +283,13 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'newsReaderSub',
 		loadFailureMessage: 'Failed loading newsreader.js ',
 		missingMessage: 'NewsReader class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this, timer: this.timer }; },
+		options: function () { return { parentFrame: this.root, shell: this, timer: this.timer }; },
 		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 			instance.shell = this;
 			instance.timer = this.timer;
 			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
-		}
+	}
 	}),
 	calendar: new SubprogramActionHandler('CalendarSub', {
 		module: 'future_shell/lib/subprograms/calendar.js',
@@ -297,10 +297,10 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'calendarSub',
 		loadFailureMessage: 'Failed loading calendar.js ',
 		missingMessage: 'CalendarSub class missing after load',
-		options: function () { return { parentFrame: this.subFrame }; },
+		options: function () { return { parentFrame: this.root }; },
 		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
-		}
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
+	}
 	}),
 	clock: new SubprogramActionHandler('ClockSub', {
 		module: 'future_shell/lib/subprograms/clock.js',
@@ -308,10 +308,10 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'clockSub',
 		loadFailureMessage: 'Failed loading clock.js ',
 		missingMessage: 'ClockSub class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		options: function () { return { parentFrame: this.root, shell: this }; },
 		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
-		}
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
+	}
 	}),
 	rawgate: new SubprogramActionHandler('RawGateSub', {
 		module: 'future_shell/lib/subprograms/rawgate.js',
@@ -319,10 +319,10 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'rawGateSub',
 		loadFailureMessage: 'Failed loading rawgate.js ',
 		missingMessage: 'RawGateSub class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		options: function () { return { parentFrame: this.root, shell: this }; },
 		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.subFrame);
-		}
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
+	}
 	}),
 	mail: new SubprogramActionHandler('Mail', {
 		module: 'future_shell/lib/subprograms/mail.js',
@@ -330,11 +330,11 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'mailSub',
 		loadFailureMessage: 'Failed loading mail.js ',
 		missingMessage: 'Mail class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		options: function () { return { parentFrame: this.root, shell: this }; },
 		onReuse: function (instance) {
-			instance.parentFrame = this.root;
+		instance.parentFrame = this.root;
 			instance.shell = this;
-		}
+	}
 	}),
 	sysinfo: new SubprogramActionHandler('SystemInfo', {
 		module: 'future_shell/lib/subprograms/system_info.js',
@@ -342,11 +342,11 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'systemInfoSub',
 		loadFailureMessage: 'Failed loading system_info.js ',
 		missingMessage: 'SystemInfo class missing after load',
-		options: function () { return { parentFrame: this.subFrame, shell: this }; },
+		options: function () { return { parentFrame: this.root, shell: this }; },
 		onReuse: function (instance) {
-			instance.parentFrame = this.root;
+		instance.parentFrame = this.root;
 			instance.shell = this;
-		}
+	}
 	}),
 	who_list: function () { dbug('subprogram', 'WhoOnline subprogram deprecated'); },
 };
@@ -761,6 +761,19 @@ var ICSH_DEFAULTS = {
 	// Generic modal surface (default background for all modal chrome unless overridden)
 	MODAL: { BG: BG_BLUE, FG: WHITE },
 	MODAL_FRAME: { BG: BG_BLUE, FG: WHITE },
+	MODAL_CONTENT: { BG: BG_BLACK, FG: LIGHTGRAY },
+	MODAL_TITLE: { BG: BG_BLUE, FG: WHITE },
+	MODAL_BUTTON: { BG: BG_BLUE, FG: WHITE },
+	MODAL_BUTTON_FOCUS: { BG: BG_BLUE, FG: WHITE },
+	MODAL_BUTTON_DISABLED: { BG: BG_BLUE, FG: LIGHTGRAY },
+	MODAL_OVERLAY: { BG: BG_BLACK, FG: BLACK },
+	MODAL_PROMPT_FRAME: { BG: BG_BLUE, FG: WHITE },
+	MODAL_PROMPT_CONTENT: { BG: BG_BLACK, FG: LIGHTGRAY },
+	MODAL_PROMPT_TITLE: { BG: BG_BLUE, FG: WHITE },
+	MODAL_PROMPT_BUTTON: { BG: BG_BLUE, FG: WHITE },
+	MODAL_PROMPT_BUTTON_FOCUS: { BG: BG_BLUE, FG: WHITE },
+	MODAL_PROMPT_BUTTON_DISABLED: { BG: BG_BLUE, FG: LIGHTGRAY },
+	MODAL_PROMPT_OVERLAY: { BG: BG_BLACK, FG: BLACK },
 	MODAL_LEFT_PANEL: { BG: BG_CYAN, FG: LIGHTGRAY },
 	MODAL_RIGHT_PANEL: { BG: BG_BLUE, FG: LIGHTGRAY },
 
@@ -1015,6 +1028,10 @@ function applyColorOverrides(defaults) {
 			var base = null, target = null;
 			if (upKey.indexOf('.') !== -1) {
 				var parts = upKey.split('.');
+				if (parts.length > 2) {
+					applyNamespaceOverride(trimmed, value);
+					continue;
+				}
 				base = parts[0]; target = parts[1];
 			} else if (/_(BG|FG|COLOR)$/.test(upKey)) {
 				var suffixBg = /_BG$/;

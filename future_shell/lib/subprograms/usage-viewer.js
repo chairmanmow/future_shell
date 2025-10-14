@@ -10,6 +10,7 @@ require('sbbsdefs.js',
 );
 
 try { if (typeof Icon !== 'function') load('future_shell/lib/shell/icon.js'); } catch (e) { }
+try { if (typeof Button !== 'function') load('future_shell/lib/util/layout/button.js'); } catch (e) { }
 
 if (typeof KEY_UP === 'undefined') var KEY_UP = 0x4800;
 if (typeof KEY_DOWN === 'undefined') var KEY_DOWN = 0x5000;
@@ -81,6 +82,8 @@ function UsageViewer(opts) {
     // User filter state (null = no filter)
     this._userFilter = null; // user key from usage DB
     this._userFilterAlias = null; // cached alias
+    this._backButton = null;
+    this._backButtonHotkey = '\x1B';
 }
 extend(UsageViewer, Subprogram);
 UsageViewer.VERSION = USAGE_VIEWER_VERSION;
@@ -104,6 +107,10 @@ UsageViewer.prototype.setParentFrame = function (frame) {
     this.headerFrame = null;
     this.footerFrame = null;
     this._clearProgramResources();
+    this._registerBackButtonFrame();
+    if (this._backButton) {
+        try { this._backButton.render(); } catch (_eBtnRe) { }
+    }
 };
 
 UsageViewer.prototype.enter = function (done) {
@@ -311,8 +318,10 @@ UsageViewer.prototype.ensureFrames = function () {
         }
     }
     if (!this.listFrame) {
+        var h = Math.max(1, this.parentFrame.height - 2);
+
         var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
-        this.listFrame = new Frame(host.x, 2, width, listHeight, attr, host);
+        this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, this.paletteAttr('CONTENT_FRAME'), this.hostFrame || this.parentFrame);
 
         this.listFrame.open();
         this.registerFrame(this.listFrame);
@@ -328,7 +337,8 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.headerFrame) {
         var attr = this.paletteAttr('HEADER_FRAME') || (BG_BLUE | LIGHTGRAY);
-        this.headerFrame = new Frame(host.x, 1, width, Math.max(1, detailHeight), attr, host);
+        this.headerFrame = new Frame(this.parentFrame.x, this.parentFrame.y,
+            this.parentFrame.width, 1, attr, this.hostFrame || this.parentFrame);
         try { this.headerFrame.open(); } catch (eDF) { }
         this.registerFrame(this.headerFrame);
     }
@@ -342,8 +352,7 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.footerFrame) {
         var footerAttr = this.paletteAttr('FOOTER_FRAME') || (BG_BLUE | LIGHTGRAY);
-        var footerY = host.y + host.height - detailHeight;
-        this.footerFrame = new Frame(host.x, footerY, width, Math.max(1, detailHeight), footerAttr, host);
+        this.footerFrame = new Frame(this.parentFrame.x, this.parentFrame.height, this.parentFrame.width, 1, footerAttr, this.hostFrame || this.parentFrame);
         try { this.footerFrame.open(); } catch (eFF) { }
         this.registerFrame(this.footerFrame);
     }
@@ -358,9 +367,11 @@ UsageViewer.prototype.draw = function () {
     var lf = this.listFrame;
     lf.attr = BG_BLACK | LIGHTGRAY;
     lf.clear(BG_BLACK | LIGHTGRAY);
-    lf.gotoxy(1, 2);
-    // Header (line 1 & 2)
-    lf.clear(BG_BLACK | LIGHTGRAY);
+    var headerStartX = this._ensureBackButton();
+    if (!this._backButton) headerStartX = 1;
+    if (headerStartX < 1) headerStartX = 1;
+    if (headerStartX > lf.width) headerStartX = lf.width;
+    var headerMaxWidth = Math.max(0, lf.width - headerStartX + 1);
     var current = this.months[this.index] || { month: 'All Time', count: 0, seconds: 0, programs: [] };
     // Prepare filtered program list early for header counts
     var rawProgsForHeader = (current.programs || []).slice(0);
@@ -413,10 +424,7 @@ UsageViewer.prototype.draw = function () {
     else if (this._sortMode === 'unique') sortColor = this.colorCode('SORT_UNIQUE') || sortColor;
     var sortLabel = (this._sortMode === 'unique') ? 'uniquePlayers' : this._sortMode;
 
-    var headerParts = [];
-    headerParts.push(monthNav);
     var sortLabelPrefix = this.colorize('LABEL_MUTED', 'Sort:', { reset: true });
-    headerParts.push(sortLabelPrefix + ' ' + sortColor + sortLabel + this.colorReset());
     var displayLaunches = current.count;
     var displaySeconds = current.seconds;
     if (this._userFilter) {
@@ -432,23 +440,35 @@ UsageViewer.prototype.draw = function () {
             }
         }
     }
-    headerParts.push('Launches ' + displayLaunches);
-    headerParts.push('Time ' + this._formatDuration(displaySeconds));
-    headerParts.push('Programs ' + rawProgsForHeader.length);
-    if (this._categoryFilter) headerParts.push('Cat:' + this._categoryFilter);
-    if (this._userFilterAlias) headerParts.push('User ' + this._userFilterAlias);
-    var header1 = headerParts.join('  ');
-    if (header1.length > lf.width) header1 = header1.substr(0, lf.width);
-    try { lf.gotoxy(1, 2); lf.putmsg(header1 + '\x01n'); } catch (_) { }
-    // Dynamic help line: show user filter state inline.
-    // Color legend: \x01m = magenta, \x01w = white/gray, \x01h = high intensity, \x01n = reset
+    var sortDescriptor = sortLabelPrefix + ' ' + sortColor + sortLabel + this.colorReset();
+    var filterParts = [];
+    filterParts.push(monthNav);
+    filterParts.push(sortDescriptor);
+    if (this._categoryFilter) filterParts.push('Cat:' + this._categoryFilter);
     var userStateLabel = this._userFilterAlias ? this._userFilterAlias : 'All Users';
-    // Surround variable user label with light magenta (high + magenta) for emphasis
-    var help2 = '\x01h\x01mU\x01n=\x01h\x01m' + userStateLabel + '\x01n  S=Sort  C=Cat  R=Reload  ENTER=Launch';
-    if (help2.length > lf.width) help2 = help2.substr(0, lf.width);
-    try { lf.gotoxy(1, 3); lf.putmsg(help2 + '\x01n'); } catch (_) { }
+    var userIndicator = '\x01h\x01mU\x01n=\x01h\x01m' + userStateLabel + this.colorReset();
+    filterParts.push(userIndicator);
+    var filterLineFull = filterParts.join('  ');
+    this._renderHeaderFrameForState(filterLineFull);
+    var filterLine = filterLineFull;
+    if (headerMaxWidth > 0 && filterLine.length > headerMaxWidth) filterLine = filterLine.substr(0, headerMaxWidth);
+    if (headerMaxWidth > 0) {
+        try { lf.gotoxy(headerStartX, 2); lf.putmsg(filterLine + '\x01n'); } catch (_) { }
+    }
+    var dataParts = [];
+    dataParts.push('Launches ' + displayLaunches);
+    dataParts.push('Time ' + this._formatDuration(displaySeconds));
+    dataParts.push('Programs ' + rawProgsForHeader.length);
+    var dataLineFull = dataParts.join('  ');
+    var dataLine = dataLineFull;
+    if (headerMaxWidth > 0 && dataLine.length > headerMaxWidth) dataLine = dataLine.substr(0, headerMaxWidth);
+    var dataRow = (lf.height >= 4) ? 4 : null;
+    if (dataRow !== null && headerMaxWidth > 0) {
+        try { lf.gotoxy(headerStartX, dataRow); lf.putmsg(dataLine + '\x01n'); } catch (_) { }
+    }
     // Stylized icon block rendering (restored)
-    var startRow = 5; // after two header lines
+    var startRow = (dataRow !== null) ? dataRow + 2 : 5; // leave breathing room below help
+    if (startRow > lf.height) startRow = lf.height;
     var availableRows = lf.height - (startRow - 1);
     if (availableRows < 1) availableRows = 1;
     this._sortPrograms(current.programs);
@@ -496,7 +516,9 @@ UsageViewer.prototype.draw = function () {
         this.programIndex = 0;
         this.programTop = 0;
         // Show a simple message when nothing is available
-        try { lf.gotoxy(1, startRow); lf.putmsg(this.colorizeShared('WARNING', '(No accessible icon programs)')); } catch (_m) { }
+        var msgX = Math.min(headerStartX, lf.width);
+        try { lf.gotoxy(msgX, startRow); lf.putmsg(this.colorizeShared('WARNING', '(No accessible icon programs)')); } catch (_m) { }
+        this._registerBackButtonHotspot();
         try { lf.cycle(); } catch (_mc) { }
         return;
     }
@@ -532,7 +554,16 @@ UsageViewer.prototype.draw = function () {
         this._drawProgramBlock(lf, y, blockHeightAdjusted, prog, idx, hotspots, vis);
     }
     this._programHotspots = hotspots;
+    if (this._backButton && this._backButton.frame) {
+        if (typeof this._backButton.frame.top === 'function') {
+            try { this._backButton.frame.top(); } catch (_eBtnTop) { }
+        }
+        if (typeof this._backButton.frame.cycle === 'function') {
+            try { this._backButton.frame.cycle(); } catch (_eBtnCycle) { }
+        }
+    }
     this._drawDetail();
+    this._registerBackButtonHotspot();
     try { lf.cycle(); } catch (_c) { }
 
 };
@@ -594,11 +625,13 @@ UsageViewer.prototype._formatMonthLine = function (item) {
 };
 
 UsageViewer.prototype._drawDetail = function () {
-    if (!this.headerFrame) return;
-    this.headerFrame.center("Top Programs");
     var hotkeys = [{ val: "LEFT/RIGHT", action: "Timeframe" }, { val: "S", action: "Sort" }, { val: "U", action: "User filter" }, { val: "ESC", action: "Exit" }];
-    this.footerFrame.center(this._generateHotkeyLine(hotkeys));
-    this.hostFrame.cycle();
+    if (this.footerFrame) {
+        try { this.footerFrame.center(this._generateHotkeyLine(hotkeys)); } catch (_eFooterCenter) { }
+    }
+    if (this.hostFrame && typeof this.hostFrame.cycle === 'function') {
+        try { this.hostFrame.cycle(); } catch (_eHostCycle) { }
+    }
 };
 
 UsageViewer.prototype._formatDuration = function (seconds) {
@@ -633,7 +666,8 @@ UsageViewer.prototype.handleKey = function (key) {
         }
     }
     switch (key) {
-        case '\x1B': case 'Q': case 'q': this.exit(); return;
+        case '\x1B': this._activateBackButton(); return;
+        case 'Q': case 'q': this.exit(); return;
         case 'R': case 'r': this._loadData(); this.draw(); return;
         case 'S': case 's': this._cycleSort(); this.draw(); return;
         case 'C': case 'c': this._cycleCategory(); this.draw(); return;
@@ -771,7 +805,164 @@ UsageViewer.prototype.cleanup = function () {
     if (this.headerFrame) { try { this.headerFrame.close(); } catch (e) { } }
     if (this.footerFrame) { try { this.footerFrame.close(); } catch (e) { } }
     this.listFrame = this.headerFrame = this.footerFrame = null;
+    this._destroyBackButton();
     Subprogram.prototype.cleanup.call(this);
+};
+
+UsageViewer.prototype._destroyBackButton = function () {
+    if (this._backButton) {
+        if (this._backButton.frame && this._myFrames) {
+            var idx = this._myFrames.indexOf(this._backButton.frame);
+            if (idx !== -1) this._myFrames.splice(idx, 1);
+        }
+        try { this._backButton.destroy(); } catch (e) { }
+    }
+    this._backButton = null;
+};
+
+UsageViewer.prototype._registerBackButtonFrame = function () {
+    if (!this._backButton || !this._backButton.frame) return;
+    var frame = this._backButton.frame;
+    if (frame.parent !== this.listFrame) frame.parent = this.listFrame;
+    if (typeof frame.open === 'function') {
+        try {
+            if (!frame.is_open) frame.open();
+        } catch (_eOpenBtn) { }
+    }
+    if (Array.isArray(this._myFrames) && this._myFrames.indexOf(frame) === -1) {
+        this.registerFrame(frame);
+    }
+};
+
+UsageViewer.prototype._renderHeaderFrameForState = function (text) {
+    if (!this.headerFrame) return;
+    var msg = text || '';
+    var maxWidth = this.headerFrame.width || msg.length || 0;
+    if (maxWidth > 0 && msg.length > maxWidth) msg = msg.substr(0, maxWidth);
+    try { this.headerFrame.clear(this.headerFrame.attr); } catch (_eClearHeader) { }
+    try {
+        // this.headerFrame.gotoxy(1, 1);
+        // this.headerFrame.putmsg(msg + '\x01n');
+        this.headerFrame.center("Top Programs");
+    } catch (_eHeaderPut) { }
+};
+
+UsageViewer.prototype._ensureBackButton = function () {
+    if (!this.listFrame || this.listFrame.width < 6 || this.listFrame.height < 2) {
+        this._destroyBackButton();
+        return 1;
+    }
+    var parent = this.listFrame;
+    var x = 2;
+    var baseY = Math.min(2, Math.max(1, parent.height - 1));
+    var y = Math.min(parent.height - 1, baseY + 1);
+    var availableWidth = Math.max(0, parent.width - x + 1);
+    if (availableWidth < 6) {
+        this._destroyBackButton();
+        return 1;
+    }
+    var longLabel = 'Back (ESC)';
+    var shortLabel = 'Back';
+    var label = (availableWidth >= 14) ? longLabel : shortLabel;
+    var desiredWidth = Math.max(8, label.length + 4);
+    if (desiredWidth > availableWidth) desiredWidth = Math.max(6, Math.min(availableWidth, label.length + 2));
+    var buttonAttr = ((typeof BG_MAGENTA !== 'undefined' ? BG_MAGENTA : 0) | (typeof YELLOW !== 'undefined' ? YELLOW : 14));
+    var maskFg = (typeof BLACK !== 'undefined' ? BLACK : 0);
+    var maskBg = (typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0);
+    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
+    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
+    var focusAttr = buttonAttr;
+    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    var self = this;
+    var clickHandler = function () { self.exit(); };
+
+    if (!this._backButton) {
+        try {
+            this._backButton = new Button({
+                parentFrame: parent,
+                x: x,
+                y: y,
+                width: desiredWidth,
+                label: label,
+                attr: buttonAttr,
+                focusAttr: focusAttr,
+                shadowAttr: shadowAttr,
+                backgroundColors: [BLACK, BG_BLACK],
+                shadowColors: [shadowFg, shadowBg],
+                onClick: clickHandler
+            });
+            this._backButton.setFocused(false);
+            this._registerBackButtonFrame();
+        } catch (e) {
+            this._destroyBackButton();
+            return 1;
+        }
+    } else {
+        if (!this._backButton.frame) {
+            this._destroyBackButton();
+            return this._ensureBackButton();
+        }
+        this._backButton.parentFrame = parent;
+        this._backButton.attr = buttonAttr;
+        this._backButton.focusAttr = focusAttr;
+        this._backButton.shadowAttr = shadowAttr;
+        this._backButton.backgroundColors = [maskFg, maskBg];
+        this._backButton.shadowColors = [shadowFg, shadowBg];
+        this._backButton.setOnClick(clickHandler);
+        this._backButton.setLabel(label);
+        this._backButton.width = desiredWidth;
+        this._backButton.height = 2;
+        var frame = this._backButton.frame;
+        if (frame) {
+            if (typeof frame.moveTo === 'function') {
+                try { frame.moveTo(x, y); } catch (_) { frame.x = x; frame.y = y; }
+            } else {
+                frame.x = x; frame.y = y;
+            }
+            frame.width = desiredWidth;
+            frame.height = 2;
+            frame.parent = parent;
+        }
+        this._registerBackButtonFrame();
+        this._backButton.render();
+    }
+    var headerStart = x + desiredWidth + 2;
+    if (headerStart > parent.width) headerStart = parent.width;
+    return Math.max(1, headerStart);
+};
+
+UsageViewer.prototype._activateBackButton = function () {
+    if (this._backButton && typeof this._backButton.press === 'function') {
+        this._backButton.press();
+    } else {
+        this.exit();
+    }
+};
+
+UsageViewer.prototype._resolveAbsoluteRect = function (frame) {
+    if (!frame || typeof frame.x !== 'number' || typeof frame.y !== 'number') return null;
+    var x = frame.x;
+    var y = frame.y;
+    var p = frame.parent;
+    while (p) {
+        x += (p.x || 1) - 1;
+        y += (p.y || 1) - 1;
+        p = p.parent;
+    }
+    return { x: x, y: y, w: frame.width || 0, h: frame.height || 0 };
+};
+
+UsageViewer.prototype._registerBackButtonHotspot = function () {
+    if (!this._backButton || !this._backButton.frame) return;
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    var rect = this._resolveAbsoluteRect(this._backButton.frame);
+    if (!rect) return;
+    var key = this._backButtonHotkey || '\x1B';
+    var startY = Math.max(1, rect.y - 2);
+    var endY = startY + rect.h - 1;
+    for (var row = startY; row <= endY; row++) {
+        try { console.add_hotspot(key, false, rect.x, rect.x + rect.w - 1, row); } catch (e) { }
+    }
 };
 
 UsageViewer.prototype._clearProgramResources = function () {

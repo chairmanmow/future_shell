@@ -1463,19 +1463,20 @@ NewsReader.prototype._ensureFrames = function () {
         if (typeof this.registerFrame === 'function') this.registerFrame(this.headerFrame);
         this._headerDefaultAttr = this.headerFrame.attr;
     }
-    if (!this.statusFrame) {
-        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.y + this.parentFrame.height, this.parentFrame.width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame);
-        this.statusFrame.open();
-        if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
-    }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 1);
+        var h = Math.max(1, this.parentFrame.height - 2);
         this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, this.paletteAttr('CONTENT_FRAME'), this.parentFrame);
         this.listFrame.open();
         this.listFrame.word_wrap = true;
         this.setBackgroundFrame(this.listFrame)
         if (typeof this.registerFrame === 'function') this.registerFrame(this.listFrame);
     }
+    if (!this.statusFrame) {
+        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.height, this.parentFrame.width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame);
+        this.statusFrame.open();
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
+    }
+
 };
 
 NewsReader.prototype.draw = function () {

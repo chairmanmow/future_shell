@@ -15,5 +15,6 @@
 	"json-client.js",
 	"json-chat.js",
 	"future_shell/lib/util/layout/modal.js",
+	"future_shell/lib/util/layout/gradient.js",
 	"future_shell/lib/util/lazy.js"
 ]);

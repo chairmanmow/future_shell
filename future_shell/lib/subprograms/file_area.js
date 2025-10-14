@@ -108,14 +108,8 @@ FileArea.prototype._ensureFrames = function () {
         this.headerFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.headerFrame);
     }
-    if (!this.statusFrame) {
-        var sa = this.paletteAttr('STATUS_ATTR');
-        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.y + this.parentFrame.height, this.parentFrame.width, 1, sa, this.parentFrame);
-        this.statusFrame.open();
-        if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
-    }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 1);
+        var h = Math.max(1, this.parentFrame.height - 2);
         var la = this.paletteAttr('LIST_INACTIVE');
         this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, la, this.parentFrame);
         this.listFrame.open();
@@ -123,6 +117,13 @@ FileArea.prototype._ensureFrames = function () {
         this.setBackgroundFrame(this.listFrame)
         if (typeof this.registerFrame === 'function') this.registerFrame(this.listFrame);
     }
+    if (!this.statusFrame) {
+        var sa = this.paletteAttr('STATUS_ATTR');
+        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.height, this.parentFrame.width, 1, sa, this.parentFrame);
+        this.statusFrame.open();
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
+    }
+
 };
 
 FileArea.prototype._cleanup = function () {

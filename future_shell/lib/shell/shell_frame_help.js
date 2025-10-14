@@ -114,7 +114,7 @@ IconShell.prototype.moveSelection = function(dx, dy) {
 
     // Efficient repaint: only redraw the whole folder if scrollOffset changed (i.e., scrolled)
     if (this.scrollOffset !== oldScrollOffset) {
-        this.drawFolder();
+        this.drawFolder({ skipHeaderRefresh: true });
     } else if (this.selection !== oldSelection) {
         // Only repaint the old and new selection
         var oldIdx = oldSelection - this.scrollOffset;

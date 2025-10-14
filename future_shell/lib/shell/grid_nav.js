@@ -153,7 +153,8 @@ IconShell.prototype.changeFolder = function (targetFolder, options) {
     // Model A: changeFolder never draws; caller must call drawFolder() once.
 };
 
-IconShell.prototype.drawFolder = function () {
+IconShell.prototype.drawFolder = function (options) {
+    var opts = (options && typeof options === 'object') ? options : {};
     // If a subprogram is active, skip drawing the folder grid to avoid overwriting its frames.
     if (this.activeSubprogram && this.activeSubprogram.running) {
         dbug('drawFolder() skipped due to active subprogram: ' + (this.activeSubprogram.name || '?'), 'drawFolder');
@@ -162,7 +163,16 @@ IconShell.prototype.drawFolder = function () {
     dbug('selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, "drawFolder");
     this._closePreviousFrames();
     this._clearHotspots();
-    this.view.clear(ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG);
+    var fallbackHeader = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var fallbackView = ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    var fallbackCrumb = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var fallbackMouseOn = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var fallbackMouseOff = ((typeof BG_RED !== 'undefined' ? BG_RED : (4 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var viewAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('VIEW', fallbackView) : fallbackView;
+    if (this.view) {
+        try { this.view.attr = viewAttr; this.view.clear(viewAttr); } catch (e) { dbug('view clear error: ' + e, 'theme'); }
+    }
+    if (!opts.skipHeaderRefresh) this._refreshHeaderFrame();
     var names = [];
     for (var i = 0; i < this.stack.length; i++) names.push(this.stack[i].label || "Untitled");
     // Recreate crumb and mouse indicator frames to fit screen
@@ -174,14 +184,16 @@ IconShell.prototype.drawFolder = function () {
     if (this.crumb && typeof this.crumb.close === 'function') this.crumb.close();
     if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') this.mouseIndicator.close();
     // Create crumb frame (left)
-    this.crumb = new Frame(1, this.root.height, crumbWidth, 1, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.root);
+    var crumbAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CRUMB', fallbackCrumb) : fallbackCrumb;
+    this.crumb = new Frame(1, this.root.height, crumbWidth, 1, crumbAttr, this.root);
     this.crumb.open();
-    this.crumb.clear(ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG);
+    this.crumb.clear(crumbAttr);
     this.crumb.home();
     // Create mouse indicator frame (right)
     var mouseX = crumbWidth + 1;
     var mouseY = this.root.height;
-    this.mouseIndicator = new Frame(mouseX, mouseY, mouseIndicatorWidth, 1, ICSH_VALS.MOUSE_ON.BG | ICSH_VALS.MOUSE_ON.FG, this.root);
+    var mouseAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('MOUSE_ON', fallbackMouseOn) : fallbackMouseOn;
+    this.mouseIndicator = new Frame(mouseX, mouseY, mouseIndicatorWidth, 1, mouseAttr, this.root);
     this.mouseIndicator.open();
     this._updateMouseIndicator();
     var node = this.stack[this.stack.length - 1];
@@ -203,10 +215,9 @@ IconShell.prototype.drawFolder = function () {
     }
     this.assignViewHotkeys(items);
     this._decorateMailIcons(items);
-    var iconW = 12, iconH = 6, labelH = 1, cellW = iconW + 2, cellH = iconH + labelH + 1;
-    var topMargin = 1;
-    var cols = Math.max(1, Math.floor(this.view.width / cellW));
-    var rows = Math.max(1, Math.floor(Math.max(0, this.view.height - topMargin) / cellH));
+    var dims = this._calculateGridDimensions(this.view);
+    var cols = dims.cols;
+    var rows = dims.maxRows;
     var maxIcons = cols * rows;
     this._clampSelection(items);
     this._adjustScroll(items, cols, maxIcons);
@@ -224,9 +235,11 @@ IconShell.prototype.drawFolder = function () {
 IconShell.prototype._updateMouseIndicator = function () {
     if (!this.mouseIndicator) return;
     var isActive = !!this.mouseActive;
-    var vals = isActive ? ICSH_VALS.MOUSE_ON : ICSH_VALS.MOUSE_OFF;
-    this.mouseIndicator.attr = vals.BG | vals.FG;
-    this.mouseIndicator.clear();
+    var fallbackOn = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var fallbackOff = ((typeof BG_RED !== 'undefined' ? BG_RED : (4 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var attr = (typeof this.paletteAttr === 'function') ? this.paletteAttr(isActive ? 'MOUSE_ON' : 'MOUSE_OFF', isActive ? fallbackOn : fallbackOff) : (isActive ? fallbackOn : fallbackOff);
+    this.mouseIndicator.attr = attr;
+    this.mouseIndicator.clear(attr);
     this.mouseIndicator.gotoxy(1, 1);
     // Always write exactly 10 chars, pad if needed; prefix with a space for visual gap
     var msg = isActive ? "MOUSE ON" : "MOUSE OFF";
@@ -260,6 +273,9 @@ IconShell.prototype._shelveFolderFrames = function () {
         if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') this.mouseIndicator.close();
         // Clear primary view surface (avoid leaving stale glyphs behind the subprogram)
         if (this.view && typeof this.view.clear === 'function') this.view.clear();
+        if (this.headerFrame && typeof this.headerFrame.clear === 'function') {
+            try { this.headerFrame.clear(); this.headerFrame.home(); } catch (e) { }
+        }
         // Null out grid so recreateFramesIfNeeded knows to rebuild later
         this.grid = null;
         this._folderShelved = true;
@@ -273,7 +289,10 @@ IconShell.prototype._clearHotspots = function () {
 
 IconShell.prototype._drawBreadcrumb = function (names, selectedNum, total) {
     if (!this.crumb) return;
-    this.crumb.clear(ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG);
+    var fallbackCrumb = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var crumbAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CRUMB', fallbackCrumb) : fallbackCrumb;
+    this.crumb.attr = crumbAttr;
+    this.crumb.clear(crumbAttr);
     this.crumb.gotoxy(1, 1);
 
     var userNumber = (typeof user !== 'undefined' && typeof user.number === 'number') ? user.number : 0;
@@ -497,7 +516,8 @@ IconShell.prototype._calculateGridDimensions = function (parentFrame) {
     var cellW = iconW + 2;
     var cellH = iconH + labelH + 1; // single-row vertical gap between icon rows
     var topMargin = 1;
-    var usableHeight = Math.max(0, parentFrame.height - topMargin);
+    var offsetY = 1; // leave a blank row above the grid
+    var usableHeight = Math.max(0, parentFrame.height - topMargin - offsetY);
     var cols = Math.max(1, Math.floor(parentFrame.width / cellW));
     var maxRows = Math.max(1, Math.floor(usableHeight / cellH));
     return {
@@ -508,7 +528,8 @@ IconShell.prototype._calculateGridDimensions = function (parentFrame) {
         cellH: cellH,
         cols: cols,
         maxRows: maxRows,
-        topMargin: topMargin
+        topMargin: topMargin,
+        offsetY: offsetY
     };
 };
 
@@ -516,7 +537,7 @@ IconShell.prototype._createIconCell = function (i, dims, items, parentFrame, Ico
     var col = i % dims.cols;
     var row = Math.floor(i / dims.cols);
     var x = (col * dims.cellW) + 2;
-    var y = (row * dims.cellH) + 1 + (dims.topMargin || 0);
+    var y = (row * dims.cellH) + 1 + (dims.topMargin || 0) + (dims.offsetY || 0);
     // If this is a placeholder (padding cell), don't create visible frames.
     // Preserve a cell object so selection math & hotspots (which skip placeholders) still work.
     if (items[i] && items[i].isPlaceholder) {
@@ -534,7 +555,9 @@ IconShell.prototype._createIconCell = function (i, dims, items, parentFrame, Ico
     }
     var iconFrame = new Frame(x, y, dims.iconW, dims.iconH, iconAttr, parentFrame);
     iconFrame.transparent = true;
-    var labelFrame = new Frame(x, y + dims.iconH, dims.iconW, dims.labelH, ICSH_ATTR('FRAME_STANDARD'), parentFrame);
+    var fallbackFrameAttr = ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    var frameAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('FRAME_STANDARD', fallbackFrameAttr) : fallbackFrameAttr;
+    var labelFrame = new Frame(x, y + dims.iconH, dims.iconW, dims.labelH, frameAttr, parentFrame);
     var iconObj = new Icon(iconFrame, labelFrame, items[i], i == 0);
     iconObj.render();
     return { icon: iconFrame, label: labelFrame, item: items[i], iconObj: iconObj };
@@ -558,9 +581,9 @@ IconShell.prototype.paintIcon = function (cell, selected, invert) {
     }
 
     // Highlight label if selected
-    var labelAttr = selected
-        ? (ICSH_VALS.SELECTED.BG | ICSH_VALS.SELECTED.FG)
-        : (ICSH_VALS.LABEL.BG | ICSH_VALS.LABEL.FG);
+    var fallbackLabelAttr = ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    var fallbackSelectedAttr = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var labelAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr(selected ? 'SELECTED' : 'LABEL', selected ? fallbackSelectedAttr : fallbackLabelAttr) : (selected ? fallbackSelectedAttr : fallbackLabelAttr);
     cell.label.clear(labelAttr);
     cell.label.home();
     var segments = item._labelSegments && item._labelSegments.length ? item._labelSegments : null;

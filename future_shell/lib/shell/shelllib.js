@@ -4,6 +4,44 @@ var ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
 try { load('future_shell/lib/effects/screensaver.js'); } catch (e) { }
 // Performance instrumentation (optional)
 try { load('future_shell/lib/util/perf.js'); } catch (e) { }
+try { load('future_shell/lib/subprograms/subprogram.js'); } catch (e) { }
+
+var SHELL_COLOR_DEFAULTS = {
+    ROOT: { BG: (typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0), FG: (typeof WHITE !== 'undefined' ? WHITE : 7) },
+    VIEW: { BG: (typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0), FG: (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7) },
+    CRUMB: { BG: BG_BLACK, FG: WHITE },
+    HEADER_BAR: { BG: BG_BLACK, FG: WHITE },
+    STATUS_BAR: { BG: BG_BLACK, FG: WHITE },
+    MOUSE_ON: { BG: BG_BLACK, FG: WHITE },
+    MOUSE_OFF: { BG: BG_BLACK, FG: WHITE },
+    FRAME_STANDARD: { BG: BG_BLACK, FG: WHITE },
+    LABEL: { BG: BG_BLACK, FG: WHITE },
+    SELECTED: { BG: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)), FG: (typeof WHITE !== 'undefined' ? WHITE : 7) }
+};
+(function () {
+    if (typeof Subprogram !== 'function') return;
+    if (typeof IconShell.registerColors !== 'function') IconShell.registerColors = Subprogram.registerColors;
+    if (typeof IconShell.getColors !== 'function') IconShell.getColors = Subprogram.getColors;
+    var colorMethods = [
+        'registerColors',
+        'resolveColor',
+        'colorPalette',
+        'paletteAttr',
+        'colorReset',
+        'colorCode',
+        'colorCodeNamespace',
+        'colorCodeShared',
+        'colorize',
+        'colorizeNamespace',
+        'colorizeShared'
+    ];
+    for (var i = 0; i < colorMethods.length; i++) {
+        var key = colorMethods[i];
+        if (typeof IconShell.prototype[key] !== 'function' && typeof Subprogram.prototype[key] === 'function') {
+            IconShell.prototype[key] = Subprogram.prototype[key];
+        }
+    }
+})();
 
 // IconShell prototype extensions for member logic
 // Run time logic
@@ -13,6 +51,10 @@ IconShell.prototype.init = function () {
     // === Instance state ===
     // Main root frame hierarchy (root/view/crumb)
     var initialDims = this._getConsoleDimensions();
+    if (!this.themeNamespace) this.themeNamespace = 'shell';
+    if (typeof this.registerColors === 'function') {
+        try { this.registerColors(SHELL_COLOR_DEFAULTS, 'shell'); } catch (e) { dbug('shell registerColors error: ' + e, 'theme'); }
+    }
     this._createShellFrames(initialDims);
     // Ensure view id generator exists BEFORE assigning any _viewId
     if (typeof this.generateViewId !== 'function') {
@@ -313,6 +355,9 @@ IconShell.prototype._disposeShellFrames = function () {
     if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') {
         try { this.mouseIndicator.close(); } catch (e) { }
     }
+    if (this.headerFrame && typeof this.headerFrame.close === 'function') {
+        try { this.headerFrame.close(); } catch (e) { }
+    }
     if (this.crumb && typeof this.crumb.close === 'function') {
         try { this.crumb.close(); } catch (e) { }
     }
@@ -325,24 +370,63 @@ IconShell.prototype._disposeShellFrames = function () {
     this.mouseIndicator = null;
     this.crumb = null;
     this.view = null;
+    this.headerFrame = null;
     this.root = null;
     this.grid = null;
     this.subFrame = null;
+};
+
+IconShell.prototype._refreshHeaderFrame = function () {
+    if (!this.headerFrame) return;
+    try {
+        var headerAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('HEADER_BAR', ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7))) : ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+        var headerText = (system && system.name) ? ' ' + String(system.name) + ' ' : '';
+        this.headerFrame.attr = headerAttr;
+        this.headerFrame.clear(headerAttr);
+        this.headerFrame.home();
+        var width = this.headerFrame.width || headerText.length || 1;
+        log('setting header gradient wtf');
+        if (typeof Gradient !== 'undefined' && Gradient && typeof Gradient.get === 'function') {
+            try {
+                var gtype = 'ocean';
+                // var gt_copy = JSON.parse(JSON.stringify(gtype));
+                //var gradientFill = Gradient.get(gtype, width, 'both', { glyph: "shade", fgIndex: 4, bgIndex: 2 });
+                //var gradientFill = Gradient.getHalf('cyber', width, 'both');
+                // var gradientFill = Gradient.getMix('futureland', width, 'l');
+                var gradientFill = Gradient.stringPad(headerText, width, "both", { type: "random", glyph: "mix" })
+                this.headerFrame.gotoxy(1, 1);
+                this.headerFrame.putmsg(gradientFill);
+                log('applied header gradient');
+            } catch (gErr) { dbug('header gradient error: ' + gErr, 'theme'); }
+        }
+        this.headerFrame.cycle();
+    } catch (e) { dbug('header refresh error: ' + e, 'theme'); }
 };
 
 IconShell.prototype._createShellFrames = function (dims) {
     dims = dims || this._getConsoleDimensions();
     var cols = Math.max(1, dims.cols);
     var rows = Math.max(1, dims.rows);
-    this.root = new Frame(1, 1, cols, rows, ICSH_VALS.ROOT.BG | ICSH_VALS.ROOT.FG);
+    var fallbackRoot = ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var fallbackView = ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    var fallbackCrumb = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var fallbackHeader = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var rootAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('ROOT', fallbackRoot) : fallbackRoot;
+    this.root = new Frame(1, 1, cols, rows, rootAttr);
     this.root.open();
-    var viewH = Math.max(1, rows - 1);
-    this.view = new Frame(1, 1, cols, viewH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.root);
+    var headerAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('HEADER_BAR', fallbackHeader) : fallbackHeader;
+    this.headerFrame = new Frame(1, 1, cols, 1, headerAttr, this.root);
+    this.headerFrame.open();
+    var viewH = Math.max(1, rows - 2);
+    var viewAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('VIEW', fallbackView) : fallbackView;
+    this.view = new Frame(1, 2, cols, viewH, viewAttr, this.root);
     this.view.open();
     var crumbY = rows;
     if (crumbY < 1) crumbY = 1;
-    this.crumb = new Frame(1, crumbY, cols, 1, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.root);
+    var crumbAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CRUMB', fallbackCrumb) : fallbackCrumb;
+    this.crumb = new Frame(1, crumbY, cols, 1, crumbAttr, this.root);
     this.crumb.open();
+    this._refreshHeaderFrame();
     this.subFrame = this.view;
     this.mouseIndicator = null;
     if (typeof console !== 'undefined' && typeof console.mouse_mode !== 'undefined') {

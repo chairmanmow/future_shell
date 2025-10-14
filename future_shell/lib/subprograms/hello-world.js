@@ -1,14 +1,14 @@
 // Hello World demo subprogram to validate Subprogram framework.
 // Behavior:
-// 1. Shows greeting and asks for name.
-// 2. Mirrors keystrokes in input frame until ENTER.
-// 3. Greets user by name and prompts to press any key to exit.
-// 4. ESC at any time aborts immediately.
+// 1. Opens a modal prompt asking for the user's name.
+// 2. Greets the user with the supplied name inside the primary frame.
+// 3. Pressing any key after the greeting (or Cancel/ESC in the prompt) exits.
 
 load("future_shell/lib/subprograms/subprogram.js");
 if (typeof registerModuleExports !== 'function') {
 	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
+try { if (typeof Modal !== 'function') load('future_shell/lib/util/layout/modal.js'); } catch (_) { }
 
 function HelloWorld(opts) {
 	log("HELLO WORLD CONSTRUCTOR 2");
@@ -20,6 +20,7 @@ function HelloWorld(opts) {
 	this._mode = 'asking'; // 'asking' | 'greeted'
 	this.outputFrame = null;
 	this.inputFrame = null;
+	this._promptModal = null;
 	this.registerColors({
 		OUTPUT: { BG: BG_RED, FG: WHITE },
 		INPUT: { BG: BG_RED, FG: WHITE },
@@ -32,6 +33,7 @@ extend(HelloWorld, Subprogram);
 HelloWorld.prototype.enter = function (done) {
 	Subprogram.prototype.enter.call(this, done);
 	this.draw();
+	this._showNamePrompt();
 };
 
 HelloWorld.prototype._ensureFrames = function () {
@@ -47,6 +49,34 @@ HelloWorld.prototype._ensureFrames = function () {
 		this.inputFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, inputAttr, this.parentFrame);
 		this.inputFrame.open();
 	}
+};
+
+HelloWorld.prototype._showNamePrompt = function () {
+	var self = this;
+	if (this._promptModal && this._promptModal._open) return;
+	this._promptModal = new Modal({
+		parentFrame: this.parentFrame,
+		type: 'prompt',
+		title: 'Hello',
+		message: 'What is your name?',
+		defaultValue: this._nameBuffer,
+		initialFocus: 'input',
+		okLabel: 'OK',
+		cancelLabel: 'Cancel',
+		onSubmit: function (value) {
+			self._nameBuffer = (value || '').trim();
+			self._mode = 'greeted';
+			self.draw();
+			self._promptModal = null;
+		},
+		onCancel: function () {
+			self._promptModal = null;
+			self.exit();
+		},
+		onClose: function () {
+			self._promptModal = null;
+		}
+	});
 };
 
 HelloWorld.prototype.draw = function () {
@@ -77,9 +107,9 @@ HelloWorld.prototype._drawInput = function () {
 	this.inputFrame.clear(inputAttr);
 	this.inputFrame.home();
 	if (this._mode === 'asking') {
-		var prompt = '> ' + this._nameBuffer;
+		var prompt = '[ Respond in the modal prompt ]';
 		if (prompt.length > this.inputFrame.width) {
-			prompt = prompt.substr(prompt.length - this.inputFrame.width);
+			prompt = prompt.substr(0, this.inputFrame.width);
 		}
 		this.inputFrame.attr = this.paletteAttr('PROMPT', inputAttr);
 		this.inputFrame.putmsg(prompt);
@@ -93,35 +123,20 @@ HelloWorld.prototype._drawInput = function () {
 HelloWorld.prototype._handleKey = function (key) {
 	// ESC always exits
 	if (key === '\x1B') { this.exit(); return; }
-	if (this._mode === 'asking') {
-		if (key === '\r' || key === '\n') {
-			this._mode = 'greeted';
-			this.draw();
-			return;
-		}
-		// Backspace handling (ASCII 8 or 127)
-		if (key === '\x08' || key === '\x7F') {
-			if (this._nameBuffer.length) {
-				this._nameBuffer = this._nameBuffer.substr(0, this._nameBuffer.length - 1);
-				this._drawInput();
-			}
-			return;
-		}
-		// Filter printable characters
-		if (key && key.length === 1 && key >= ' ' && key <= '~') {
-			// Basic length limit to avoid overflow
-			if (this._nameBuffer.length < 64) {
-				this._nameBuffer += key;
-				this._drawInput();
-			}
-		}
-	} else if (this._mode === 'greeted') {
-		// Any key exits
+	if (this._mode === 'greeted') {
 		this.exit();
+		return;
+	}
+	if (!this._promptModal || !this._promptModal._open) {
+		this._showNamePrompt();
 	}
 };
 
 HelloWorld.prototype._cleanup = function () {
+	if (this._promptModal) {
+		try { this._promptModal.close(); } catch (e) { }
+		this._promptModal = null;
+	}
 	try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
 	try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
 	this._resetState();
@@ -132,6 +147,7 @@ HelloWorld.prototype._resetState = function () {
 	this._mode = 'asking'; // 'asking' | 'greeted'
 	this.outputFrame = null;
 	this.inputFrame = null;
-}
+	this._promptModal = null;
+};
 
 registerModuleExports({ HelloWorld: HelloWorld });

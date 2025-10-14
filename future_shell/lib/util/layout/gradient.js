@@ -1,189 +1,560 @@
-/* ansi_gradient.js — tiny helpers for 16/256/truecolor ANSI gradients.
-   Works with Synchronet's JS (ancient SpiderMonkey). No dependencies. */
+/* ansi_gradient.js — 16-color gradient helpers for Synchronet BBS
+   Adds: full/space/half/shade/mix render modes (CP437 only)
+   by Futureland 2025
+*/
 
 var Gradient = (function () {
-    // ---- SGR builders ----
-    function sgr() {
-        var args = Array.prototype.slice.call(arguments);
-        return "\x1b[" + args.join(";") + "m";
-    }
-    var RESET = sgr(0);
+    var RESET = "\x01n";
 
-    // Map simple 16-color fg/bg (0–7 normal, 8–15 bright)
-    var FG16 = [30, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93, 94, 95, 96, 97];
-    var BG16 = [40, 41, 42, 43, 44, 45, 46, 47];
+    // Foreground / Background Ctrl-A lookups
+    var FG_CTRL = {
+        0: "\x01k", 1: "\x01b", 2: "\x01g", 3: "\x01c",
+        4: "\x01r", 5: "\x01m", 6: "\x01y", 7: "\x01w",
+        8: "\x01h\x01k", 9: "\x01h\x01b", 10: "\x01h\x01g", 11: "\x01h\x01c",
+        12: "\x01h\x01r", 13: "\x01h\x01m", 14: "\x01h\x01y", 15: "\x01h\x01w"
+    };
+    var BG_CTRL = {
+        0: "\x010", 1: "\x011", 2: "\x012", 3: "\x013",
+        4: "\x014", 5: "\x015", 6: "\x016", 7: "\x017"
+    };
 
-    function fg16(idx) { return sgr(FG16[idx & 15]); }
-    function bg16(idx) { return sgr(BG16[idx & 7]); }
+    // CP437 glyphs
+    var GLYPH_FULL = "\xDB"; // █
+    var GLYPH_HALF = "\xDF"; // ▀
+    var GLYPH_SPACE = " ";
+    var SHADE_LIGHT = "\xB0"; // ░
+    var SHADE_MED = "\xB1"; // ▒
+    var SHADE_DARK = "\xB2"; // ▓
 
-    // 256-color fg/bg
-    function fg256(i) { return "\x1b[38;5;" + (i | 0) + "m"; }
-    function bg256(i) { return "\x1b[48;5;" + (i | 0) + "m"; }
+    // Coverage map for shade blending (mix mode)
+    var SHADE_TABLE = [
+        { glyph: SHADE_LIGHT, alpha: 0.25 },
+        { glyph: SHADE_MED, alpha: 0.50 },
+        { glyph: SHADE_DARK, alpha: 0.75 },
+        { glyph: GLYPH_FULL, alpha: 1.00 }
+    ];
 
-    // truecolor fg/bg
-    function fgRGB(r, g, b) { return "\x1b[38;2;" + (r | 0) + ";" + (g | 0) + ";" + (b | 0) + "m"; }
-    function bgRGB(r, g, b) { return "\x1b[48;2;" + (r | 0) + ";" + (g | 0) + ";" + (b | 0) + "m"; }
+    var PRESETS = {
+        // --- your originals ---
+        sunset: [[255, 94, 58], [255, 149, 5], [255, 210, 0]],
+        ocean: [[0, 64, 128], [0, 160, 192], [0, 224, 224]],
+        cyber: [[255, 0, 128], [64, 0, 255], [0, 255, 255]],
+        mono: [[30, 30, 30], [220, 220, 220]],
+        futureland: [[0, 255, 180], [0, 120, 255], [140, 0, 255]],
 
-    // Utility: clamp and lerp
+        // --- warm / sky ---
+        sunrise: [[255, 102, 0], [255, 153, 51], [255, 221, 128]],
+        dusk: [[64, 0, 128], [128, 0, 96], [255, 128, 64]],
+        twilight: [[20, 30, 60], [90, 60, 120], [255, 160, 90]],
+        ember: [[64, 0, 0], [192, 32, 0], [255, 160, 40]],
+        fire: [[255, 0, 0], [255, 128, 0], [255, 255, 0]],
+        lava: [[80, 0, 0], [220, 32, 0], [255, 96, 0], [255, 200, 80]],
+
+        // --- cool / aurora / ice ---
+        aurora: [[0, 255, 128], [0, 180, 255], [120, 0, 255]],
+        glacier: [[200, 240, 255], [140, 200, 255], [60, 120, 200]],
+        ice: [[220, 240, 255], [180, 220, 255], [140, 200, 255]],
+        deep_sea: [[0, 20, 40], [0, 90, 140], [0, 160, 200]],
+        teal_wave: [[0, 120, 120], [0, 180, 160], [0, 220, 200]],
+
+        // --- greens / nature ---
+        forest: [[10, 40, 10], [20, 100, 40], [80, 160, 80]],
+        jungle: [[0, 80, 20], [40, 140, 40], [140, 220, 100]],
+        spring: [[120, 200, 120], [170, 230, 150], [220, 255, 200]],
+        moss: [[40, 60, 20], [80, 120, 40], [140, 180, 80]],
+
+        // --- earth / sand / autumn ---
+        desert: [[210, 170, 100], [230, 190, 120], [250, 210, 150]],
+        sandstorm: [[180, 140, 80], [210, 170, 100], [240, 200, 120]],
+        canyon: [[120, 60, 30], [180, 90, 50], [220, 140, 100]],
+        autumn: [[170, 60, 20], [220, 120, 40], [240, 200, 80]],
+
+        // --- pastels / candy ---
+        pastel_dreams: [[255, 200, 220], [200, 220, 255], [200, 255, 230]],
+        cotton_candy: [[255, 160, 200], [200, 180, 255], [160, 220, 255]],
+        sakura: [[255, 182, 193], [255, 214, 220], [255, 240, 245]],
+        watermelon: [[30, 150, 80], [180, 40, 60], [250, 180, 190]],
+        mint: [[180, 255, 220], [130, 230, 200], [90, 200, 180]],
+        lavender: [[160, 120, 200], [190, 150, 230], [220, 190, 255]],
+
+        // --- neon / synthwave / vapor ---
+        vaporwave: [[255, 128, 192], [128, 128, 255], [128, 255, 255]],
+        synthwave: [[255, 64, 160], [255, 120, 64], [255, 240, 96]],
+        neon: [[0, 255, 64], [64, 0, 255], [255, 0, 255]],
+        nightclub: [[0, 0, 0], [160, 0, 160], [255, 0, 96]],
+
+        // --- metals ---
+        silver: [[170, 170, 170], [210, 210, 210], [240, 240, 240]],
+        steel: [[100, 110, 120], [150, 160, 170], [200, 210, 220]],
+        gold: [[170, 120, 20], [220, 170, 40], [255, 220, 80]],
+        copper: [[140, 80, 40], [180, 110, 60], [220, 150, 80]],
+        bronze: [[110, 80, 40], [150, 110, 60], [190, 150, 80]],
+
+        // --- primaries / brights ---
+        primary: [[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+        candy: [[255, 64, 64], [255, 128, 64], [255, 64, 200]],
+        citrus: [[255, 160, 0], [255, 220, 0], [180, 255, 40]],
+        berry: [[120, 0, 140], [200, 40, 160], [255, 120, 200]],
+        sky: [[120, 180, 255], [80, 140, 255], [40, 100, 220]],
+
+        // --- darks / noir ---
+        noir: [[0, 0, 0], [60, 60, 60], [140, 140, 140]],
+        midnight: [[0, 0, 20], [20, 20, 60], [60, 80, 120]],
+        space: [[0, 0, 0], [10, 10, 30], [40, 40, 100]],
+
+        // --- fun / thematic ---
+        matrix: [[0, 0, 0], [0, 255, 70], [200, 255, 200]],
+        magma: [[30, 0, 0], [200, 30, 0], [255, 180, 60]],
+        glacier_sun: [[80, 140, 200], [160, 210, 255], [255, 230, 160]],
+        peachy: [[255, 150, 130], [255, 190, 150], [255, 220, 180]],
+        grape: [[70, 20, 120], [140, 60, 200], [200, 140, 255]],
+        mango: [[255, 140, 0], [255, 190, 60], [255, 230, 140]],
+        blueberry: [[40, 80, 180], [80, 130, 230], [150, 190, 255]],
+
+        // --- rainbow (multi-stop) ---
+        rainbow: [[255, 0, 0], [255, 128, 0], [255, 255, 0],
+        [0, 255, 0], [0, 255, 255], [0, 0, 255], [255, 0, 255]],
+        // --- atmospheric ---
+        aurora_borealis: [
+            [0, 0, 0],
+            [10, 40, 30],
+            [0, 150, 80],
+            [0, 255, 120],
+            [120, 80, 255],
+            [200, 180, 255]
+        ],
+
+        desert_sunset: [
+            [80, 30, 10],
+            [160, 60, 10],
+            [255, 120, 40],
+            [255, 190, 100],
+            [255, 230, 160]
+        ],
+
+        inferno: [
+            [30, 0, 0],
+            [180, 0, 0],
+            [255, 80, 0],
+            [255, 180, 0],
+            [255, 240, 180]
+        ],
+
+        horizon: [
+            [0, 0, 120],
+            [0, 60, 180],
+            [0, 120, 220],
+            [100, 200, 255],
+            [255, 230, 160],
+            [255, 150, 80]
+        ],
+
+        thunderstorm: [
+            [0, 0, 30],
+            [10, 10, 60],
+            [50, 80, 100],
+            [180, 220, 255],
+            [80, 100, 140],
+            [0, 0, 30]
+        ],
+
+        // --- vaporwave / neon ---
+        miami_nights: [
+            [40, 0, 80],
+            [140, 0, 160],
+            [255, 0, 120],
+            [255, 100, 0],
+            [255, 240, 100]
+        ],
+
+        synthwave_5: [
+            [40, 0, 60],
+            [160, 0, 100],
+            [255, 0, 120],
+            [255, 120, 40],
+            [255, 240, 80]
+        ],
+
+        laser_grid: [
+            [0, 0, 0],
+            [60, 0, 120],
+            [255, 0, 255],
+            [255, 64, 128],
+            [255, 180, 80],
+            [255, 255, 255]
+        ],
+
+        // --- elemental / fantasy ---
+        magma_flow: [
+            [20, 0, 0],
+            [120, 0, 0],
+            [255, 60, 0],
+            [255, 160, 0],
+            [255, 220, 80]
+        ],
+
+        frost_fire: [
+            [0, 0, 180],
+            [0, 180, 255],
+            [255, 255, 255],
+            [255, 160, 0],
+            [255, 40, 0]
+        ],
+
+        mystic: [
+            [20, 0, 40],
+            [80, 0, 120],
+            [150, 0, 255],
+            [0, 120, 255],
+            [0, 255, 180],
+            [255, 255, 200]
+        ],
+
+        galaxy: [
+            [10, 0, 30],
+            [40, 0, 80],
+            [80, 0, 120],
+            [160, 0, 200],
+            [60, 120, 255],
+            [200, 200, 255]
+        ],
+
+        plasma: [
+            [60, 0, 180],
+            [120, 0, 255],
+            [255, 0, 255],
+            [255, 120, 0],
+            [255, 255, 0],
+            [255, 255, 255]
+        ],
+
+        rainbow_long: [
+            [255, 0, 0],
+            [255, 128, 0],
+            [255, 255, 0],
+            [0, 255, 0],
+            [0, 255, 255],
+            [0, 0, 255],
+            [255, 0, 255],
+            [255, 255, 255]
+        ],
+
+        // --- nature / earth ---
+        forest_canopy: [
+            [20, 40, 10],
+            [40, 80, 20],
+            [60, 120, 40],
+            [100, 160, 60],
+            [160, 200, 100]
+        ],
+
+        ocean_depths: [
+            [0, 0, 20],
+            [0, 40, 60],
+            [0, 100, 120],
+            [0, 160, 180],
+            [0, 220, 220]
+        ],
+
+        autumn_forest: [
+            [80, 20, 0],
+            [160, 60, 0],
+            [220, 120, 0],
+            [255, 200, 0],
+            [255, 240, 180]
+        ],
+
+        // --- metallic sheens ---
+        chrome: [
+            [60, 60, 60],
+            [140, 140, 140],
+            [220, 220, 220],
+            [120, 120, 120],
+            [80, 80, 80]
+        ],
+
+        gold_sheen: [
+            [80, 50, 0],
+            [150, 100, 20],
+            [230, 180, 50],
+            [255, 220, 120],
+            [230, 180, 50],
+            [150, 100, 20]
+        ],
+
+        copper_sheen: [
+            [70, 40, 20],
+            [130, 70, 30],
+            [190, 110, 50],
+            [230, 160, 90],
+            [190, 110, 50]
+        ],
+
+        // --- exotic / fun ---
+        vapor_rainbow: [
+            [255, 128, 192],
+            [128, 128, 255],
+            [128, 255, 255],
+            [128, 255, 128],
+            [255, 255, 128],
+            [255, 180, 255]
+        ],
+
+        candystripe: [
+            [255, 80, 120],
+            [255, 120, 160],
+            [255, 160, 200],
+            [255, 200, 240],
+            [255, 160, 200],
+            [255, 120, 160],
+            [255, 80, 120]
+        ],
+
+        tron_grid: [
+            [0, 0, 0],
+            [0, 80, 120],
+            [0, 200, 255],
+            [80, 255, 255],
+            [200, 255, 255]
+        ],
+
+        // --- grayscale studies ---
+        grayscale_5: [
+            [0, 0, 0],
+            [64, 64, 64],
+            [128, 128, 128],
+            [192, 192, 192],
+            [255, 255, 255]
+        ],
+        grayscale_7: [
+            [0, 0, 0],
+            [42, 42, 42],
+            [84, 84, 84],
+            [126, 126, 126],
+            [168, 168, 168],
+            [210, 210, 210],
+            [255, 255, 255]
+        ]
+    };
+
+    // CGA16 palette
+    var CGA16 = [
+        [0, 0, 0], [170, 0, 0], [0, 170, 0], [170, 85, 0],
+        [0, 0, 170], [170, 0, 170], [0, 170, 170], [170, 170, 170],
+        [85, 85, 85], [255, 85, 85], [85, 255, 85], [255, 255, 85],
+        [85, 85, 255], [255, 85, 255], [85, 255, 255], [255, 255, 255]
+    ];
+
+    // helpers
     function clamp(x, a, b) { return x < a ? a : (x > b ? b : x); }
     function lerp(a, b, t) { return a + (b - a) * t; }
+    function fgCode(i) { return FG_CTRL[i & 15] || ""; }
+    function bgCode(i) { return BG_CTRL[i & 7] || ""; }
 
-    // Convert RGB→nearest 256-color cube/grayscale (simple, fast)
-    function rgbTo256(r, g, b) {
-        // Try color cube first
-        function toCube(v) { return Math.round(clamp(v, 0, 255) / 255 * 5); } // 0..5
-        var cr = toCube(r), cg = toCube(g), cb = toCube(b);
-        var cube = 16 + 36 * cr + 6 * cg + cb;
-
-        // Grayscale ramp 232..255
-        var avg = (r + g + b) / 3;
-        var grayIdx = Math.round((avg - 8) / 10); // roughly 0..23
-        var gray = 232 + clamp(grayIdx, 0, 23);
-
-        // Pick whichever is closer in Euclidean RGB (rough check)
-        function idxToRGB256(i) {
-            if (i >= 232) {
-                var v = 8 + (i - 232) * 10; return [v, v, v];
-            }
-            var rr = Math.floor((i - 16) / 36); var gg = Math.floor(((i - 16) % 36) / 6); var bb = (i - 16) % 6;
-            return [rr * 255 / 5, gg * 255 / 5, bb * 255 / 5];
-        }
-        function dist2(a, b) { var d0 = a[0] - b[0], d1 = a[1] - b[1], d2 = a[2] - b[2]; return d0 * d0 + d1 * d1 + d2 * d2; }
-        var dCube = dist2([r, g, b], idxToRGB256(cube));
-        var dGray = dist2([r, g, b], idxToRGB256(gray));
-        return (dGray < dCube) ? gray : cube;
-    }
-
-    // Optional: nearest 16-color for fallback
-    var CGA16 = [
-        [0, 0, 0], [170, 0, 0], [0, 170, 0], [170, 85, 0], [0, 0, 170], [170, 0, 170], [0, 170, 170], [170, 170, 170],
-        [85, 85, 85], [255, 85, 85], [85, 255, 85], [255, 255, 85], [85, 85, 255], [255, 85, 255], [85, 255, 255], [255, 255, 255]
-    ];
     function rgbTo16(r, g, b) {
-        var best = 0, bd = 1e9, i, c, d, dr, dg, db;
-        for (i = 0; i < 16; i++) {
-            c = CGA16[i]; dr = r - c[0]; dg = g - c[1]; db = b - c[2];
-            d = dr * dr + dg * dg + db * db; if (d < bd) { bd = d; best = i; }
+        var best = 0, bd = 1e9;
+        for (var i = 0; i < 16; i++) {
+            var c = CGA16[i], dr = r - c[0], dg = g - c[1], db = b - c[2];
+            var d = dr * dr + dg * dg + db * db;
+            if (d < bd) { bd = d; best = i; }
         }
         return best;
     }
 
-    // Predefined palettes (tweak to taste)
-    var PRESETS = {
-        "sunset": [[255, 94, 58], [255, 149, 5], [255, 210, 0]],
-        "ocean": [[0, 64, 128], [0, 160, 192], [0, 224, 224]],
-        "cyber": [[255, 0, 128], [64, 0, 255], [0, 255, 255]],
-        "mono": [[30, 30, 30], [220, 220, 220]],
-        "futureland": [[0, 255, 180], [0, 120, 255], [140, 0, 255]]
-    };
-
-    // Build a ramp of length N by interpolating a palette of ≥2 RGB stops
     function buildRamp(stops, n) {
         var ramp = [];
         if (n <= 1) { ramp.push(stops[0]); return ramp; }
-        var segments = stops.length - 1;
-        var stepsPerSeg = n / segments;
-        var i, seg, t, a, b;
-        for (i = 0; i < n; i++) {
-            seg = Math.min(segments - 1, Math.floor(i / stepsPerSeg));
-            t = (i - seg * stepsPerSeg) / stepsPerSeg;
-            a = stops[seg]; b = stops[seg + 1];
-            ramp.push([Math.round(lerp(a[0], b[0], t)), Math.round(lerp(a[1], b[1], t)), Math.round(lerp(a[2], b[2], t))]);
+        var segs = stops.length - 1, step = n / segs;
+        for (var i = 0; i < n; i++) {
+            var s = Math.min(segs - 1, Math.floor(i / step));
+            var t = (i - s * step) / step;
+            var a = stops[s], b = stops[s + 1];
+            ramp.push([
+                Math.round(lerp(a[0], b[0], t)),
+                Math.round(lerp(a[1], b[1], t)),
+                Math.round(lerp(a[2], b[2], t))
+            ]);
         }
         return ramp;
     }
 
-    // Core render: background color blocks (space char) or full-block glyphs
+    function resolveStops(t) {
+        // if type is null, get a random preset
+        if (typeof t === "string") return PRESETS[t] || PRESETS.mono;
+        if (t && t.length >= 2) return t;
+        return PRESETS.mono;
+    }
+
+    // --- normal full/space render ---
     function renderRamp(ramp, opts) {
-        var mode = opts.mode || "256"; // "16" | "256" | "truecolor"
-        var glyph = (opts.glyph === "full") ? "\u2588" : " "; // '█' or space
-        var useBG = (glyph === " "); // If space, color via BG; if full, color via FG
-        var s = "", lastCode = "";
+        opts = opts || {};
+        var g = opts.glyph || "full";
+        if (g === "shade") return renderShade(ramp, opts);
+        if (g === "half") return renderHalf(ramp, opts);
+        if (g === "mix") return renderMix(ramp, opts);
 
+        var useBG = (g === "space");
+        var glyph = useBG ? GLYPH_SPACE : (g === "full" ? GLYPH_FULL : g);
+        var out = "", last = "";
         for (var i = 0; i < ramp.length; i++) {
-            var c = ramp[i], code;
-            if (mode === "truecolor") {
-                code = useBG ? bgRGB(c[0], c[1], c[2]) : fgRGB(c[0], c[1], c[2]);
-            } else if (mode === "256") {
-                var idx256 = rgbTo256(c[0], c[1], c[2]);
-                code = useBG ? bg256(idx256) : fg256(idx256);
-            } else {
-                var idx16 = rgbTo16(c[0], c[1], c[2]);
-                code = useBG ? bg16(idx16 & 7) : fg16(idx16);
+            var c = ramp[i], idx = rgbTo16(c[0], c[1], c[2]) & 15;
+            var code = useBG ? bgCode(idx & 7) : fgCode(idx);
+            if (code !== last) { out += code; last = code; }
+            out += glyph;
+        }
+        if (opts.reset === false) return out;
+        return out + RESET;
+    }
+
+    // --- half-block FG/BG blend ---
+    function renderHalf(ramp, opts) {
+        var out = "", lastFG = "", lastBG = "";
+        for (var i = 0; i < ramp.length; i += 2) {
+            var top = ramp[i], bot = ramp[i + 1] || ramp[i];
+            var fgIdx = rgbTo16(top[0], top[1], top[2]) & 15;
+            var bgIdx = rgbTo16(bot[0], bot[1], bot[2]) & 7;
+            var bg = bgCode(bgIdx); if (bg !== lastBG) { out += bg; lastBG = bg; }
+            var fg = fgCode(fgIdx); if (fg !== lastFG) { out += fg; lastFG = fg; }
+            out += GLYPH_HALF;
+        }
+        if (opts.reset === false) return out;
+        return out + RESET;
+    }
+
+    // --- simple shade luminance renderer ---
+    function renderShade(ramp, opts) {
+        var bgIdx = (opts.hasOwnProperty("bgIndex")) ? (opts.bgIndex & 7) : 0;
+        var fgOverride = (opts.hasOwnProperty("fgIndex")) ? (opts.fgIndex & 15) : null;
+        var out = "", bg = bgCode(bgIdx); if (bg) out += bg;
+        var lastFG = "";
+        for (var i = 0; i < ramp.length; i++) {
+            var c = ramp[i];
+            var L = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+            var glyph = (L < 0.25) ? SHADE_LIGHT : (L < 0.5) ? SHADE_MED : (L < 0.75) ? SHADE_DARK : GLYPH_FULL;
+            var fgIdx = (fgOverride !== null) ? fgOverride : (rgbTo16(c[0], c[1], c[2]) & 15);
+            var fg = fgCode(fgIdx);
+            if (fg !== lastFG) { out += fg; lastFG = fg; }
+            out += glyph;
+        }
+        if (opts.reset === false) return out;
+        return out + RESET;
+    }
+
+    // ===== multicolor 512-step blender =====
+    var BG_RGB = (function () { var a = []; for (var i = 0; i < 8; i++)a[i] = CGA16[i]; return a; })();
+    var FG_RGB = CGA16;
+    function blendRGB(bg, fg, a) {
+        return [
+            (1 - a) * bg[0] + a * fg[0],
+            (1 - a) * bg[1] + a * fg[1],
+            (1 - a) * bg[2] + a * fg[2]
+        ];
+    }
+
+    function bestMixFor(target) {
+        var tr = target[0], tg = target[1], tb = target[2];
+        var bestBG = 0, bestFG = 15, bestShade = SHADE_TABLE[3], bestErr = 1e9;
+        for (var bi = 0; bi < 8; bi++) {
+            var bg = BG_RGB[bi];
+            for (var fi = 0; fi < 16; fi++) {
+                var fg = FG_RGB[fi];
+                for (var si = 0; si < 4; si++) {
+                    var sh = SHADE_TABLE[si];
+                    var m = blendRGB(bg, fg, sh.alpha);
+                    var dr = m[0] - tr, dg = m[1] - tg, db = m[2] - tb;
+                    var e = dr * dr + dg * dg + db * db;
+                    if (e < bestErr) { bestErr = e; bestBG = bi; bestFG = fi; bestShade = sh; }
+                }
             }
-            if (code !== lastCode) { s += code; lastCode = code; }
-            s += glyph;
         }
-        return s + RESET;
+        return { bgIdx: bestBG, fgIdx: bestFG, glyph: bestShade.glyph };
     }
 
-    // Public: get(typeOrStops, width, direction, options)
-    function get(type, width, direction /*'l' or 'r'*/, options) {
-        options = options || {};
-        var stops;
-
-        if (typeof type === "string") {
-            var preset = PRESETS[type];
-            if (!preset) preset = PRESETS["mono"]; // fallback
-            stops = preset;
-        } else if (type && type.length >= 2) {
-            // e.g., [[r,g,b],[r,g,b],...]
-            stops = type;
-        } else {
-            // default
-            stops = PRESETS["mono"];
+    function renderMix(ramp, opts) {
+        var out = "", lastBG = -1, lastFG = -1;
+        for (var i = 0; i < ramp.length; i++) {
+            var c = ramp[i];
+            var p = bestMixFor(c);
+            if (p.bgIdx !== lastBG) { out += bgCode(p.bgIdx); lastBG = p.bgIdx; }
+            if (p.fgIdx !== lastFG) { out += fgCode(p.fgIdx); lastFG = p.fgIdx; }
+            out += p.glyph;
         }
+        if (opts.reset === false) return out;
+        return out + RESET;
+    }
 
+    // ===== public APIs =====
+    function get(type, width, dir, opts) {
+        opts = opts || {};
+        var stops = resolveStops(type);
+        var n = width > 0 ? width : 1;
+        var ramp = buildRamp(stops, n);
+        if (dir === "r") ramp.reverse();
+        return renderRamp(ramp, opts);
+    }
+
+    function getHalf(type, width, dir, opts) {
+        opts = opts || {};
+        var stops = resolveStops(type);
+        var ramp = buildRamp(stops, Math.max(1, width * 2));
+        if (dir === "r") ramp.reverse();
+        return renderHalf(ramp, opts);
+    }
+
+    function getMix(type, width, dir, opts) {
+        opts = opts || {};
+        var stops = resolveStops(type);
         var ramp = buildRamp(stops, width > 0 ? width : 1);
-        if (direction === "r") ramp.reverse();
-
-        return renderRamp(ramp, {
-            mode: options.mode || "256",     // "16" | "256" | "truecolor"
-            glyph: options.glyph || "space", // "space" (BG) or "full" (FG '█')
-        });
+        if (dir === "r") ramp.reverse();
+        return renderMix(ramp, opts);
     }
 
-    // Sugar: CGA-only step gradient (no interpolation, hard bands)
-    function getCGAstep(cgaIndices /*[0..15,...]*/, width, direction, options) {
-        options = options || {};
-        var glyph = (options.glyph === "full") ? "\u2588" : " ";
-        var useBG = (glyph === " ");
-        var s = "", last = "";
-        if (direction === "r") cgaIndices = cgaIndices.slice().reverse();
-
-        // Repeat the palette to fill width
+    function getCGAstep(indices, width, dir, opts) {
+        opts = opts || {};
+        indices = indices || [0];
+        if (dir === "r") indices = indices.slice().reverse();
+        var useBG = (opts.glyph === "space");
+        var glyph = useBG ? GLYPH_SPACE : (opts.glyph && opts.glyph !== "full" ? opts.glyph : GLYPH_FULL);
+        var out = "", last = "";
         for (var i = 0; i < width; i++) {
-            var idx = cgaIndices[i % cgaIndices.length] & 15;
-            var code = useBG ? bg16(idx & 7) : fg16(idx);
-            if (code !== last) { s += code; last = code; }
-            s += glyph;
+            var idx = indices[i % indices.length] & 15;
+            var code = useBG ? bgCode(idx & 7) : fgCode(idx);
+            if (code !== last) { out += code; last = code; }
+            out += glyph;
         }
-        return s + RESET;
+        if (opts.reset === false) return out;
+        return out + RESET;
     }
 
-    // Convenience: pad a string to width with gradient on the right/left/both
-    function stringPad(text, width, where /*'right'|'left'|'both'*/, gradOpts) {
+    function stringPad(text, width, where, gradOpts) {
+        gradOpts = gradOpts || {};
         var len = text.length;
         var needed = Math.max(0, width - len);
         if (needed === 0) return text;
-        var half = Math.floor(needed / 2);
-        var left = "", right = "";
-
-        if (where === "left" || where === "both") {
-            left = get(gradOpts.type || "mono", (where === "both") ? half : needed, gradOpts.dir || "l", gradOpts);
+        var half = Math.floor(needed / 2), left = "", right = "";
+        var base = { type: gradOpts.type || "mono", glyph: gradOpts.glyph || "full", reset: false };
+        if (base.type === 'random') {
+            base.type = Object.keys(PRESETS)[Math.floor(Math.random() * Object.keys(PRESETS).length)];
         }
-        if (where === "right" || where === "both") {
-            right = get(gradOpts.type || "mono", (where === "both") ? (needed - half) : needed, gradOpts.dir || "r", gradOpts);
-        }
-        if (where === "left") return left + text;
-        if (where === "right") return text + right;
-        return left + text + right;
+        var leftDir = gradOpts.dirLeft || gradOpts.dir || "l";
+        var rightDir = gradOpts.dirRight || gradOpts.dir ? gradOpts.dir : "r";
+        if (!gradOpts.dirRight && gradOpts.dir === "l") rightDir = "r";
+        if (!gradOpts.dirLeft && gradOpts.dir === "r") leftDir = "r";
+        if (where === "left" || where === "both")
+            left = get(base.type, (where === "both") ? half : needed, leftDir, base);
+        if (where === "right" || where === "both")
+            right = get(base.type, (where === "both") ? (needed - half) : needed, rightDir, base);
+        var res = (where === "left") ? left + text : (where === "right") ? text + right : left + text + right;
+        if (gradOpts.reset === false) return res;
+        return res + RESET;
     }
 
     return {
         RESET: RESET,
-        get: get,            // (type|[[r,g,b],...], width, 'l'|'r', {mode,glyph})
-        getCGAstep: getCGAstep, // (indices[], width, dir, {glyph})
-        stringPad: stringPad,    // (text, width, 'right'|'left'|'both', {type,dir,mode,glyph})
+        get: get,
+        getHalf: getHalf,
+        getMix: getMix,
+        getCGAstep: getCGAstep,
+        stringPad: stringPad
     };
 })();

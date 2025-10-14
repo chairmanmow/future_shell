@@ -365,7 +365,7 @@ Subprogram.prototype._ensureHostFrame = function () {
         log('Subprogram ' + (this.name || 'unknown') + ' failed to create hostFrame: ' + e);
         this.hostFrame = null;
     }
-    log("CREATED HOST FRAME MESSAGE BOARD");
+    log("CREATED HOST FRAME BOARD" + this.id);
     return this.hostFrame;
 };
 

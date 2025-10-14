@@ -26,15 +26,78 @@ var WHITE = (typeof WHITE === 'number') ? WHITE : 7;
 var LIGHTGRAY = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
 var BG_BLACK = (typeof BG_BLACK === 'number') ? BG_BLACK : (BLACK << 4);
 var BG_DARKGRAY = (typeof BG_DARKGRAY === 'number') ? BG_DARKGRAY : ((LIGHTGRAY & 0x07) << 4);
-// Load canonical key constants (no defensive fallbacks; rely on environment correctness)
-try { if (typeof KEY_LEFT === 'undefined') require('sbbsdefs.js', 'KEY_LEFT', 'KEY_RIGHT', 'KEY_ENTER', 'KEY_UP', 'KEY_DOWN', 'KEY_PGUP', 'KEY_PGDN', 'KEY_HOME', 'KEY_END'); } catch (_r) { }
+try { if (typeof KEY_LEFT === 'undefined') require('sbbsdefs.js', 'KEY_LEFT', 'KEY_RIGHT', 'KEY_ENTER', 'KEY_UP', 'KEY_DOWN', 'KEY_PGUP', 'KEY_PGDN', 'KEY_HOME', 'KEY_END', 'KEY_DEL', 'KEY_BACKSPACE'); } catch (_r) { }
 
-function resolveAttr(fallback) {
-    if (typeof ICSH_ATTR === 'function') {
-        try { return ICSH_ATTR('MODAL'); } catch (_) { }
+var ModalThemeRegistry = (function () {
+    if (typeof ThemeRegistry !== 'undefined') return ThemeRegistry;
+    try {
+        var paletteModule = load('future_shell/lib/theme/palette.js');
+        if (paletteModule && paletteModule.ThemeRegistry) return paletteModule.ThemeRegistry;
+    } catch (_) { }
+    return null;
+})();
+
+var MODAL_THEME_BASE = 'modal';
+var MODAL_THEME_TYPES = ['alert', 'confirm', 'prompt', 'progress', 'spinner', 'custom'];
+var modalPaletteRegistered = false;
+
+function makeAttr(bg, fg) {
+    return ((bg & 0x07) << 4) | (fg & 0x0F);
+}
+
+var DEFAULT_MODAL_ATTR = makeAttr(BLACK, LIGHTGRAY);
+var DEFAULT_OVERLAY_ATTR = makeAttr(BLACK, BLACK);
+
+function ensureModalPalette() {
+    if (modalPaletteRegistered || !ModalThemeRegistry) return;
+    var baseFrame = DEFAULT_MODAL_ATTR;
+    var defaults = {
+        FRAME: baseFrame,
+        CONTENT: baseFrame,
+        TITLE: makeAttr(BLACK, WHITE),
+        BUTTON: baseFrame,
+        BUTTON_FOCUS: makeAttr(BLACK, WHITE),
+        BUTTON_DISABLED: baseFrame,
+        OVERLAY: DEFAULT_OVERLAY_ATTR
+    };
+    for (var i = 0; i < MODAL_THEME_TYPES.length; i++) {
+        var typeKey = MODAL_THEME_TYPES[i].toUpperCase();
+        defaults[typeKey + '.FRAME'] = baseFrame;
+        defaults[typeKey + '.CONTENT'] = baseFrame;
+        defaults[typeKey + '.TITLE'] = defaults.TITLE;
+        defaults[typeKey + '.BUTTON'] = defaults.BUTTON;
+        defaults[typeKey + '.BUTTON_FOCUS'] = defaults.BUTTON_FOCUS;
+        defaults[typeKey + '.BUTTON_DISABLED'] = defaults.BUTTON_DISABLED;
+        defaults[typeKey + '.OVERLAY'] = defaults.OVERLAY;
     }
-    if (typeof fallback === 'number') return fallback;
-    return (WHITE & 0x0F) | (BG_DARKGRAY & 0x70);
+    try { ModalThemeRegistry.registerPalette(MODAL_THEME_BASE, defaults); } catch (_) { }
+    modalPaletteRegistered = true;
+}
+
+function pickThemeAttr(modalType, role, explicit, fallback) {
+    if (typeof explicit === 'number') return explicit;
+    var key = (role || '').toUpperCase();
+    if (!key || !ModalThemeRegistry) return fallback;
+    if (modalType) {
+        var typed = ModalThemeRegistry.get(MODAL_THEME_BASE, modalType.toUpperCase() + '.' + key, null);
+        var typedAttr = coerceAttr(typed, null);
+        if (typedAttr !== null) return typedAttr;
+    }
+    var base = ModalThemeRegistry.get(MODAL_THEME_BASE, key, null);
+    var baseAttr = coerceAttr(base, null);
+    if (baseAttr !== null) return baseAttr;
+    return fallback;
+}
+
+function coerceAttr(entry, fallback) {
+    if (typeof entry === 'number') return entry;
+    if (!entry || typeof entry !== 'object') return (typeof fallback === 'number') ? fallback : null;
+    var hasBg = Object.prototype.hasOwnProperty.call(entry, 'BG');
+    var hasFg = Object.prototype.hasOwnProperty.call(entry, 'FG') || Object.prototype.hasOwnProperty.call(entry, 'COLOR');
+    if (!hasBg && !hasFg) return (typeof fallback === 'number') ? fallback : null;
+    var bg = entry.BG || 0;
+    var fg = entry.FG || entry.COLOR || 0;
+    return (bg | fg);
 }
 
 function clamp(num, min, max) {
@@ -56,15 +119,17 @@ function Modal(opts) {
     this._progress = (typeof opts.progress === 'number') ? opts.progress : null; // 0..1
     this._progressWidth = (typeof opts.progressWidth === 'number') ? opts.progressWidth : 20;
     this._customRenderer = (typeof opts.render === 'function') ? opts.render : null; // render(frame, modal)
+    ensureModalPalette();
     this.overlayEnabled = opts.overlay !== false;
-    this.overlayAttr = (typeof opts.overlayAttr === 'number') ? opts.overlayAttr : ((BLACK & 0x0F) | (BG_BLACK & 0x70));
     this.overlayChar = (typeof opts.overlayChar === 'string' && opts.overlayChar.length) ? opts.overlayChar[0] : ' ';
-    this.attr = (typeof opts.attr === 'number') ? opts.attr : resolveAttr();
-    this.contentAttr = (typeof opts.contentAttr === 'number') ? opts.contentAttr : this.attr;
-    this.titleAttr = (typeof opts.titleAttr === 'number') ? opts.titleAttr : ((WHITE & 0x0F) | (this.attr & 0x70));
-    this.buttonAttr = (typeof opts.buttonAttr === 'number') ? opts.buttonAttr : this.attr;
-    this.buttonFocusAttr = (typeof opts.buttonFocusAttr === 'number') ? opts.buttonFocusAttr : (((WHITE & 0x0F) | (BG_BLACK & 0x70)));
-    this.buttonDisabledAttr = (typeof opts.buttonDisabledAttr === 'number') ? opts.buttonDisabledAttr : this.buttonAttr;
+    var frameFallback = DEFAULT_MODAL_ATTR;
+    this.attr = pickThemeAttr(this.type, 'FRAME', opts.attr, frameFallback);
+    this.contentAttr = pickThemeAttr(this.type, 'CONTENT', opts.contentAttr, this.attr);
+    this.titleAttr = pickThemeAttr(this.type, 'TITLE', opts.titleAttr, ((WHITE & 0x0F) | (this.attr & 0x70)));
+    this.buttonAttr = pickThemeAttr(this.type, 'BUTTON', opts.buttonAttr, this.attr);
+    this.buttonFocusAttr = pickThemeAttr(this.type, 'BUTTON_FOCUS', opts.buttonFocusAttr, makeAttr(BLACK, WHITE));
+    this.buttonDisabledAttr = pickThemeAttr(this.type, 'BUTTON_DISABLED', opts.buttonDisabledAttr, this.buttonAttr);
+    this.overlayAttr = pickThemeAttr(this.type, 'OVERLAY', opts.overlayAttr, DEFAULT_OVERLAY_ATTR);
     this.buttonMaskAttr = (typeof opts.buttonMaskAttr === 'number') ? opts.buttonMaskAttr : null;
     this.buttonShadowAttr = (typeof opts.buttonShadowAttr === 'number') ? opts.buttonShadowAttr : null;
     this.parentFrame = opts.parentFrame || null;
@@ -78,6 +143,7 @@ function Modal(opts) {
     this._inputValue = (typeof opts.defaultValue === 'string') ? opts.defaultValue : '';
     this._inputCursor = this._inputValue.length;
     this._inputSecret = !!opts.secret;
+    this._inputScroll = 0;
     this._result = undefined;
     this._open = false;
     this._closed = false;
@@ -94,6 +160,23 @@ function Modal(opts) {
     this._ensureParent();
     this._recomputeGeometry();
     this._buildStructure();
+    if (ICSH_MODAL_DEBUG) {
+        try {
+            if (ModalThemeRegistry) {
+                var paletteDump = ModalThemeRegistry.get(MODAL_THEME_BASE);
+                log('[MODAL THEME PALETTE] ' + JSON.stringify(paletteDump));
+            }
+            var msg = '[MODAL THEME] type=' + this.type
+                + ' frame=0x' + (this.attr & 0xFF).toString(16)
+                + ' content=0x' + (this.contentAttr & 0xFF).toString(16)
+                + ' title=0x' + (this.titleAttr & 0xFF).toString(16)
+                + ' button=0x' + (this.buttonAttr & 0xFF).toString(16)
+                + ' focus=0x' + (this.buttonFocusAttr & 0xFF).toString(16)
+                + ' disabled=0x' + (this.buttonDisabledAttr & 0xFF).toString(16)
+                + ' overlay=0x' + (this.overlayAttr & 0xFF).toString(16);
+            log(msg);
+        } catch (_) { }
+    }
     if (this.type === 'spinner' || this.type === 'progress') this._initActivityType();
     Modal._register(this);
     // Notify external shell (if present) for explicit tracking instead of blind global polling
@@ -229,8 +312,8 @@ Modal.prototype._buttonConfig = function () {
             ]);
         case 'prompt':
             return this._normalizeButtons([
-                { label: opts.okLabel || 'OK', value: 'submit', default: true },
-                { label: opts.cancelLabel || 'Cancel', value: 'cancel', cancel: true }
+                { label: opts.cancelLabel || 'Cancel', value: 'cancel', cancel: true },
+                { label: opts.okLabel || 'OK', value: 'submit', default: true }
             ]);
         case 'custom':
             return this._normalizeButtons([]);
@@ -245,6 +328,7 @@ Modal.prototype._buttonConfig = function () {
 Modal.prototype._normalizeButtons = function (buttons) {
     var defs = [];
     var minWidth = 0;
+    var allowDefaultHotKeys = !(this.type === 'prompt' || this.options.disableButtonHotKeys === true);
     for (var i = 0; i < buttons.length; i++) {
         var b = buttons[i];
         if (!b || typeof b !== 'object') continue;
@@ -260,7 +344,9 @@ Modal.prototype._normalizeButtons = function (buttons) {
             attr: (typeof b.attr === 'number') ? b.attr : this.buttonAttr,
             focusAttr: (typeof b.focusAttr === 'number') ? b.focusAttr : this.buttonFocusAttr
         };
-        if (def.hotKey === null && label.length) def.hotKey = label.charAt(0).toUpperCase();
+        if (def.hotKey === null) {
+            if (allowDefaultHotKeys && label.length) def.hotKey = label.charAt(0).toUpperCase();
+        }
         defs.push(def);
         var w = Math.max(6, label.length + 4);
         if (w > minWidth) minWidth = w;
@@ -309,15 +395,23 @@ Modal.prototype._renderChrome = function () {
     } catch (_) { }
     if (typeof this.frame.drawBorder === 'function') {
         try {
-            this.frame.drawBorder(this.attr, this.title ? { x: 3, y: 1, attr: this.titleAttr, text: ' ' + this.title + ' ' } : null);
+            var borderTitle = null;
+            if (this.title) {
+                var titleText = ' ' + this.title + ' ';
+                var centeredX = Math.max(2, Math.floor((this.width - titleText.length) / 2) + 1);
+                borderTitle = { x: centeredX, y: 1, attr: this.titleAttr, text: titleText };
+            }
+            this.frame.drawBorder(this.attr, borderTitle);
             return;
         } catch (_) { }
     }
     if (this.title) {
-        var cx = Math.max(2, Math.floor((this.width - this.title.length) / 2));
+        var titleTextFallback = this.title;
+        if (titleTextFallback.length > this.width - 2) titleTextFallback = titleTextFallback.substr(0, this.width - 2);
+        var cx = Math.max(2, Math.floor((this.width - titleTextFallback.length) / 2));
         this.frame.gotoxy(cx, 1);
         this.frame.attr = this.titleAttr;
-        this.frame.putmsg(this.title.substr(0, this.width - 2));
+        this.frame.putmsg(titleTextFallback);
     }
 };
 
@@ -403,17 +497,81 @@ Modal.prototype.setMessage = function (msg) {
 };
 
 Modal.prototype._renderPromptInput = function (y) {
+    if (!this.frame) return;
     var innerWidth = this.width - 4;
-    var value = this._inputValue;
+    if (innerWidth < 3) innerWidth = 3;
+    var visibleWidth = this._promptVisibleWidth();
+    this._ensurePromptCursorVisible();
+    var value = this._inputValue || '';
     var display = this._inputSecret ? Array(value.length + 1).join('*') : value;
-    if (display.length > innerWidth - 2) {
-        display = display.substr(display.length - (innerWidth - 2));
-    }
-    var padded = display;
-    if (display.length < innerWidth - 2) padded += Array(innerWidth - display.length - 1).join(' ');
+    var slice = display.substr(this._inputScroll, visibleWidth);
+    if (slice.length < visibleWidth) slice += Array(visibleWidth - slice.length + 1).join(' ');
     this.frame.attr = this.contentAttr;
     this.frame.gotoxy(3, y);
-    this.frame.putmsg('>' + padded + ' ');
+    this.frame.putmsg('>' + slice + ' ');
+};
+
+Modal.prototype._promptVisibleWidth = function () {
+    var innerWidth = this.width - 4;
+    if (innerWidth < 3) innerWidth = 3;
+    return Math.max(1, innerWidth - 2);
+};
+
+Modal.prototype._ensurePromptCursorVisible = function () {
+    if (this.type !== 'prompt') return;
+    if (typeof this._inputCursor !== 'number') this._inputCursor = 0;
+    if (typeof this._inputScroll !== 'number') this._inputScroll = 0;
+    if (this._inputCursor < 0) this._inputCursor = 0;
+    var len = this._inputValue.length;
+    if (this._inputCursor > len) this._inputCursor = len;
+    var visible = this._promptVisibleWidth();
+    if (this._inputScroll < 0) this._inputScroll = 0;
+    var maxScroll = Math.max(0, len - visible);
+    if (this._inputScroll > maxScroll) this._inputScroll = maxScroll;
+    if (this._inputCursor < this._inputScroll) this._inputScroll = this._inputCursor;
+    if (this._inputCursor > this._inputScroll + visible) this._inputScroll = this._inputCursor - visible;
+    if (this._inputScroll < 0) this._inputScroll = 0;
+    if (this._inputScroll > maxScroll) this._inputScroll = maxScroll;
+};
+
+Modal.prototype._refreshPromptInput = function () {
+    if (this.type !== 'prompt' || !this.frame) return;
+    this._renderPromptInput(this.height - 4);
+    this._cycleAll();
+};
+
+Modal.prototype._setPromptCursor = function (pos) {
+    if (this.type !== 'prompt') return;
+    var target = (typeof pos === 'number') ? pos : this._inputCursor;
+    this._inputCursor = clamp(target, 0, this._inputValue.length);
+    this._refreshPromptInput();
+};
+
+Modal.prototype._movePromptCursor = function (delta) {
+    if (this.type !== 'prompt') return;
+    var target = this._inputCursor + (typeof delta === 'number' ? delta : 0);
+    this._setPromptCursor(target);
+};
+
+Modal.prototype._insertPromptChar = function (ch) {
+    if (this.type !== 'prompt' || typeof ch !== 'string' || !ch.length) return;
+    var before = this._inputValue.substr(0, this._inputCursor);
+    var after = this._inputValue.substr(this._inputCursor);
+    this._inputValue = before + ch + after;
+    this._setPromptCursor(this._inputCursor + ch.length);
+};
+
+Modal.prototype._backspacePromptChar = function () {
+    if (this.type !== 'prompt' || this._inputCursor <= 0) return;
+    var newPos = this._inputCursor - 1;
+    this._inputValue = this._inputValue.substr(0, newPos) + this._inputValue.substr(this._inputCursor);
+    this._setPromptCursor(newPos);
+};
+
+Modal.prototype._deletePromptChar = function () {
+    if (this.type !== 'prompt' || this._inputCursor >= this._inputValue.length) return;
+    this._inputValue = this._inputValue.substr(0, this._inputCursor) + this._inputValue.substr(this._inputCursor + 1);
+    this._setPromptCursor(this._inputCursor);
 };
 
 Modal.prototype._buildButtons = function () {
@@ -471,16 +629,34 @@ Modal.prototype._registerButtonHotspots = function () {
     for (var i = 0; i < this._buttons.length; i++) {
         var btn = this._buttons[i];
         if (!btn || !btn.frame) continue;
-        var hotKey = this._buttonDefs[i] && this._buttonDefs[i].hotKey ? this._buttonDefs[i].hotKey : null;
-        var cmd = hotKey || String.fromCharCode(1 + i); // fallback
+        var def = this._buttonDefs[i] || {};
+        var commands = [];
+        if (def.hotKey) commands.push(def.hotKey);
+        if (def.default) {
+            commands.push('\r');
+            commands.push('\n');
+        }
+        if (def.cancel) {
+            commands.push('\x1B');
+        }
+        if (!commands.length) commands.push(String.fromCharCode(1 + i));
         var stored = btn._absHotspot;
         var r = stored ? { x: stored.x, y: stored.y, w: stored.w, h: stored.h } : absRect(btn.frame);
         var startY = Math.max(1, r.y - 1);
         var secondY = startY + 1;
-        try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, startY); } catch (_) { }
-        try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, secondY); } catch (_) { }
-        if (!this._hotspotMap) this._hotspotMap = {}; // correct map init
-        this._hotspotMap[cmd] = i;
+        if (!this._hotspotMap) this._hotspotMap = {};
+        var added = {};
+        for (var c = 0; c < commands.length; c++) {
+            var raw = commands[c];
+            if (raw === null || raw === undefined) continue;
+            var cmd = (typeof raw === 'string') ? raw : String(raw);
+            if (!cmd || !cmd.length) continue;
+            if (added[cmd]) continue;
+            added[cmd] = true;
+            try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, startY); } catch (_) { }
+            try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, secondY); } catch (_) { }
+            this._hotspotMap[cmd] = i;
+        }
     }
 };
 
@@ -581,6 +757,20 @@ Modal.prototype._applyButtonFocus = function () {
     }
 };
 
+Modal.prototype._triggerButtonByRole = function (role) {
+    var index = -1;
+    if (role === 'default') index = this._defaultIndex;
+    else if (role === 'cancel') index = this._cancelIndex;
+    if (index < 0 || index >= this._buttons.length) return false;
+    this._focusIndex = index;
+    this._applyButtonFocus();
+    if (this._buttons[index] && typeof this._buttons[index].press === 'function') {
+        this._buttons[index].press();
+        return true;
+    }
+    return false;
+};
+
 Modal.prototype._destroyButtons = function () {
     while (this._buttons.length) {
         var btn = this._buttons.pop();
@@ -677,6 +867,55 @@ Modal.prototype.handleKey = function (key) {
     if (this.keyHandler) {
         try { if (this.keyHandler(key, this) === true) return true; } catch (_) { }
     }
+    var isPrompt = (this.type === 'prompt');
+    var inputFocused = (isPrompt && this._focusIndex === -1);
+    var isBackspaceKey = (key === '\b' || key === '\x08' || (typeof KEY_BACKSPACE !== 'undefined' && key === KEY_BACKSPACE));
+    var isDeleteKey = (key === '\x7f' || (typeof KEY_DEL !== 'undefined' && key === KEY_DEL));
+    if (isPrompt) {
+        if (isBackspaceKey) {
+            if (!inputFocused) {
+                this._focusIndex = -1;
+                this._applyButtonFocus();
+                inputFocused = true;
+            }
+            this._backspacePromptChar();
+            return true;
+        }
+        if (isDeleteKey) {
+            if (!inputFocused) {
+                this._focusIndex = -1;
+                this._applyButtonFocus();
+                inputFocused = true;
+            }
+            this._deletePromptChar();
+            return true;
+        }
+        if (key === '\x01') {
+            if (!inputFocused) {
+                this._focusIndex = -1;
+                this._applyButtonFocus();
+            }
+            this._setPromptCursor(0);
+            return true;
+        }
+        if (key === '\x05') {
+            if (!inputFocused) {
+                this._focusIndex = -1;
+                this._applyButtonFocus();
+            }
+            this._setPromptCursor(this._inputValue.length);
+            return true;
+        }
+    }
+    if (isPrompt && key.length === 1 && key >= ' ' && key <= '~') {
+        if (!inputFocused) {
+            this._focusIndex = -1;
+            this._applyButtonFocus();
+            inputFocused = true;
+        }
+        this._insertPromptChar(key);
+        return true;
+    }
     // 2. Built-in hotkeys/buttons
     if (key.length === 1) {
         var upper = key.toUpperCase();
@@ -689,20 +928,35 @@ Modal.prototype.handleKey = function (key) {
     }
     if (key === '\t') { this._focusNext(); return true; }
     if (key === '\x1b') {
-        if (this._cancelIndex !== -1) {
-            this._focusIndex = this._cancelIndex; this._applyButtonFocus(); this._activateFocused();
-        } else { this.close('cancel'); }
+        if (this._triggerButtonByRole('cancel')) return true;
+        this.close('cancel');
         return true;
     }
-    if (typeof KEY_LEFT !== 'undefined' && key === KEY_LEFT) { this._focusPrevious(); return true; }
-    if (typeof KEY_RIGHT !== 'undefined' && key === KEY_RIGHT) { this._focusNext(); return true; }
-    if (typeof KEY_ENTER !== 'undefined' && key === KEY_ENTER) { this._activateFocused(); return true; }
-    if (this.type === 'prompt' && key.length === 1) {
-        if (key === '\b' || key === '\x08') { if (this._inputCursor > 0) { this._inputValue = this._inputValue.substr(0, this._inputCursor - 1) + this._inputValue.substr(this._inputCursor); this._inputCursor--; this._renderPromptInput(this.height - 4); this._cycleAll(); } return true; }
-        if (key === '\x7f') { if (this._inputCursor < this._inputValue.length) { this._inputValue = this._inputValue.substr(0, this._inputCursor) + this._inputValue.substr(this._inputCursor + 1); this._renderPromptInput(this.height - 4); this._cycleAll(); } return true; }
-        if (key === '\x01') { this._inputCursor = 0; return true; }
-        if (key === '\x05') { this._inputCursor = this._inputValue.length; return true; }
-        if (key >= ' ' && key <= '~') { this._inputValue = this._inputValue.substr(0, this._inputCursor) + key + this._inputValue.substr(this._inputCursor); this._inputCursor++; this._renderPromptInput(this.height - 4); this._cycleAll(); return true; }
+    if (typeof KEY_LEFT !== 'undefined' && key === KEY_LEFT) {
+        if (isPrompt && this._focusIndex === -1) { this._movePromptCursor(-1); return true; }
+        this._focusPrevious();
+        return true;
+    }
+    if (typeof KEY_RIGHT !== 'undefined' && key === KEY_RIGHT) {
+        if (isPrompt && this._focusIndex === -1) { this._movePromptCursor(1); return true; }
+        this._focusNext();
+        return true;
+    }
+    if (typeof KEY_HOME !== 'undefined' && key === KEY_HOME) {
+        if (isPrompt && this._focusIndex === -1) { this._setPromptCursor(0); return true; }
+    }
+    if (typeof KEY_END !== 'undefined' && key === KEY_END) {
+        if (isPrompt && this._focusIndex === -1) { this._setPromptCursor(this._inputValue.length); return true; }
+    }
+    if (key === '\r' || key === '\n') {
+        if (this._triggerButtonByRole('default')) return true;
+        this._activateFocused();
+        return true;
+    }
+    if (typeof KEY_ENTER !== 'undefined' && key === KEY_ENTER) {
+        if (this._triggerButtonByRole('default')) { return true; }
+        this._activateFocused();
+        return true;
     }
     return false;
 };
@@ -782,6 +1036,8 @@ Modal.prototype.close = function (result) {
     }
     if (this._ownsParent && this.parentFrame) {
         try { this.parentFrame.close(); } catch (_) { }
+    } else {
+        this.parentFrame.cycle();
     }
     Modal._unregister(this);
     if (typeof this.options.onClose === 'function') {
