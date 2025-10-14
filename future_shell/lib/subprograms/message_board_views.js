@@ -393,7 +393,7 @@ if (typeof lazyLoadModule !== 'function') {
         board._lastActiveSubCode = code;
         var subChanged = previousCode && code !== previousCode;
         board.view = 'threads';
-        board._releaseHotspots();
+        if (!preserveState) board._releaseHotspots();
         dbug('MessageBoard: enter threads view sub=' + code, 'messageboard');
         board._showTransitionNotice('Loading thread list...');
         var transitionHost = board.hostFrame || board.parentFrame || board.rootFrame || (board.outputFrame ? (board.outputFrame.parent || board.outputFrame) : null) || null;
@@ -413,8 +413,16 @@ if (typeof lazyLoadModule !== 'function') {
             board.threadScrollOffset = 0;
             board.threadSelection = 0;
         }
-        if (typeof board._ensureThreadContentFrame === 'function') board._ensureThreadContentFrame();
+        if (typeof board._ensureThreadSearchUI === 'function') board._ensureThreadSearchUI();
         board._refreshTransitionOverlay();
+        if (subChanged) {
+            board._threadSearchFocus = false;
+            board._threadSearchBuffer = '';
+        } else {
+            board._threadSearchFocus = false;
+            board._threadSearchBuffer = board._threadSearchBuffer || '';
+        }
+        if (typeof board._renderThreadSearchBar === 'function') board._renderThreadSearchBar();
         var contentFrame = board._threadContentFrame || board.outputFrame;
         try { if (contentFrame) { contentFrame.clear(); contentFrame.gotoxy(1, 1); contentFrame.putmsg('Building thread list...'); contentFrame.cycle(); } } catch (_e2) { }
         board._refreshTransitionOverlay();
@@ -452,12 +460,19 @@ if (typeof lazyLoadModule !== 'function') {
     ThreadsView.prototype.handleKey = function (key) {
         var board = this.board;
         if (!board) return true;
-        if (key === '/' || key === 's' || key === 'S') {
-            if (typeof board._promptSearch === 'function') {
-                board._promptSearch(board.cursub || board._lastActiveSubCode || null, 'threads');
-            }
-            return false;
+    if (board._threadSearchFocus) {
+        if (typeof board._threadSearchHandleKey === 'function') {
+            var handled = board._threadSearchHandleKey(key);
+            if (handled !== 'pass') return handled;
         }
+    } else if (key === '/' || key === 's' || key === 'S') {
+        if (typeof board._promptSearch === 'function') {
+            board._promptSearch(board.cursub || board._lastActiveSubCode || null, 'threads');
+        } else if (typeof board._focusThreadSearch === 'function') {
+            board._focusThreadSearch('');
+        }
+        return false;
+    }
         if (board.threadTree) {
             return threadsHandleTreeKey(board, key);
         }
@@ -467,6 +482,7 @@ if (typeof lazyLoadModule !== 'function') {
     ThreadsView.prototype.exit = function () {
         var board = this.board;
         if (!board) return;
+        try { board._threadSearchFocus = false; } catch (_focusErr) { }
         try { board._releaseHotspots(); } catch (_releaseErr) { }
     };
 
@@ -495,6 +511,11 @@ if (typeof lazyLoadModule !== 'function') {
             case '\x1B':
                 board._renderSubView(board.curgrp);
                 return false;
+            case '/':
+            case 'S':
+            case 's':
+                if (board._focusThreadSearch) board._focusThreadSearch('');
+                return true;
             case ' ':
                 var node = board.threadNodeIndex[board.threadTreeSelection];
                 if (node && node.__isTree) {
@@ -547,6 +568,10 @@ if (typeof lazyLoadModule !== 'function') {
         var frame = board._threadContentFrame || board.outputFrame;
         var usable = frame ? frame.height - 2 : 10;
         if (usable < 3) usable = frame ? frame.height : 10;
+        if ((key === KEY_UP || key === KEY_PAGEUP) && board.threadSelection === 0) {
+            if (board._focusThreadSearch) board._focusThreadSearch('');
+            return true;
+        }
         switch (key) {
             case KEY_UP: board.threadSelection = Math.max(0, board.threadSelection - 1); break;
             case KEY_DOWN: board.threadSelection = Math.min(board.threadHeaders.length - 1, board.threadSelection + 1); break;
@@ -590,7 +615,7 @@ if (typeof lazyLoadModule !== 'function') {
         if (!board || !msg) return;
         board._beginViewTransition('Rendering message...');
         board.view = 'read';
-        board._releaseHotspots();
+        if (!preserveState) board._releaseHotspots();
         board._hotspotMap = {};
         board.lastReadMsg = msg;
         if (typeof board._storeFullHeader === 'function') board._storeFullHeader(msg);
@@ -806,7 +831,7 @@ if (typeof lazyLoadModule !== 'function') {
                 board._searchSelection = Math.max(0, Math.min(board._searchSelection, board._searchResults.length - 1));
                 board._searchScrollOffset = Math.min(board._searchScrollOffset, board._searchSelection);
             }
-            paintSearchResults(board);
+            paintSearchResults(board, preserveState);
         } finally {
             board._endViewTransition();
         }
@@ -840,7 +865,7 @@ if (typeof lazyLoadModule !== 'function') {
         } else {
             return true;
         }
-        if (board._searchSelection !== oldSel) paintSearchResults(board);
+        if (board._searchSelection !== oldSel) paintSearchResults(board, false);
         return true;
     };
 
@@ -851,7 +876,7 @@ if (typeof lazyLoadModule !== 'function') {
     };
 
     // Paint paginated search results with hotspot mapping.
-    function paintSearchResults(board) {
+    function paintSearchResults(board, preserveState) {
         var f = board.outputFrame; if (!f) return;
         try { f.clear(); } catch (_e) { }
         var header = '\x01h\x01cSearch \x01h\x01y"' + board._searchQuery + '"\x01h\x01c in \x01h\x01y' + (board._getCurrentSubName ? board._getCurrentSubName() : '') + '\x01h\x01c (' + board._searchResults.length + ' results)\x01n';
@@ -887,7 +912,7 @@ if (typeof lazyLoadModule !== 'function') {
             }
         }
         try { f.cycle(); } catch (_e4) { }
-        board._writeStatus('SEARCH: Enter=Read  ESC/Bksp=Back  ' + (board._searchSelection + 1) + '/' + board._searchResults.length);
+        if (!preserveState) board._writeStatus('SEARCH: Enter=Read  ESC/Bksp=Back  ' + (board._searchSelection + 1) + '/' + board._searchResults.length);
     }
 
     function PostView(board) {

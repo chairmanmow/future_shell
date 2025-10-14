@@ -3,10 +3,13 @@ load('sbbsdefs.js');
 (function (global) {
     function FrameSet(board, paletteAttr) {
         this.board = board;
+        this._paletteSource = 'fallback';
         if (typeof paletteAttr === 'function') {
             this.paletteAttr = paletteAttr.bind(board);
+            this._paletteSource = 'ctor-arg';
         } else if (board && typeof board.paletteAttr === 'function') {
             this.paletteAttr = board.paletteAttr.bind(board);
+            this._paletteSource = 'board-instance';
         } else {
             this.paletteAttr = function (_, __, fallback) {
                 if (typeof fallback === 'number') return fallback;
