@@ -126,12 +126,17 @@ function Modal(opts) {
     this.attr = pickThemeAttr(this.type, 'FRAME', opts.attr, frameFallback);
     this.contentAttr = pickThemeAttr(this.type, 'CONTENT', opts.contentAttr, this.attr);
     this.titleAttr = pickThemeAttr(this.type, 'TITLE', opts.titleAttr, ((WHITE & 0x0F) | (this.attr & 0x70)));
+    this.promptEchoAttr = pickThemeAttr(this.type, 'ECHO', opts.echoAttr, makeAttr((this.contentAttr >> 4) & 0x07, WHITE));
     this.buttonAttr = pickThemeAttr(this.type, 'BUTTON', opts.buttonAttr, this.attr);
     this.buttonFocusAttr = pickThemeAttr(this.type, 'BUTTON_FOCUS', opts.buttonFocusAttr, makeAttr(BLACK, WHITE));
     this.buttonDisabledAttr = pickThemeAttr(this.type, 'BUTTON_DISABLED', opts.buttonDisabledAttr, this.buttonAttr);
+    this.buttonMaskAttr = pickThemeAttr(this.type, 'BUTTON_MASK', opts.buttonMaskAttr, makeAttr(BLACK, BLACK));
+    this.buttonShadowAttr = pickThemeAttr(this.type, 'BUTTON_SHADOW', opts.buttonShadowAttr, makeAttr(BLACK, BLACK));
+    this.cancelButtonAttr = pickThemeAttr(this.type, 'CANCEL_BUTTON', opts.cancelButtonAttr, makeAttr(RED, WHITE));
+    this.cancelButtonFocusAttr = pickThemeAttr(this.type, 'CANCEL_BUTTON_FOCUS', opts.cancelButtonFocusAttr, this.cancelButtonAttr);
+    this.cancelButtonDisabledAttr = pickThemeAttr(this.type, 'CANCEL_BUTTON_DISABLED', opts.cancelButtonDisabledAttr, this.buttonDisabledAttr);
+    this.cancelButtonShadowAttr = pickThemeAttr(this.type, 'CANCEL_BUTTON_SHADOW', opts.cancelButtonShadowAttr, makeAttr(BLUE, BLUE));
     this.overlayAttr = pickThemeAttr(this.type, 'OVERLAY', opts.overlayAttr, DEFAULT_OVERLAY_ATTR);
-    this.buttonMaskAttr = (typeof opts.buttonMaskAttr === 'number') ? opts.buttonMaskAttr : null;
-    this.buttonShadowAttr = (typeof opts.buttonShadowAttr === 'number') ? opts.buttonShadowAttr : null;
     this.parentFrame = opts.parentFrame || null;
     this._ownsParent = false;
     this._buttons = [];
@@ -173,6 +178,12 @@ function Modal(opts) {
                 + ' button=0x' + (this.buttonAttr & 0xFF).toString(16)
                 + ' focus=0x' + (this.buttonFocusAttr & 0xFF).toString(16)
                 + ' disabled=0x' + (this.buttonDisabledAttr & 0xFF).toString(16)
+                + ' mask=0x' + (this.buttonMaskAttr & 0xFF).toString(16)
+                + ' shadow=0x' + (this.buttonShadowAttr & 0xFF).toString(16)
+                + ' cancel=0x' + (this.cancelButtonAttr & 0xFF).toString(16)
+                + ' cancelFocus=0x' + (this.cancelButtonFocusAttr & 0xFF).toString(16)
+                + ' cancelShadow=0x' + (this.cancelButtonShadowAttr & 0xFF).toString(16)
+                + ' echo=0x' + (this.promptEchoAttr & 0xFF).toString(16)
                 + ' overlay=0x' + (this.overlayAttr & 0xFF).toString(16);
             log(msg);
         } catch (_) { }
@@ -333,6 +344,7 @@ Modal.prototype._normalizeButtons = function (buttons) {
         var b = buttons[i];
         if (!b || typeof b !== 'object') continue;
         var label = (typeof b.label === 'string' && b.label.length) ? b.label : ('Button' + (i + 1));
+        var isCancel = !!b && !!b.cancel;
         var def = {
             label: label,
             value: (b.value !== undefined) ? b.value : label,
@@ -341,8 +353,9 @@ Modal.prototype._normalizeButtons = function (buttons) {
             onClick: (typeof b.onClick === 'function') ? b.onClick : null,
             hotKey: (typeof b.hotKey === 'string' && b.hotKey.length) ? b.hotKey.toUpperCase() : null,
             disabled: b.enabled === false ? true : false,
-            attr: (typeof b.attr === 'number') ? b.attr : this.buttonAttr,
-            focusAttr: (typeof b.focusAttr === 'number') ? b.focusAttr : this.buttonFocusAttr
+            attr: (typeof b.attr === 'number') ? b.attr : (isCancel ? this.cancelButtonAttr : this.buttonAttr),
+            focusAttr: (typeof b.focusAttr === 'number') ? b.focusAttr : (isCancel ? this.cancelButtonFocusAttr : this.buttonFocusAttr),
+            disabledAttr: (typeof b.disabledAttr === 'number') ? b.disabledAttr : (isCancel ? this.cancelButtonDisabledAttr : this.buttonDisabledAttr)
         };
         if (def.hotKey === null) {
             if (allowDefaultHotKeys && label.length) def.hotKey = label.charAt(0).toUpperCase();
@@ -505,10 +518,22 @@ Modal.prototype._renderPromptInput = function (y) {
     var value = this._inputValue || '';
     var display = this._inputSecret ? Array(value.length + 1).join('*') : value;
     var slice = display.substr(this._inputScroll, visibleWidth);
-    if (slice.length < visibleWidth) slice += Array(visibleWidth - slice.length + 1).join(' ');
+    var echoAttr = (typeof this.promptEchoAttr === 'number') ? this.promptEchoAttr : makeAttr((this.contentAttr >> 4) & 0x07, WHITE);
+    var filler = visibleWidth - slice.length;
+    if (filler < 0) filler = 0;
     this.frame.attr = this.contentAttr;
     this.frame.gotoxy(3, y);
-    this.frame.putmsg('>' + slice + ' ');
+    this.frame.putmsg('>');
+    if (slice.length) {
+        this.frame.attr = echoAttr;
+        this.frame.putmsg(slice);
+    }
+    if (filler > 0) {
+        this.frame.attr = this.contentAttr;
+        this.frame.putmsg(Array(filler + 1).join(' '));
+    }
+    this.frame.attr = this.contentAttr;
+    this.frame.putmsg(' ');
 };
 
 Modal.prototype._promptVisibleWidth = function () {
@@ -584,13 +609,19 @@ Modal.prototype._buildButtons = function () {
     var buttonPalette = this._resolveButtonPalette();
     for (var j = 0; j < this._buttonDefs.length; j++) {
         var def = this._buttonDefs[j];
-        var baseAttr = (typeof def.attr === 'number') ? def.attr : buttonPalette.attr;
-        var focusAttr = (typeof def.focusAttr === 'number') ? def.focusAttr : buttonPalette.focusAttr;
-        var disabledAttr = (typeof def.disabledAttr === 'number') ? def.disabledAttr : buttonPalette.disabledAttr;
+        var isCancel = !!def.cancel;
+        var baseAttr = (typeof def.attr === 'number') ? def.attr : (isCancel ? this.cancelButtonAttr : buttonPalette.attr);
+        var focusAttr = (typeof def.focusAttr === 'number') ? def.focusAttr : (isCancel ? this.cancelButtonFocusAttr : buttonPalette.focusAttr);
+        var disabledAttr = (typeof def.disabledAttr === 'number') ? def.disabledAttr : (isCancel ? this.cancelButtonDisabledAttr : buttonPalette.disabledAttr);
+        // Mask/shadow: cancel button can override shadow color; mask shared
         var maskAttr = (typeof this.buttonMaskAttr === 'number') ? this.buttonMaskAttr : baseAttr;
+        // Background colors derived from mask/base (legacy approach) so we don't override intended label fg/bg.
         var backgroundColors = this._deriveButtonColors(maskAttr, baseAttr);
-        var shadowAttr = (typeof this.buttonShadowAttr === 'number') ? this.buttonShadowAttr : null;
-        var shadowColors = this._deriveButtonShadow(shadowAttr);
+        // Unified shadow: reuse cancel shadow (if defined) for all buttons so both have visible shadow, else fall back to generic or base.
+        var shadowAttr = (typeof this.cancelButtonShadowAttr === 'number') ? this.cancelButtonShadowAttr
+            : (typeof this.buttonShadowAttr === 'number') ? this.buttonShadowAttr : baseAttr;
+        // Shadow colors passed directly; Button will extract nibs. Second entry uses maskAttr background to produce trail.
+        var shadowColors = [shadowAttr, maskAttr];
         var width = Math.max(6, (def.label || '').length + 4);
         var btn = new Button({
             parentFrame: this.frame,
@@ -673,18 +704,14 @@ Modal.prototype._resolveButtonPalette = function () {
 
 Modal.prototype._deriveButtonColors = function (attr, fallbackAttr) {
     var base = (typeof attr === 'number') ? attr : fallbackAttr;
-    if (typeof base !== 'number') return null;
+    if (typeof base !== 'number') base = fallbackAttr;
+    if (typeof base !== 'number') base = makeAttr(BLACK, BLACK);
     return [base, base];
 };
 
-Modal.prototype._deriveButtonShadow = function (attr) {
-    var base;
-    if (typeof attr === 'number') base = attr;
-    else {
-        base = 0;
-        if (typeof BG_BLACK === 'number') base |= BG_BLACK;
-        if (typeof BLACK === 'number') base |= BLACK;
-    }
+Modal.prototype._deriveButtonShadow = function (attr, fallbackAttr) {
+    var base = (typeof attr === 'number') ? attr : fallbackAttr;
+    if (typeof base !== 'number') base = makeAttr(BLACK, BLACK);
     return [base, base];
 };
 

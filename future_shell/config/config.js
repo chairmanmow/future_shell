@@ -277,6 +277,20 @@ var BUILTIN_ACTIONS = {
 			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
 		}
 	}),
+	resource_editor: new SubprogramActionHandler('ResourceEditor', {
+		module: 'future_shell/lib/subprograms/resource_editor.js',
+		queueName: 'resource-editor',
+		instanceProperty: 'resourceEditorSub',
+		loadFailureMessage: 'Failed loading resource_editor.js ',
+		missingMessage: 'ResourceEditor class missing after load',
+		options: function () { return { parentFrame: this.root, shell: this, timer: this.timer }; },
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
+			instance.shell = this;
+			instance.timer = this.timer;
+			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
+		}
+	}),
 	newsreader: new SubprogramActionHandler('NewsReader', {
 		module: 'future_shell/lib/subprograms/newsreader.js',
 		queueName: 'newsreader',
@@ -766,6 +780,13 @@ var ICSH_DEFAULTS = {
 	MODAL_BUTTON: { BG: BG_BLUE, FG: WHITE },
 	MODAL_BUTTON_FOCUS: { BG: BG_BLUE, FG: WHITE },
 	MODAL_BUTTON_DISABLED: { BG: BG_BLUE, FG: LIGHTGRAY },
+	MODAL_BUTTON_SHADOW: { BG: BG_BLACK, FG: BLACK },
+	MODAL_BUTTON_MASK: { BG: BG_BLACK, FG: BLACK },
+	MODAL_CANCEL_BUTTON: { BG: BG_RED, FG: WHITE },
+	MODAL_CANCEL_BUTTON_FOCUS: { BG: BG_RED, FG: WHITE },
+	MODAL_CANCEL_BUTTON_DISABLED: { BG: BG_RED, FG: LIGHTGRAY },
+	MODAL_CANCEL_BUTTON_SHADOW: { BG: BG_BLUE, FG: BLUE },
+	MODAL_ECHO: { BG: BG_BLACK, FG: WHITE },
 	MODAL_OVERLAY: { BG: BG_BLACK, FG: BLACK },
 	MODAL_PROMPT_FRAME: { BG: BG_BLUE, FG: WHITE },
 	MODAL_PROMPT_CONTENT: { BG: BG_BLACK, FG: LIGHTGRAY },
@@ -773,6 +794,13 @@ var ICSH_DEFAULTS = {
 	MODAL_PROMPT_BUTTON: { BG: BG_BLUE, FG: WHITE },
 	MODAL_PROMPT_BUTTON_FOCUS: { BG: BG_BLUE, FG: WHITE },
 	MODAL_PROMPT_BUTTON_DISABLED: { BG: BG_BLUE, FG: LIGHTGRAY },
+	MODAL_PROMPT_BUTTON_SHADOW: { BG: BG_BLACK, FG: BLACK },
+	MODAL_PROMPT_BUTTON_MASK: { BG: BG_BLACK, FG: BLACK },
+	MODAL_PROMPT_CANCEL_BUTTON: { BG: BG_RED, FG: WHITE },
+	MODAL_PROMPT_CANCEL_BUTTON_FOCUS: { BG: BG_RED, FG: WHITE },
+	MODAL_PROMPT_CANCEL_BUTTON_DISABLED: { BG: BG_RED, FG: LIGHTGRAY },
+	MODAL_PROMPT_CANCEL_BUTTON_SHADOW: { BG: BG_BLUE, FG: BLUE },
+	MODAL_PROMPT_ECHO: { BG: BG_BLACK, FG: WHITE },
 	MODAL_PROMPT_OVERLAY: { BG: BG_BLACK, FG: BLACK },
 	MODAL_LEFT_PANEL: { BG: BG_CYAN, FG: LIGHTGRAY },
 	MODAL_RIGHT_PANEL: { BG: BG_BLUE, FG: LIGHTGRAY },
