@@ -392,8 +392,10 @@ if (typeof lazyLoadModule !== 'function') {
         board.cursub = code;
         board._lastActiveSubCode = code;
         var subChanged = previousCode && code !== previousCode;
+        var returnAnchor = board._readReturnAnchor || null;
+        board._readReturnAnchor = null;
         board.view = 'threads';
-        if (!preserveState) board._releaseHotspots();
+        board._releaseHotspots();
         dbug('MessageBoard: enter threads view sub=' + code, 'messageboard');
         board._showTransitionNotice('Loading thread list...');
         var transitionHost = board.hostFrame || board.parentFrame || board.rootFrame || (board.outputFrame ? (board.outputFrame.parent || board.outputFrame) : null) || null;
@@ -444,11 +446,25 @@ if (typeof lazyLoadModule !== 'function') {
             }
             board.threadTreeSelection = Math.min(board.threadTreeSelection, Math.max(0, board.threadNodeIndex.length - 1));
             if (board.threadTree && board.threadNodeIndex.length) {
+                if (returnAnchor !== null && typeof board._findThreadTreeIndexByNumber === 'function') {
+                    var tIndex = board._findThreadTreeIndexByNumber(returnAnchor);
+                    if (tIndex !== -1) {
+                        board.threadTreeSelection = tIndex;
+                        var selNode = board.threadNodeIndex[tIndex];
+                        if (selNode && selNode.parent && selNode.parent.__isTree && typeof selNode.parent.open === 'function') {
+                            try { selNode.parent.open(); } catch (_treeOpenErr) { }
+                        }
+                    }
+                }
                 if (typeof board._paintThreadTree === 'function') board._paintThreadTree();
             } else {
                 dbug('MessageBoard: thread tree empty, fallback list', 'messageboard');
                 board.threadSelection = 0;
                 board.threadScrollOffset = 0;
+                if (returnAnchor !== null && typeof board._findThreadViewIndexByNumber === 'function') {
+                    var idx = board._findThreadViewIndexByNumber(returnAnchor);
+                    if (idx !== -1) board.threadSelection = idx;
+                }
                 if (typeof board._paintThreadList === 'function') board._paintThreadList();
             }
         } finally {
@@ -516,6 +532,10 @@ if (typeof lazyLoadModule !== 'function') {
             case 's':
                 if (board._focusThreadSearch) board._focusThreadSearch('');
                 return true;
+            case 'O':
+            case 'o':
+                if (typeof board._toggleThreadSortOrder === 'function') board._toggleThreadSortOrder();
+                return false;
             case ' ':
                 var node = board.threadNodeIndex[board.threadTreeSelection];
                 if (node && node.__isTree) {
@@ -534,6 +554,9 @@ if (typeof lazyLoadModule !== 'function') {
                     return true;
                 }
                 if (node2.__msgHeader) {
+                    board._readReturnView = 'threads';
+                    board._readReturnAnchor = node2.__msgHeader.number || null;
+                    if (typeof board._ensureThreadReadContextFromThreads === 'function') board._ensureThreadReadContextFromThreads(node2.__msgHeader);
                     board._renderReadView(node2.__msgHeader);
                     return false;
                 }
@@ -559,7 +582,8 @@ if (typeof lazyLoadModule !== 'function') {
 
     // Fallback list-mode thread navigation.
     function threadsHandleListKey(board, key) {
-        if (!board.threadHeaders.length) {
+        var headers = (typeof board._getThreadViewHeaders === 'function') ? board._getThreadViewHeaders() : board.threadHeaders;
+        if (!headers || !headers.length) {
             if (key === 'P' || key === 'p') { board._renderPostView(); return false; }
             if (key === '\x08') { board._renderSubView(board.curgrp); return false; }
             return true;
@@ -574,11 +598,11 @@ if (typeof lazyLoadModule !== 'function') {
         }
         switch (key) {
             case KEY_UP: board.threadSelection = Math.max(0, board.threadSelection - 1); break;
-            case KEY_DOWN: board.threadSelection = Math.min(board.threadHeaders.length - 1, board.threadSelection + 1); break;
+            case KEY_DOWN: board.threadSelection = Math.min(headers.length - 1, board.threadSelection + 1); break;
             case KEY_PAGEUP: board.threadSelection = Math.max(0, board.threadSelection - usable); break;
-            case KEY_PAGEDN: board.threadSelection = Math.min(board.threadHeaders.length - 1, board.threadSelection + usable); break;
+            case KEY_PAGEDN: board.threadSelection = Math.min(headers.length - 1, board.threadSelection + usable); break;
             case KEY_HOME: board.threadSelection = 0; break;
-            case KEY_END: board.threadSelection = board.threadHeaders.length - 1; break;
+            case KEY_END: board.threadSelection = headers.length - 1; break;
             case '\x08':
                 board._renderSubView(board.curgrp);
                 return false;
@@ -586,14 +610,22 @@ if (typeof lazyLoadModule !== 'function') {
                 board._renderPostView();
                 return false;
             case 'R': case 'r': {
-                var rh = board.threadHeaders[board.threadSelection];
+                var rh = headers[board.threadSelection];
                 if (rh) board._renderPostView({ replyTo: rh });
                 return false;
             }
+            case 'O': case 'o':
+                if (typeof board._toggleThreadSortOrder === 'function') board._toggleThreadSortOrder();
+                return false;
             case '\r':
             case '\n': {
-                var hdr = board.threadHeaders[board.threadSelection];
-                if (hdr) board._renderReadView(hdr);
+                var hdr = headers[board.threadSelection];
+                if (hdr) {
+                    board._readReturnView = 'threads';
+                    board._readReturnAnchor = hdr.number || null;
+                    if (typeof board._ensureThreadReadContextFromThreads === 'function') board._ensureThreadReadContextFromThreads(hdr);
+                    board._renderReadView(hdr);
+                }
                 return false;
             }
             default:
@@ -613,6 +645,8 @@ if (typeof lazyLoadModule !== 'function') {
     ReadView.prototype.enter = function (msg) {
         var board = this.board;
         if (!board || !msg) return;
+        var preserveState = false;
+        var originView = board.view || 'group';
         board._beginViewTransition('Rendering message...');
         board.view = 'read';
         if (!preserveState) board._releaseHotspots();
@@ -689,7 +723,14 @@ if (typeof lazyLoadModule !== 'function') {
             board.currentMessageHeader = fullHeader;
             board.currentMessageBody = displayBody;
             if (!board.currentMessageRawBody) board.currentMessageRawBody = displayBody; // fallback if raw missing
+            if (originView === 'threads' && typeof board._ensureThreadReadContextFromThreads === 'function') {
+                board._ensureThreadReadContextFromThreads(fullHeader);
+            } else if (originView !== 'flat' && board._readThreadContext && board._readThreadContext.mode === 'thread' && board._readThreadContext.rootId !== (fullHeader.thread_id || fullHeader.number)) {
+                board._readThreadContext = null;
+            }
+            if (typeof board._updateThreadContextAfterRead === 'function') board._updateThreadContextAfterRead(fullHeader);
             if (board._paintRead) board._paintRead();
+            if (typeof board._renderTitleFrame === 'function') board._renderTitleFrame();
         } finally {
             board._endViewTransition();
         }
@@ -714,6 +755,13 @@ if (typeof lazyLoadModule !== 'function') {
             maxStart = Math.max(0, (lines.length - usable));
         }
         switch (key) {
+            case 'T':
+            case 't':
+                if (typeof board._jumpToThreadViewFromRead === 'function') {
+                    var jumped = board._jumpToThreadViewFromRead();
+                    if (jumped) return false;
+                }
+                return true;
             case KEY_UP:
                 board._readScroll = Math.max(0, (board._readScroll || 0) - 1);
                 board._paintRead && board._paintRead();
@@ -762,6 +810,9 @@ if (typeof lazyLoadModule !== 'function') {
                 }
                 var advanced = false;
                 if (board._openRelativeInThread) advanced = board._openRelativeInThread(1);
+                if (!advanced && board._readThreadContext && typeof board._completeThreadRead === 'function') {
+                    if (board._completeThreadRead()) return false;
+                }
                 if (!advanced && board._openAdjacentThread) advanced = board._openAdjacentThread(1);
                 if (advanced) return false;
                 if (board._showReadNotice) {
