@@ -1,5 +1,7 @@
 load("future_shell/lib/subprograms/chat_helpers.js");
 load("future_shell/lib/subprograms/subprogram.js"); // Base class
+load('future_shell/lib/util/layout/button.js');
+load('future_shell/lib/util/layout/modal.js');
 if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
@@ -10,14 +12,21 @@ function Chat(jsonchat) {
     this.channel = "main";
     this.jsonchat = jsonchat; // persistent backend instance
     this.parentFrame = null;
+    this.headerFrame = null;
     this.chatOutputFrame = null;
     this.chatInputFrame = null;
+    this.chatControlsFrame = null;
     this.leftAvatarFrame = null;
     this.leftMsgFrame = null;
     this.rightMsgFrame = null;
     this.rightAvatarFrame = null;
-    this.chatSpacerFrame = null;
     this.messageFrames = [];
+    this._controlButtons = [];
+    this._controlButtonHotkeyMap = {};
+    this._hotspotActionMap = {};
+    this._hotspotBuffer = '';
+    this._hotspotTokenSeq = 0;
+    this._activeRosterModal = null;
     this.done = null;
     this.lastSender = null; // State tracking for last sender
     this.lastRow = 0; // State tracking for last rendered row
@@ -75,6 +84,29 @@ function Chat(jsonchat) {
         try { log('[Chat] avatar_lib unavailable after attempts: ' + candidates.join(', ')); } catch (_) { }
         return null;
     })();
+    if (typeof this.registerColors === 'function') {
+        var bgBlue = (typeof BG_BLUE !== 'undefined') ? BG_BLUE : 0;
+        var bgBlack = (typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0;
+        var bgCyan = (typeof BG_CYAN !== 'undefined') ? BG_CYAN : 0;
+        var bgLightCyan = (typeof BG_LIGHTCYAN !== 'undefined') ? BG_LIGHTCYAN : bgCyan;
+        var fgWhite = (typeof WHITE !== 'undefined') ? WHITE : 7;
+        var fgLightGray = (typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : fgWhite;
+        var fgBlack = (typeof BLACK !== 'undefined') ? BLACK : 0;
+        var fgLightCyan = (typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : fgLightGray;
+        this.registerColors({
+            CHAT_HEADER: { BG: bgBlue, FG: fgWhite },
+            CHAT_OUTPUT: { BG: bgBlack, FG: fgLightGray },
+            CHAT_CONTROLS: { BG: bgBlack, FG: fgLightGray },
+            CHAT_BUTTON: { BG: bgCyan, FG: fgBlack },
+            CHAT_BUTTON_FOCUS: { BG: bgLightCyan, FG: fgBlack },
+            CHAT_ROSTER_MODAL_FRAME: { BG: bgBlue, FG: fgWhite },
+            CHAT_ROSTER_MODAL_CONTENT: { BG: bgBlack, FG: fgLightGray },
+            CHAT_ROSTER_MODAL_TITLE: { BG: bgBlue, FG: fgWhite },
+            CHAT_ROSTER_MODAL_BUTTON: { BG: bgCyan, FG: fgBlack },
+            CHAT_ROSTER_MODAL_BUTTON_FOCUS: { BG: bgLightCyan, FG: fgBlack },
+            CHAT_INPUT: { BG: bgBlue, FG: fgWhite }
+        }, 'chat');
+    }
 }
 
 if (typeof extend === 'function') {
@@ -153,9 +185,19 @@ Chat.prototype.detachShellTimer = function () {
     this.timer = null;
 };
 Chat.prototype.handleKey = function (key) {
+    if (this._processControlHotspotInput(key)) return;
     var scrollHandled = false;
     var pageStep = (this.leftMsgFrame && this.leftMsgFrame.height) ? Math.max(1, this.leftMsgFrame.height - 1) : 5;
     this._lastKeyTs = Date.now();
+    var rosterKey = (typeof KEY_F2 !== 'undefined') ? KEY_F2 : null;
+
+    if (key === 'F2' || key === '\x02' || (rosterKey && key === rosterKey)) {
+        if (typeof log === 'function') {
+            try { log('[Chat] handleKey roster trigger via F2 combo', 'chat'); } catch (_) { }
+        }
+        this._showRosterModal();
+        return;
+    }
 
     switch (key) {
         case KEY_UP:
@@ -195,9 +237,14 @@ Chat.prototype.handleKey = function (key) {
     }
 
     if (scrollHandled) return;
-    // ESC key (string '\x1B')
+    if (this._handleControlHotkey(key)) return;
     if (key === '\x1B') {
-        this.exit();
+        // Exit only if no active modal
+        if (!this._activeRosterModal || this._activeRosterModal._closed) {
+            this.exit();
+            return;
+        }
+        return; // swallow ESC while modal open
         return;
     }
     // Enter/Return (string '\r' or '\n')
@@ -256,6 +303,19 @@ Chat.prototype.updateChat = function (packet) {
 };
 
 Chat.prototype.cleanup = function () {
+    if (this._activeRosterModal && typeof this._activeRosterModal.close === 'function') {
+        try { this._activeRosterModal.close(); } catch (_) { }
+    }
+    this._activeRosterModal = null;
+    this._destroyControlButtons();
+    if (this.chatControlsFrame) {
+        try { this.chatControlsFrame.close(); } catch (_) { }
+        this.chatControlsFrame = null;
+    }
+    if (this.headerFrame) {
+        try { this.headerFrame.close(); } catch (_) { }
+        this.headerFrame = null;
+    }
     // Close and null out all frames
     if (this.leftAvatarFrame) {
         this.leftAvatarFrame.close();
@@ -293,6 +353,424 @@ Chat.prototype.cleanup = function () {
 }
 
 
+Chat.prototype._destroyControlButtons = function () {
+    if (!this._controlButtons) {
+        this._controlButtons = [];
+        return;
+    }
+    for (var i = 0; i < this._controlButtons.length; i++) {
+        var btn = this._controlButtons[i];
+        if (!btn || !btn.button) continue;
+        try { btn.button.destroy(); } catch (_) { }
+    }
+    this._controlButtons = [];
+    this._clearControlHotspots();
+};
+
+Chat.prototype._buildControlButtons = function (opts) {
+    opts = opts || {};
+    this._destroyControlButtons();
+    if (!this.chatControlsFrame || this.chatControlsFrame.height < 1) return;
+    this._hotspotTokenSeq = 0;
+    var frame = this.chatControlsFrame;
+    if (frame.width <= 6) return;
+    var buttonAttr = opts.buttonAttr || frame.attr;
+    var buttonFocusAttr = opts.buttonFocusAttr || buttonAttr;
+    var rowY = Math.min(frame.height, 2);
+    var margin = 2;
+    var gap = 2;
+    var currentX = margin;
+    var maxWidth = frame.width;
+    var self = this;
+    // Use a stable single-char token unlikely to conflict with typical typing: 0x0E (Shift Out)
+    // Avoid ESC-based multi-byte sequences which previously caused premature exits.
+    // Use printable token '~' to avoid ESC normalization; rarely typed casually in chat
+    var rosterHotspotToken = '~';
+    var buttonDefs = [
+        {
+            id: 'back',
+            label: 'Back',
+            action: 'back',
+            hotKeys: ['\x01'], // control-char programmatic trigger only
+            hotspotToken: null
+        },
+        {
+            id: 'roster',
+            label: "Who's Here", // remove F2 binding & label
+            action: 'roster',
+            hotKeys: ['~'], // click-only; do not bind keyboard by default
+            hotspotToken: rosterHotspotToken
+        }
+    ];
+    for (var i = 0; i < buttonDefs.length; i++) {
+        var def = buttonDefs[i];
+        var minWidth = Math.max(6, def.label.length + 2);
+        var remaining = maxWidth - currentX + 1;
+        if (remaining < minWidth) break;
+        var width = Math.min(minWidth, remaining);
+        var btn = new Button({
+            parentFrame: frame,
+            x: currentX,
+            y: rowY,
+            width: width,
+            height: Math.min(2, frame.height - rowY + 1),
+            attr: buttonAttr,
+            focusAttr: buttonFocusAttr,
+            label: def.label,
+            onClick: (function (action) {
+                return function () { self._activateControlAction(action); };
+            })(def.action)
+        });
+        this._controlButtons.push({
+            id: def.id,
+            action: def.action,
+            hotKeys: def.hotKeys || [],
+            hotspotToken: def.hotspotToken || null,
+            button: btn
+        });
+        currentX += width + gap;
+        if (currentX >= maxWidth) break;
+    }
+    this._registerControlHotspots();
+};
+
+Chat.prototype._renderControlButtons = function () {
+    if (!this._controlButtons) return;
+    for (var i = 0; i < this._controlButtons.length; i++) {
+        var btn = this._controlButtons[i];
+        if (btn && btn.button && typeof btn.button.render === 'function') {
+            try { btn.button.render(); } catch (_) { }
+        }
+    }
+};
+
+Chat.prototype._renderHeaderFrame = function () {
+    if (!this.headerFrame) return;
+    var attr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_HEADER', this.headerFrame.attr || 0) : (this.headerFrame.attr || 0);
+    this.headerFrame.attr = attr;
+    try { this.headerFrame.clear(attr); } catch (_) { }
+    var title = 'Chat';
+    if (this.channel) title += ' - ' + this.channel;
+    var text = title;
+    var width = this.headerFrame.width || 0;
+    if (width <= 0) return;
+    if (text.length > width) text = text.substr(0, width);
+    var startX = Math.max(1, Math.floor((width - text.length) / 2) + 1);
+    try {
+        this.headerFrame.gotoxy(startX, 1);
+        this.headerFrame.putmsg(text);
+    } catch (_) { }
+};
+
+Chat.prototype._formatControlsInfo = function () {
+    var channel = this.channel ? this.channel : 'main';
+    return 'Channel: ' + channel;
+};
+
+Chat.prototype._renderControlsArea = function () {
+    if (!this.chatControlsFrame) return;
+    var attr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_CONTROLS', this.chatControlsFrame.attr || 0) : (this.chatControlsFrame.attr || 0);
+    this.chatControlsFrame.attr = attr;
+    try { this.chatControlsFrame.clear(attr); } catch (_) { }
+    var info = this._formatControlsInfo();
+    if (info) {
+        var width = this.chatControlsFrame.width || 0;
+        var text = info;
+        if (text.length > width) text = text.substr(0, width);
+        var startX = Math.max(1, Math.floor((width - text.length) / 2) + 1);
+        try {
+            this.chatControlsFrame.gotoxy(startX, 1);
+            this.chatControlsFrame.putmsg(text);
+        } catch (_) { }
+    }
+    this._renderControlButtons();
+};
+
+Chat.prototype._nextControlHotspotToken = function () {
+    if (this._hotspotTokenSeq === null || typeof this._hotspotTokenSeq === 'undefined') this._hotspotTokenSeq = 0;
+    var base = 0x10 + (this._hotspotTokenSeq % 8); // 0x10 - 0x17
+    var offset = 0x18 + ((this._hotspotTokenSeq / 8) | 0) % 8; // 0x18 - 0x1F
+    this._hotspotTokenSeq += 1;
+    return String.fromCharCode(base) + String.fromCharCode(offset);
+};
+
+Chat.prototype._handleRosterRequest = function () {
+    this._showRosterModal();
+};
+
+Chat.prototype._getRosterUsernames = function () {
+    var names = [];
+    var seen = {};
+    var sourceCounts = {};
+    function addName(raw, source) {
+        if (!raw && raw !== 0) return;
+        var name = String(raw).trim();
+        if (!name.length) return;
+        var key = name.toLowerCase();
+        if (seen[key]) return;
+        seen[key] = true;
+        if (source) {
+            if (!Object.prototype.hasOwnProperty.call(sourceCounts, source)) sourceCounts[source] = 0;
+            sourceCounts[source] += 1;
+        }
+        names.push(name);
+    }
+
+    if (typeof user !== 'undefined' && user && user.alias) {
+        addName(user.alias, 'self');
+    }
+
+    try {
+        if (this.jsonchat) {
+            var chanId = this.channel ? this.channel.toUpperCase() : 'MAIN';
+            var chan = this.jsonchat.channels ? this.jsonchat.channels[chanId] : null;
+            if (!chan || !Array.isArray(chan.users)) {
+                if (typeof this.jsonchat.who === 'function') {
+                    try { this.jsonchat.who(this.channel || 'main'); } catch (_) { }
+                    chan = this.jsonchat.channels ? this.jsonchat.channels[chanId] : chan;
+                }
+            }
+            if (chan && Array.isArray(chan.users)) {
+                for (var i = 0; i < chan.users.length; i++) {
+                    var entry = chan.users[i];
+                    if (!entry) continue;
+                    addName(entry.nick || entry.name || entry.alias || entry, 'jsonchat');
+                }
+            }
+        }
+    } catch (_jsonErr) { }
+
+    try {
+        if (typeof system !== 'undefined' && system && system.node_list) {
+            for (var n = 0; n < system.node_list.length; n++) {
+                var node = system.node_list[n];
+                if (!node) continue;
+                if (node.useron && String(node.useron).trim().length) {
+                    addName(node.useron, 'system');
+                } else if (typeof system.username === 'function') {
+                    var alias = system.username(n + 1);
+                    if (alias) addName(alias, 'system');
+                }
+            }
+        }
+    } catch (_sysErr) { }
+
+    if (typeof log === 'function') {
+        try {
+            var breakdown = [];
+            for (var key in sourceCounts) {
+                if (!Object.prototype.hasOwnProperty.call(sourceCounts, key)) continue;
+                breakdown.push(key + ':' + sourceCounts[key]);
+            }
+            log('[Chat] roster sources => ' + (breakdown.length ? breakdown.join(', ') : 'none') + ' total=' + names.length, 'chat');
+        } catch (_) { }
+    }
+
+    names.sort(function (a, b) { return a.localeCompare(b); });
+    return names;
+};
+
+Chat.prototype._showRosterModal = function () {
+    if (typeof log === 'function') {
+        try { log('[Chat] _showRosterModal invoked', 'chat'); } catch (_) { }
+    }
+    if (typeof Modal !== 'function') {
+        if (typeof log === 'function') {
+            try { log('[Chat] Modal constructor unavailable; falling back to status text', 'chat'); } catch (_) { }
+        }
+        this._statusText = 'Feature unavailable';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._drawInputFrame(true);
+        return;
+    }
+
+    var names = [];
+    try {
+        names = this._getRosterUsernames();
+    } catch (err) {
+        if (typeof log === 'function') {
+            try { log('[Chat] roster gather failed: ' + err, 'chat'); } catch (_) { }
+        }
+        names = [];
+    }
+
+    if (typeof log === 'function') {
+        try { log('[Chat] roster name count => ' + names.length, 'chat'); } catch (_) { }
+    }
+
+    var body = names.length ? names.join('\r\n') : 'No one else is here right now.';
+    var frameAttr = this.paletteAttr('CHAT_ROSTER_MODAL_FRAME', this.chatOutputFrame ? this.chatOutputFrame.attr : 0);
+    var contentAttr = this.paletteAttr('CHAT_ROSTER_MODAL_CONTENT', frameAttr);
+    var titleAttr = this.paletteAttr('CHAT_ROSTER_MODAL_TITLE', frameAttr);
+    var buttonAttr = this.paletteAttr('CHAT_ROSTER_MODAL_BUTTON', contentAttr);
+    var buttonFocusAttr = this.paletteAttr('CHAT_ROSTER_MODAL_BUTTON_FOCUS', buttonAttr);
+    var self = this;
+    if (this._activeRosterModal && typeof this._activeRosterModal.close === 'function') {
+        try { this._activeRosterModal.close(); } catch (_) { }
+    }
+    try {
+        this._activeRosterModal = new Modal({
+            type: 'confirm',
+            title: "Who's Here",
+            message: body,
+            parentFrame: this.parentFrame || this.chatOutputFrame || null,
+            captureKeys: true,
+            attr: frameAttr,
+            contentAttr: contentAttr,
+            titleAttr: titleAttr,
+            buttonAttr: buttonAttr,
+            buttonFocusAttr: buttonFocusAttr,
+            buttons: [
+                { id: 'ok', label: 'OK', isDefault: true }
+            ],
+            onClose: function () {
+                if (typeof log === 'function') {
+                    try { log('[Chat] roster modal closed', 'chat'); } catch (_) { }
+                }
+                self._activeRosterModal = null;
+                self._needsRedraw = true;
+                if (self.running) {
+                    try { self.draw(); } catch (e) { }
+                }
+                self._registerControlHotspots();
+                // Force input frame refresh after modal to avoid stale cursor or residual chars
+                self.updateInputFrame();
+            }
+        });
+        if (typeof log === 'function') {
+            try { log('[Chat] roster modal created', 'chat'); } catch (_) { }
+        }
+    } catch (modalErr) {
+        if (typeof log === 'function') {
+            var detail = modalErr && modalErr.stack ? modalErr.stack : modalErr;
+            try { log('[Chat] roster modal creation failed: ' + detail, 'chat'); } catch (_) { }
+        }
+        this._activeRosterModal = null;
+        this._registerControlHotspots();
+        this._statusText = 'Unable to show roster';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._drawInputFrame(true);
+    }
+};
+
+Chat.prototype._clearControlHotspots = function () {
+    if (typeof log === 'function') {
+        try { log('[Chat] clearing control hotspots', 'chat'); } catch (_) { }
+    }
+    if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
+        try { console.clear_hotspots(); } catch (_) { }
+    }
+    this._hotspotActionMap = {};
+    this._controlButtonHotkeyMap = {};
+    this._hotspotBuffer = '';
+};
+
+Chat.prototype._registerControlHotspots = function () {
+    this._clearControlHotspots();
+    if (!this._controlButtons || !this._controlButtons.length) return;
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    var registered = 0;
+    for (var i = 0; i < this._controlButtons.length; i++) {
+        var entry = this._controlButtons[i];
+        if (!entry || !entry.button || !entry.button.frame) continue;
+        var frame = entry.button.frame;
+        var minX = frame.x;
+        var maxX = frame.x + frame.width - 1;
+        var minY = Math.max(1, frame.y - 1);
+        var maxY = Math.max(minY, minY + frame.height - 1);
+        var keys = entry.hotKeys || [];
+        for (var k = 0; k < keys.length; k++) {
+            var key = keys[k];
+            this._controlButtonHotkeyMap[key] = entry.action;
+            if (typeof key === 'string' && key.length === 1) {
+                try { console.add_hotspot(key, false, minX, maxX, minY, maxY); } catch (_) { }
+                registered += 1;
+            }
+        }
+        if (entry.hotspotToken && typeof entry.hotspotToken === 'string' && entry.hotspotToken.length > 0) {
+            this._hotspotActionMap[entry.hotspotToken] = entry.action;
+            // Register each row explicitly (top and bottom of button) swallow=false so token propagates
+            var rows = [];
+            if (minY === maxY) rows.push(minY); else { rows.push(minY); rows.push(maxY); }
+            for (var ry = 0; ry < rows.length; ry++) {
+                try { console.add_hotspot(entry.hotspotToken, false, minX, maxX, rows[ry]); } catch (_) { }
+            }
+            registered += 1;
+        }
+    }
+    if (typeof log === 'function') {
+        try { log('[Chat] registered control hotspots => ' + registered, 'chat'); } catch (_) { }
+    }
+};
+
+Chat.prototype._activateControlAction = function (action) {
+    if (typeof log === 'function') {
+        try { log('[Chat] _activateControlAction action=' + action, 'chat'); } catch (_) { }
+    }
+    if (!action) return false;
+    switch (action) {
+        case 'back':
+            this.exit();
+            return true;
+        case 'roster':
+            this._showRosterModal();
+            return true;
+        default:
+            return false;
+    }
+};
+
+Chat.prototype._handleControlHotkey = function (key) {
+    if (typeof log === 'function') {
+        try { log('[Chat] _handleControlHotkey key=' + JSON.stringify(key) + ' mapHit=' + (this._controlButtonHotkeyMap && Object.prototype.hasOwnProperty.call(this._controlButtonHotkeyMap, key)), 'chat'); } catch (_) { }
+    }
+    if (!key || !this._controlButtonHotkeyMap) return false;
+    if (!Object.prototype.hasOwnProperty.call(this._controlButtonHotkeyMap, key)) return false;
+    return this._activateControlAction(this._controlButtonHotkeyMap[key]);
+};
+
+Chat.prototype._processControlHotspotInput = function (key) {
+    if (!key || !this._hotspotActionMap) return false;
+    var hasToken = false;
+    for (var probe in this._hotspotActionMap) {
+        if (Object.prototype.hasOwnProperty.call(this._hotspotActionMap, probe)) {
+            hasToken = true;
+            break;
+        }
+    }
+    if (!hasToken) {
+        this._hotspotBuffer = '';
+        return false;
+    }
+    this._hotspotBuffer += key;
+    if (this._hotspotBuffer.length > 16) this._hotspotBuffer = this._hotspotBuffer.substr(this._hotspotBuffer.length - 16);
+    var handled = false;
+    for (var token in this._hotspotActionMap) {
+        if (!Object.prototype.hasOwnProperty.call(this._hotspotActionMap, token)) continue;
+        if (!token || !token.length) continue;
+        if (this._hotspotBuffer.slice(-token.length) === token) {
+            handled = this._activateControlAction(this._hotspotActionMap[token]) || handled;
+            this._hotspotBuffer = '';
+        }
+    }
+    if (handled) return true;
+    if (this._hotspotBuffer.length) {
+        var keep = false;
+        for (var t in this._hotspotActionMap) {
+            if (!Object.prototype.hasOwnProperty.call(this._hotspotActionMap, t)) continue;
+            if (!t || !t.length) continue;
+            if (t.indexOf(this._hotspotBuffer) === 0) {
+                keep = true;
+                break;
+            }
+        }
+        if (!keep) this._hotspotBuffer = '';
+    }
+    return false;
+};
+
 Chat.prototype.initFrames = function () {
     // Assume parentFrame is set externally (e.g., shell.view)
     // If not, fallback to creating a new Frame
@@ -303,47 +781,58 @@ Chat.prototype.initFrames = function () {
     }
     var w = this.parentFrame.width;
     var h = this.parentFrame.height;
-    // Chat output area (above input)
-    var outputH = Math.max(1, h - 1);
-    if (!this.chatOutputFrame) {
-        this.chatOutputFrame = new Frame(1, 1, w, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-        this.chatOutputFrame.transparent = true;
-        this.chatOutputFrame.open();
-        this.setBackgroundFrame(this.chatOutputFrame || this.parentFrame);
-    } else {
-        var resized = false;
-        this.chatOutputFrame.width = w;
-        this.chatOutputFrame.height = outputH;
-        // Remove frame.resize is not a thing.
-        // if (typeof this.chatOutputFrame.resize === 'function') {
-        //     try {
-        //         this.chatOutputFrame.resize(1, 1, w, outputH);
-        //         resized = true;
-        //     } catch (e) { }
-        // }
-        if (!resized && (this.chatOutputFrame.width !== w || this.chatOutputFrame.height !== outputH)) {
-            try { this.chatOutputFrame.close(); } catch (e) { }
-            this.chatOutputFrame = new Frame(1, 1, w, outputH, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.parentFrame);
-            this.chatOutputFrame.transparent = true;
-            this.chatOutputFrame.open();
-            this.setBackgroundFrame(this.chatOutputFrame || this.parentFrame);
-        }
-        if (this.chatOutputFrame && this.chatOutputFrame.transparent !== true) this.chatOutputFrame.transparent = true;
+    var headerHeight = 1;
+    var inputHeight = 1;
+    var outputH = Math.max(1, h - headerHeight - inputHeight);
+    var defaultOutputAttr = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.VIEW) ? (ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG) : ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    var headerAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_HEADER', defaultOutputAttr) : defaultOutputAttr;
+    var outputAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_OUTPUT', defaultOutputAttr) : defaultOutputAttr;
+    var controlsAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_CONTROLS', outputAttr) : outputAttr;
+    var buttonAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_BUTTON', controlsAttr) : controlsAttr;
+    var buttonFocusAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_BUTTON_FOCUS', buttonAttr) : buttonAttr;
+    var defaultInputAttr = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CRUMB) ? (ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG) : ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7));
+    var inputAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_INPUT', defaultInputAttr) : defaultInputAttr;
+
+    if (this.headerFrame) {
+        try { this.headerFrame.close(); } catch (_) { }
     }
+    this.headerFrame = new Frame(1, 1, w, headerHeight, headerAttr, this.parentFrame);
+    this.headerFrame.open();
+    this.headerFrame.attr = headerAttr;
+    try { this.headerFrame.clear(headerAttr); } catch (_) { }
+
+    if (this.chatOutputFrame) {
+        try { this.chatOutputFrame.close(); } catch (_) { }
+    }
+    this.chatOutputFrame = new Frame(1, headerHeight + 1, w, outputH, outputAttr, this.parentFrame);
+    this.chatOutputFrame.transparent = false;
+    this.chatOutputFrame.open();
+    this.chatOutputFrame.attr = outputAttr;
+    try { this.chatOutputFrame.clear(outputAttr); } catch (_) { }
+    this.setBackgroundFrame(this.chatOutputFrame || this.parentFrame);
+
+    if (this.chatControlsFrame) {
+        try { this.chatControlsFrame.close(); } catch (_) { }
+        this.chatControlsFrame = null;
+    }
+    this._destroyControlButtons();
+    var controlHeight = Math.min(3, Math.max(0, outputH - 1));
+    if (controlHeight > 0) {
+        this.chatControlsFrame = new Frame(1, 1, w, controlHeight, controlsAttr, this.chatOutputFrame);
+        this.chatControlsFrame.transparent = false;
+        this.chatControlsFrame.open();
+        this.chatControlsFrame.attr = controlsAttr;
+        try { this.chatControlsFrame.clear(controlsAttr); } catch (_) { }
+    }
+
+    var controlOffset = (this.chatControlsFrame) ? this.chatControlsFrame.height : 0;
+    var messageStartY = Math.max(1, controlOffset + 1);
+    var messageHeight = Math.max(1, outputH - controlOffset);
     var outputWidth = this.chatOutputFrame.width || w;
     var avatarWidth = this.avatarWidth || 10;
     if ((avatarWidth * 2) >= (outputWidth - 4)) avatarWidth = Math.max(2, Math.floor(outputWidth / 4));
     if (avatarWidth < 2) avatarWidth = 2;
     this.avatarWidth = avatarWidth;
-    var gapRows = outputH > 1 ? 1 : 0;
-    var messageHeight = Math.max(1, outputH - gapRows);
-    var spacerY = messageHeight + 1;
-    if (gapRows > 0 && spacerY >= outputH + 1) {
-        // Not enough room for spacer; fall back to full height.
-        gapRows = 0;
-        messageHeight = outputH;
-    }
-
     var messageAreaWidth = Math.max(2, outputWidth - (avatarWidth * 2));
     var leftMsgWidth = Math.max(2, Math.floor(messageAreaWidth / 2));
     var rightMsgWidth = Math.max(2, messageAreaWidth - leftMsgWidth);
@@ -351,27 +840,24 @@ Chat.prototype.initFrames = function () {
     var rightAvatarX = outputWidth - avatarWidth + 1;
     var leftMsgX = leftAvatarX + avatarWidth;
     var rightMsgX = rightAvatarX - rightMsgWidth;
-    // Column frames: avatar/message pairs on each side with optional spacer row
-    this.leftAvatarFrame = new Frame(leftAvatarX, 1, avatarWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+    // Column frames: avatar/message pairs on each side
+    if (this.leftAvatarFrame) { try { this.leftAvatarFrame.close(); } catch (_) { } }
+    if (this.leftMsgFrame) { try { this.leftMsgFrame.close(); } catch (_) { } }
+    if (this.rightMsgFrame) { try { this.rightMsgFrame.close(); } catch (_) { } }
+    if (this.rightAvatarFrame) { try { this.rightAvatarFrame.close(); } catch (_) { } }
+    this.leftAvatarFrame = new Frame(leftAvatarX, messageStartY, avatarWidth, messageHeight, outputAttr, this.chatOutputFrame);
     this.leftAvatarFrame.transparent = true;
-    this.leftMsgFrame = new Frame(leftMsgX, 1, leftMsgWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+    this.leftMsgFrame = new Frame(leftMsgX, messageStartY, leftMsgWidth, messageHeight, outputAttr, this.chatOutputFrame);
     this.leftMsgFrame.transparent = true;
-    this.rightMsgFrame = new Frame(rightMsgX, 1, rightMsgWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+    this.rightMsgFrame = new Frame(rightMsgX, messageStartY, rightMsgWidth, messageHeight, outputAttr, this.chatOutputFrame);
     this.rightMsgFrame.transparent = true;
-    this.rightAvatarFrame = new Frame(rightAvatarX, 1, avatarWidth, messageHeight, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
+    this.rightAvatarFrame = new Frame(rightAvatarX, messageStartY, avatarWidth, messageHeight, outputAttr, this.chatOutputFrame);
     this.rightAvatarFrame.transparent = true;
     this.leftAvatarFrame.open();
     this.leftMsgFrame.open();
     this.rightMsgFrame.open();
     this.rightAvatarFrame.open();
-    if (gapRows > 0) {
-        this.chatSpacerFrame = new Frame(1, spacerY, outputWidth, gapRows, ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG, this.chatOutputFrame);
-        this.chatSpacerFrame.transparent = true;
-        this.chatSpacerFrame.open();
-        this.chatSpacerFrame.clear();
-    } else {
-        this.chatSpacerFrame = null;
-    }
+    this.chatSpacerFrame = null;
     this.leftMsgFrame.word_wrap = true;
     this.leftMsgFrame.h_scroll = false;
     this.leftMsgFrame.v_scroll = false;
@@ -379,9 +865,24 @@ Chat.prototype.initFrames = function () {
     this.rightMsgFrame.h_scroll = false;
     this.rightMsgFrame.v_scroll = false;
     // Chat input frame (bottom)
-    this.chatInputFrame = new Frame(1, h, w, 1, ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG, this.parentFrame);
+    if (this.chatInputFrame) {
+        try { this.chatInputFrame.close(); } catch (_) { }
+    }
+    var inputY = headerHeight + outputH + 1;
+    if (inputY > h) inputY = h;
+    this.chatInputFrame = new Frame(1, inputY, w, 1, inputAttr, this.parentFrame);
     this.chatInputFrame.open();
+    this.chatInputFrame.attr = inputAttr;
+    try { this.chatInputFrame.clear(inputAttr); } catch (_) { }
     this._lastInputRendered = '';
+
+    this._buildControlButtons({
+        buttonAttr: buttonAttr,
+        buttonFocusAttr: buttonFocusAttr,
+        controlsAttr: controlsAttr
+    });
+    this._renderHeaderFrame();
+    this._renderControlsArea();
 };
 
 Chat.prototype.refresh = function () {
@@ -391,7 +892,6 @@ Chat.prototype.refresh = function () {
 
 Chat.prototype.cycle = function () {
     if (!this.running) return;
-    log('Chat.cycle invoked');
     if (this.jsonchat && typeof this.jsonchat.cycle === 'function') {
         this.jsonchat.cycle();
     }
@@ -449,6 +949,8 @@ Chat.prototype.draw = function () {
     if (!this.leftAvatarFrame || !this.leftMsgFrame || !this.rightMsgFrame || !this.rightAvatarFrame || !this.chatInputFrame) {
         this.initFrames();
     }
+    this._renderHeaderFrame();
+    this._renderControlsArea();
 
     var channelMessages = this._getChannelMessages();
     var signature = this._computeMessageSignature(channelMessages);
@@ -498,7 +1000,6 @@ Chat.prototype._clearChatFrames = function () {
     if (this.rightAvatarFrame) this.rightAvatarFrame.clear();
     if (this.leftMsgFrame) this.leftMsgFrame.clear();
     if (this.rightMsgFrame) this.rightMsgFrame.clear();
-    if (this.chatSpacerFrame) this.chatSpacerFrame.clear();
 };
 
 Chat.prototype._groupMessages = function (messages) {

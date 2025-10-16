@@ -6,6 +6,77 @@ try { load('future_shell/lib/effects/screensaver.js'); } catch (e) { }
 try { load('future_shell/lib/util/perf.js'); } catch (e) { }
 try { load('future_shell/lib/subprograms/subprogram.js'); } catch (e) { }
 
+var SHELL_KEY_TOKEN_UP = (typeof KEY_UP !== 'undefined') ? KEY_UP : '\x1B[A';
+var SHELL_KEY_TOKEN_DOWN = (typeof KEY_DOWN !== 'undefined') ? KEY_DOWN : '\x1B[B';
+var SHELL_KEY_TOKEN_RIGHT = (typeof KEY_RIGHT !== 'undefined') ? KEY_RIGHT : '\x1B[C';
+var SHELL_KEY_TOKEN_LEFT = (typeof KEY_LEFT !== 'undefined') ? KEY_LEFT : '\x1B[D';
+var SHELL_KEY_TOKEN_HOME = (typeof KEY_HOME !== 'undefined') ? KEY_HOME : '\x1B[H';
+var SHELL_KEY_TOKEN_END = (typeof KEY_END !== 'undefined') ? KEY_END : '\x1B[F';
+var SHELL_KEY_TOKEN_PGUP = (typeof KEY_PGUP !== 'undefined') ? KEY_PGUP : '\x1B[5~';
+var SHELL_KEY_TOKEN_PGDN = (typeof KEY_PGDN !== 'undefined') ? KEY_PGDN : '\x1B[6~';
+var SHELL_KEY_TOKEN_INS = (typeof KEY_INSERT !== 'undefined') ? KEY_INSERT : ((typeof KEY_INS !== 'undefined') ? KEY_INS : '\x1B[2~');
+var SHELL_KEY_TOKEN_DEL = (typeof KEY_DELETE !== 'undefined') ? KEY_DELETE : ((typeof KEY_DEL !== 'undefined') ? KEY_DEL : '\x1B[3~');
+
+var SHELL_ESCAPE_SEQUENCE_MAP = {};
+var SHELL_ESCAPE_SEQUENCE_PREFIXES = { '\x1B': true };
+(function () {
+    function add(seq, token) {
+        SHELL_ESCAPE_SEQUENCE_MAP[seq] = token;
+        for (var i = 1; i < seq.length; i++) {
+            SHELL_ESCAPE_SEQUENCE_PREFIXES[seq.substring(0, i)] = true;
+        }
+    }
+
+    // Arrow keys (VT100 and SS3 variants)
+    add('\x1B[A', SHELL_KEY_TOKEN_UP);
+    add('\x1B[B', SHELL_KEY_TOKEN_DOWN);
+    add('\x1B[C', SHELL_KEY_TOKEN_RIGHT);
+    add('\x1B[D', SHELL_KEY_TOKEN_LEFT);
+    add('\x1BOA', SHELL_KEY_TOKEN_UP);
+    add('\x1BOB', SHELL_KEY_TOKEN_DOWN);
+    add('\x1BOC', SHELL_KEY_TOKEN_RIGHT);
+    add('\x1BOD', SHELL_KEY_TOKEN_LEFT);
+
+    // Home / End variants
+    add('\x1B[H', SHELL_KEY_TOKEN_HOME);
+    add('\x1B[F', SHELL_KEY_TOKEN_END);
+    add('\x1BOH', SHELL_KEY_TOKEN_HOME);
+    add('\x1BOF', SHELL_KEY_TOKEN_END);
+    add('\x1B[1~', SHELL_KEY_TOKEN_HOME);
+    add('\x1B[4~', SHELL_KEY_TOKEN_END);
+    add('\x1B[7~', SHELL_KEY_TOKEN_HOME);
+    add('\x1B[8~', SHELL_KEY_TOKEN_END);
+
+    // Page navigation
+    add('\x1B[5~', SHELL_KEY_TOKEN_PGUP);
+    add('\x1B[6~', SHELL_KEY_TOKEN_PGDN);
+
+    // Insert / Delete
+    add('\x1B[2~', SHELL_KEY_TOKEN_INS);
+    add('\x1B[3~', SHELL_KEY_TOKEN_DEL);
+
+    // Function keys (SS3 and CSI variants)
+    add('\x1BOP', 'F1');
+    add('\x1BOQ', 'F2');
+    add('\x1BOR', 'F3');
+    add('\x1BOS', 'F4');
+    add('\x1B[11~', 'F1');
+    add('\x1B[12~', 'F2');
+    add('\x1B[13~', 'F3');
+    add('\x1B[14~', 'F4');
+    add('\x1B[15~', 'F5');
+    add('\x1B[17~', 'F6');
+    add('\x1B[18~', 'F7');
+    add('\x1B[19~', 'F8');
+    add('\x1B[20~', 'F9');
+    add('\x1B[21~', 'F10');
+    add('\x1B[23~', 'F11');
+    add('\x1B[24~', 'F12');
+
+    // Shift+Tab
+    add('\x1B[Z', (typeof KEY_SHIFT_TAB !== 'undefined') ? KEY_SHIFT_TAB : 'SHIFT_TAB');
+})();
+
 var SHELL_COLOR_DEFAULTS = {
     ROOT: { BG: (typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0), FG: (typeof WHITE !== 'undefined' ? WHITE : 7) },
     VIEW: { BG: (typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0), FG: (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7) },
@@ -115,6 +186,7 @@ IconShell.prototype.init = function () {
     // Explicit modal tracking (replaces blind static dispatch). Stack is LIFO.
     this._modalStack = [];
     // Publish active shell instance globally for modal registration without circular import.
+    this._unknownEscapeSequences = {};
     try {
         global.__ICSH_ACTIVE_SHELL__ = this;
         if (typeof globalThis !== 'undefined') globalThis.__ICSH_ACTIVE_SHELL__ = this;
@@ -248,7 +320,6 @@ IconShell.prototype.main = function () {
 
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function (ch) {
-    dbug('Shell processing keyboard input:' + JSON.stringify(ch), 'keylog');
     if (this.activeSubprogram && this.activeSubprogram.running === false) {
         dbug('Releasing inactive subprogram before handling key', 'subprogram');
         this.exitSubprogram();
@@ -276,6 +347,9 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         return true;
     }
     if (this.activeSubprogram) {
+        if (typeof dbug === 'function') {
+            try { dbug('processKey:forward-to-sub key=' + JSON.stringify(ch) + ' sub=' + (this.activeSubprogram.id || this.activeSubprogram.name || 'unknown'), 'keylog'); } catch (_) { }
+        }
         this._handleSubprogramKey(ch);
         return;
     }
@@ -528,6 +602,53 @@ IconShell.prototype._normalizeKey = function (key) {
     return key;
 };
 
+IconShell.prototype._decodeEscapeSequence = function (key, queue) {
+    if (key !== '\x1B') return key;
+    var consumed = [];
+    var sequence = '\x1B';
+    var map = SHELL_ESCAPE_SEQUENCE_MAP;
+    var prefixes = SHELL_ESCAPE_SEQUENCE_PREFIXES;
+    var self = this;
+
+    function restoreQueue() {
+        for (var i = consumed.length - 1; i >= 0; i--) {
+            queue.unshift(consumed[i]);
+        }
+    }
+
+    while (true) {
+        if (!queue.length) {
+            restoreQueue();
+            if (consumed.length === 1 && typeof consumed[0] === 'string' && consumed[0].length > 0) {
+                return consumed[0];
+            }
+            return key;
+        }
+        var next = queue.shift();
+        consumed.push(next);
+        sequence += next;
+        if (Object.prototype.hasOwnProperty.call(map, sequence)) {
+            return map[sequence];
+        }
+        if (!Object.prototype.hasOwnProperty.call(prefixes, sequence)) {
+            if (consumed.length === 1 && typeof consumed[0] === 'string' && consumed[0].length > 0) {
+                return consumed[0];
+            }
+            restoreQueue();
+            if (sequence.length > 1 && self && self._unknownEscapeSequences && !self._unknownEscapeSequences[sequence]) {
+                self._unknownEscapeSequences[sequence] = true;
+                var payload = '[Shell] Unknown escape sequence: ' + JSON.stringify(sequence);
+                if (typeof dbug === 'function') {
+                    try { dbug(payload, 'keylog'); } catch (_) { }
+                } else if (typeof log === 'function') {
+                    try { log(payload); } catch (_) { }
+                }
+            }
+            return key;
+        }
+    }
+};
+
 IconShell.prototype._processKeyQueue = function (keys, nowTs) {
     if (!keys || !keys.length) return;
     var perf = global.__ICSH_PERF__ || null;
@@ -545,6 +666,7 @@ IconShell.prototype._processKeyQueue = function (keys, nowTs) {
         var key = keys.shift();
         if (key === undefined || key === null) continue;
         key = this._normalizeKey(key);
+        key = this._decodeEscapeSequence(key, keys);
         try {
             if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG && key !== '') {
                 var code = (typeof key === 'string' && key.length) ? key.charCodeAt(0) : key;
