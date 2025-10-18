@@ -5,6 +5,7 @@ try { load('future_shell/lib/effects/screensaver.js'); } catch (e) { }
 // Performance instrumentation (optional)
 try { load('future_shell/lib/util/perf.js'); } catch (e) { }
 try { load('future_shell/lib/subprograms/subprogram.js'); } catch (e) { }
+try { load('future_shell/lib/subprograms/mrc.js'); } catch (e) { dbug('shell init unable to preload mrc.js: ' + e, 'mrc'); }
 
 var SHELL_KEY_TOKEN_UP = (typeof KEY_UP !== 'undefined') ? KEY_UP : '\x1B[A';
 var SHELL_KEY_TOKEN_DOWN = (typeof KEY_DOWN !== 'undefined') ? KEY_DOWN : '\x1B[B';
@@ -288,6 +289,11 @@ IconShell.prototype.init = function () {
     }
     // Enable mouse mode for hotspots
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
+
+    if (typeof ensureMrcService === 'function') {
+        try { this.mrcService = ensureMrcService({ shell: this, timer: this.timer }); }
+        catch (e) { dbug('MRC background init failed: ' + e, 'mrc'); }
+    }
 };
 
 // Main loop: delegate to subprogram if active
@@ -459,7 +465,6 @@ IconShell.prototype._refreshHeaderFrame = function () {
         this.headerFrame.clear(headerAttr);
         this.headerFrame.home();
         var width = this.headerFrame.width || headerText.length || 1;
-        log('setting header gradient wtf');
         if (typeof Gradient !== 'undefined' && Gradient && typeof Gradient.get === 'function') {
             try {
                 var gtype = 'ocean';
@@ -470,7 +475,6 @@ IconShell.prototype._refreshHeaderFrame = function () {
                 var gradientFill = Gradient.stringPad(headerText, width, "both", { type: "random", glyph: "mix" })
                 this.headerFrame.gotoxy(1, 1);
                 this.headerFrame.putmsg(gradientFill);
-                log('applied header gradient');
             } catch (gErr) { dbug('header gradient error: ' + gErr, 'theme'); }
         }
         this.headerFrame.cycle();
@@ -667,12 +671,6 @@ IconShell.prototype._processKeyQueue = function (keys, nowTs) {
         if (key === undefined || key === null) continue;
         key = this._normalizeKey(key);
         key = this._decodeEscapeSequence(key, keys);
-        try {
-            if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG && key !== '') {
-                var code = (typeof key === 'string' && key.length) ? key.charCodeAt(0) : key;
-                log('[GLOBAL normalized key] repr=' + JSON.stringify(key) + ' code=' + code);
-            }
-        } catch (_) { }
         if (!key) continue;
         if (typeof key === 'string' && key.length > 0) {
             if (key === CTRL_D && perf) {

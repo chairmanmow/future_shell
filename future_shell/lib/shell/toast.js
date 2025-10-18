@@ -90,7 +90,9 @@ function Toast(options) {
     this.msgContainer = new Frame((2 * msgX) + this.toastFrame.x, this.toastFrame.y, this.toastFrame.width - msgX, this.toastFrame.height, ICSH_ATTR('TOAST_MSG'), this.toastFrame);
     this.msgFrame = new Frame(this.msgContainer.x + 1, this.msgContainer.y + 1, this.msgContainer.width - 2, this.msgContainer.height - 2, ICSH_ATTR('TOAST_MSG'), this.msgContainer);
     this.toastFrame.transparent = true;
-    this.msgContainer.drawBorder(BG_BLUE, !!this.title ? { x: 1, y: 1, attr: WHITE | BG_GREEN, text: this.title } : null);
+    if (typeof this.msgContainer.drawBorder === 'function') {
+        this.msgContainer.drawBorder(BG_BLUE, !!this.title ? { x: 1, y: 1, attr: WHITE | BG_GREEN, text: this.title } : null);
+    }
     this.msgFrame.centralize(this.msgContainer)
     if (this.avatarData) {
         this.avatarFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 10, Math.min(6, this.toastFrame.height), ICSH_ATTR('TOAST_AVATAR'), this.toastFrame);

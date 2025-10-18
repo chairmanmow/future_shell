@@ -155,6 +155,25 @@ function SubprogramActionHandler(descriptor, options) {
 }
 var BUILTIN_ACTIONS = {
 	chat: function () { this.queueSubprogramLaunch('chat', this.chat); },
+	mrc: new SubprogramActionHandler('MRC', {
+		module: 'future_shell/lib/subprograms/mrc.js',
+		queueName: 'mrc',
+		instanceProperty: 'mrcSub',
+		loadFailureMessage: 'Failed loading mrc.js ',
+		missingMessage: 'MRC class missing after load',
+		options: function () { return { parentFrame: this.root, shell: this, timer: this.timer }; },
+		shouldCreateNew: function () { return true; },
+		onReuse: function (instance) {
+			instance.parentFrame = this.root;
+			instance.shell = this;
+			instance.timer = this.timer;
+		},
+		afterEnsure: function (instance) {
+			instance.shell = this;
+			instance.parentFrame = this.root;
+			instance.timer = this.timer;
+		}
+	}),
 	sysop_commands: new SubprogramActionHandler('SysopCommand', {
 		module: 'future_shell/lib/subprograms/sysop_commands.js',
 		queueName: 'sysop-commands',
@@ -217,7 +236,7 @@ var BUILTIN_ACTIONS = {
 		afterEnsure: function (instance) {
 			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 		}
-}),
+	}),
 	users: new SubprogramActionHandler('Users', {
 		module: 'future_shell/lib/subprograms/users.js',
 		queueName: 'users',
@@ -228,7 +247,7 @@ var BUILTIN_ACTIONS = {
 		afterEnsure: function (instance) {
 			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 		}
-}),
+	}),
 	userlist: new SubprogramActionHandler('UserList', {
 		module: 'future_shell/lib/subprograms/user_list.js',
 		queueName: 'user-list',
@@ -238,8 +257,8 @@ var BUILTIN_ACTIONS = {
 		options: function () { return { parentFrame: this.root }; },
 		afterEnsure: function (instance) {
 			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
-	}
-}),
+		}
+	}),
 	filearea: new SubprogramActionHandler('FileArea', {
 		module: 'future_shell/lib/subprograms/file_area.js',
 		queueName: 'file-area',
@@ -249,13 +268,13 @@ var BUILTIN_ACTIONS = {
 		options: function () {
 			var icons = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.fileAreaIcons) ? ICSH_SETTINGS.fileAreaIcons : null;
 			return { parentFrame: this.root, shell: this, iconMap: icons };
-	},
+		},
 		afterEnsure: function (instance, opts) {
 			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 			instance.shell = this;
-		if (typeof instance.setIconMap === 'function') instance.setIconMap(opts.iconMap);
-	}
-}),
+			if (typeof instance.setIconMap === 'function') instance.setIconMap(opts.iconMap);
+		}
+	}),
 	usage_viewer: new SubprogramActionHandler('UsageViewer', {
 		module: 'future_shell/lib/subprograms/usage-viewer.js',
 		queueName: 'usage-viewer',
@@ -303,7 +322,7 @@ var BUILTIN_ACTIONS = {
 			instance.shell = this;
 			instance.timer = this.timer;
 			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
-	}
+		}
 	}),
 	calendar: new SubprogramActionHandler('CalendarSub', {
 		module: 'future_shell/lib/subprograms/calendar.js',
@@ -314,7 +333,7 @@ var BUILTIN_ACTIONS = {
 		options: function () { return { parentFrame: this.root }; },
 		afterEnsure: function (instance) {
 			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
-	}
+		}
 	}),
 	clock: new SubprogramActionHandler('ClockSub', {
 		module: 'future_shell/lib/subprograms/clock.js',
@@ -325,7 +344,7 @@ var BUILTIN_ACTIONS = {
 		options: function () { return { parentFrame: this.root, shell: this }; },
 		afterEnsure: function (instance) {
 			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
-	}
+		}
 	}),
 	rawgate: new SubprogramActionHandler('RawGateSub', {
 		module: 'future_shell/lib/subprograms/rawgate.js',
@@ -336,7 +355,7 @@ var BUILTIN_ACTIONS = {
 		options: function () { return { parentFrame: this.root, shell: this }; },
 		afterEnsure: function (instance) {
 			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
-	}
+		}
 	}),
 	mail: new SubprogramActionHandler('Mail', {
 		module: 'future_shell/lib/subprograms/mail.js',
@@ -346,9 +365,9 @@ var BUILTIN_ACTIONS = {
 		missingMessage: 'Mail class missing after load',
 		options: function () { return { parentFrame: this.root, shell: this }; },
 		onReuse: function (instance) {
-		instance.parentFrame = this.root;
+			instance.parentFrame = this.root;
 			instance.shell = this;
-	}
+		}
 	}),
 	sysinfo: new SubprogramActionHandler('SystemInfo', {
 		module: 'future_shell/lib/subprograms/system_info.js',
@@ -358,9 +377,9 @@ var BUILTIN_ACTIONS = {
 		missingMessage: 'SystemInfo class missing after load',
 		options: function () { return { parentFrame: this.root, shell: this }; },
 		onReuse: function (instance) {
-		instance.parentFrame = this.root;
+			instance.parentFrame = this.root;
 			instance.shell = this;
-	}
+		}
 	}),
 	who_list: function () { dbug('subprogram', 'WhoOnline subprogram deprecated'); },
 };

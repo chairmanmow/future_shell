@@ -6,12 +6,18 @@ if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 
-function Chat(jsonchat) {
+function Chat(jsonchat, opts) {
+    opts = opts || {};
+    Subprogram.call(this, {
+        name: 'chat',
+        parentFrame: opts.parentFrame,
+        shell: opts.shell,
+        timer: opts.timer
+    });
+    this.jsonchat = jsonchat; // persistent backend instance
     this.input = "";
     this.running = false;
     this.channel = "main";
-    this.jsonchat = jsonchat; // persistent backend instance
-    this.parentFrame = null;
     this.headerFrame = null;
     this.chatOutputFrame = null;
     this.chatInputFrame = null;
@@ -46,14 +52,13 @@ function Chat(jsonchat) {
     this._lastKeyTs = 0;
     this._lastInputRendered = '';
     this._redrawThrottleMs = 250;
-    var indicatorColor = (typeof CYAN !== 'undefined') ? CYAN : undefined;
-    if (!indicatorColor && typeof LIGHTCYAN !== 'undefined') indicatorColor = LIGHTCYAN;
-    if (!indicatorColor && typeof WHITE !== 'undefined') indicatorColor = WHITE;
-    this._messageIndicatorColor = indicatorColor;
-    var wrapColor = (typeof BLUE !== 'undefined') ? BLUE : undefined;
-    if (!wrapColor && typeof LIGHTBLUE !== 'undefined') wrapColor = LIGHTBLUE;
-    this._wrapIndicatorColor = wrapColor || indicatorColor;
-    this._timestampColor = (typeof LIGHTBLUE !== 'undefined') ? LIGHTBLUE : ((typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : indicatorColor);
+    this._expectedHeaderAttr = null;
+    this._lastHeaderAttrLog = null;
+    this._frameMetrics = null;
+    this._controlHotspotsDirty = true;
+    this._messageIndicatorColor = CYAN;
+    this._wrapIndicatorColor = BLUE;
+    this._timestampColor = LIGHTBLUE;
     this._lastRenderTs = 0;
     this._pendingMessage = null;
     // Configurable group line color and pad character
@@ -85,26 +90,18 @@ function Chat(jsonchat) {
         return null;
     })();
     if (typeof this.registerColors === 'function') {
-        var bgBlue = (typeof BG_BLUE !== 'undefined') ? BG_BLUE : 0;
-        var bgBlack = (typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0;
-        var bgCyan = (typeof BG_CYAN !== 'undefined') ? BG_CYAN : 0;
-        var bgLightCyan = (typeof BG_LIGHTCYAN !== 'undefined') ? BG_LIGHTCYAN : bgCyan;
-        var fgWhite = (typeof WHITE !== 'undefined') ? WHITE : 7;
-        var fgLightGray = (typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : fgWhite;
-        var fgBlack = (typeof BLACK !== 'undefined') ? BLACK : 0;
-        var fgLightCyan = (typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : fgLightGray;
         this.registerColors({
-            CHAT_HEADER: { BG: bgBlue, FG: fgWhite },
-            CHAT_OUTPUT: { BG: bgBlack, FG: fgLightGray },
-            CHAT_CONTROLS: { BG: bgBlack, FG: fgLightGray },
-            CHAT_BUTTON: { BG: bgCyan, FG: fgBlack },
-            CHAT_BUTTON_FOCUS: { BG: bgLightCyan, FG: fgBlack },
-            CHAT_ROSTER_MODAL_FRAME: { BG: bgBlue, FG: fgWhite },
-            CHAT_ROSTER_MODAL_CONTENT: { BG: bgBlack, FG: fgLightGray },
-            CHAT_ROSTER_MODAL_TITLE: { BG: bgBlue, FG: fgWhite },
-            CHAT_ROSTER_MODAL_BUTTON: { BG: bgCyan, FG: fgBlack },
-            CHAT_ROSTER_MODAL_BUTTON_FOCUS: { BG: bgLightCyan, FG: fgBlack },
-            CHAT_INPUT: { BG: bgBlue, FG: fgWhite }
+            CHAT_HEADER: { BG: BG_BLUE, FG: WHITE },
+            CHAT_OUTPUT: { BG: BG_BLACK, FG: LIGHTGRAY },
+            CHAT_CONTROLS: { BG: BG_BLACK, FG: LIGHTGRAY },
+            CHAT_BUTTON: { BG: BG_CYAN, FG: WHITE },
+            CHAT_BUTTON_FOCUS: { BG: BG_BLUE, FG: WHITE },
+            CHAT_ROSTER_MODAL_FRAME: { BG: BG_BLUE, FG: WHITE },
+            CHAT_ROSTER_MODAL_CONTENT: { BG: BG_BLACK, FG: LIGHTGRAY },
+            CHAT_ROSTER_MODAL_TITLE: { BG: BG_BLUE, FG: WHITE },
+            CHAT_ROSTER_MODAL_BUTTON: { BG: BG_CYAN, FG: WHITE },
+            CHAT_ROSTER_MODAL_BUTTON_FOCUS: { BG: BG_BLUE, FG: WHITE },
+            CHAT_INPUT: { BG: BG_BLUE, FG: WHITE }
         }, 'chat');
     }
 }
@@ -116,11 +113,8 @@ if (typeof extend === 'function') {
     Chat.prototype.constructor = Chat;
 }
 
-Chat.prototype.enter = function (done) {
-    this.done = done;
-    if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
-    this.initFrames();
-    this.running = true;
+Chat.prototype._resetRuntimeState = function () {
+    this._disposeFrames();
     this._needsRedraw = true;
     this._lastMessageSignature = null;
     this._lastRenderTs = 0;
@@ -132,9 +126,204 @@ Chat.prototype.enter = function (done) {
     this._lastStatusUpdateTs = 0;
     this._lastKeyTs = 0;
     this._lastInputRendered = '';
-    this.draw();
+    this._pendingMessage = null;
+    this.messageFrames = [];
+    this._expectedHeaderAttr = null;
+    this._lastHeaderAttrLog = null;
+    this._frameMetrics = null;
+    this._controlHotspotsDirty = true;
+};
+
+Chat.prototype._disposeFrames = function () {
+    this._destroyControlButtons();
+    var frames = [
+        'chatControlsFrame',
+        'headerFrame',
+        'leftAvatarFrame',
+        'leftMsgFrame',
+        'rightMsgFrame',
+        'rightAvatarFrame',
+        'chatSpacerFrame',
+        'chatOutputFrame',
+        'chatInputFrame'
+    ];
+    for (var i = 0; i < frames.length; i++) {
+        var key = frames[i];
+        var frame = this[key];
+        if (!frame) continue;
+        try { frame.close(); } catch (_) { }
+        if (this._myFrames) {
+            var idx = this._myFrames.indexOf(frame);
+            if (idx !== -1) this._myFrames.splice(idx, 1);
+        }
+        this[key] = null;
+    }
+    // this.setBackgroundFrame(null);
+    this.messageFrames = [];
+    this._frameMetrics = null;
+    this._controlHotspotsDirty = true;
+};
+
+Chat.prototype._ensureFrames = function () {
+    var host = (typeof this._ensureHostFrame === 'function') ? this._ensureHostFrame() : (this.parentFrame || null);
+    if (!host) return;
+
+    var width = host.width || 0;
+    var height = host.height || 0;
+    if (width <= 0 || height <= 0) return;
+
+    if (!this._frameMetrics || this._frameMetrics.width !== width || this._frameMetrics.height !== height) {
+        this._disposeFrames();
+        this._frameMetrics = { width: width, height: height };
+    }
+
+    var headerHeight = 1;
+    var inputHeight = 1;
+    var outputHeight = Math.max(1, height - headerHeight - inputHeight);
+
+    var headerAttr = this.paletteAttr('CHAT_HEADER', host.attr || 0);
+    if (!this.headerFrame) {
+        this.headerFrame = new Frame(1, 1, width, headerHeight, headerAttr, host);
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.headerFrame);
+    }
+    this.headerFrame.open();
+    this.headerFrame.attr = headerAttr;
+
+    var outputAttr = this.paletteAttr('CHAT_OUTPUT', host.attr || 0);
+    if (!this.chatOutputFrame) {
+        this.chatOutputFrame = new Frame(1, headerHeight + 1, width, outputHeight, outputAttr, host);
+        this.chatOutputFrame.transparent = false;
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.chatOutputFrame);
+    }
+    this.chatOutputFrame.open();
+    this.chatOutputFrame.transparent = false;
+    this.chatOutputFrame.attr = outputAttr;
+    this.setBackgroundFrame(this.chatOutputFrame);
+
+    var controlsAttr = this.paletteAttr('CHAT_CONTROLS', outputAttr);
+    var controlHeight = Math.min(3, Math.max(0, outputHeight - 1));
+    if (controlHeight > 0) {
+        if (!this.chatControlsFrame || this.chatControlsFrame.height !== controlHeight) {
+            if (this.chatControlsFrame) {
+                try { this.chatControlsFrame.close(); } catch (_) { }
+                if (this._myFrames) {
+                    var idxCtrl = this._myFrames.indexOf(this.chatControlsFrame);
+                    if (idxCtrl !== -1) this._myFrames.splice(idxCtrl, 1);
+                }
+            }
+            this.chatControlsFrame = new Frame(1, 1, width, controlHeight, controlsAttr, this.chatOutputFrame);
+            if (typeof this.registerFrame === 'function') this.registerFrame(this.chatControlsFrame);
+        }
+        this.chatControlsFrame.transparent = false;
+        this.chatControlsFrame.open();
+        this.chatControlsFrame.attr = controlsAttr;
+    } else if (this.chatControlsFrame) {
+        this._destroyControlButtons();
+        try { this.chatControlsFrame.close(); } catch (_) { }
+        if (this._myFrames) {
+            var idxCtrlClose = this._myFrames.indexOf(this.chatControlsFrame);
+            if (idxCtrlClose !== -1) this._myFrames.splice(idxCtrlClose, 1);
+        }
+        this.chatControlsFrame = null;
+    }
+
+    var messageStartY = (this.chatControlsFrame ? this.chatControlsFrame.height : 0) + 1;
+    var messageHeight = Math.max(1, outputHeight - (this.chatControlsFrame ? this.chatControlsFrame.height : 0));
+    var outputWidth = this.chatOutputFrame.width || width;
+    var avatarWidth = this.avatarWidth || 10;
+    if ((avatarWidth * 2) >= (outputWidth - 4)) avatarWidth = Math.max(2, Math.floor(outputWidth / 4));
+    if (avatarWidth < 2) avatarWidth = 2;
+    this.avatarWidth = avatarWidth;
+    var messageAreaWidth = Math.max(2, outputWidth - (avatarWidth * 2));
+    var leftMsgWidth = Math.max(2, Math.floor(messageAreaWidth / 2));
+    var rightMsgWidth = Math.max(2, messageAreaWidth - leftMsgWidth);
+    var leftAvatarX = 1;
+    var rightAvatarX = outputWidth - avatarWidth + 1;
+    var leftMsgX = leftAvatarX + avatarWidth;
+    var rightMsgX = rightAvatarX - rightMsgWidth;
+
+    if (!this.leftAvatarFrame) {
+        this.leftAvatarFrame = new Frame(leftAvatarX, messageStartY, avatarWidth, messageHeight, outputAttr, this.chatOutputFrame);
+        this.leftAvatarFrame.transparent = true;
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.leftAvatarFrame);
+    }
+    this.leftAvatarFrame.open();
+    this.leftAvatarFrame.attr = outputAttr;
+    this.leftAvatarFrame.transparent = true;
+
+    if (!this.leftMsgFrame) {
+        this.leftMsgFrame = new Frame(leftMsgX, messageStartY, leftMsgWidth, messageHeight, outputAttr, this.chatOutputFrame);
+        this.leftMsgFrame.transparent = true;
+        this.leftMsgFrame.word_wrap = true;
+        this.leftMsgFrame.h_scroll = false;
+        this.leftMsgFrame.v_scroll = false;
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.leftMsgFrame);
+    }
+    this.leftMsgFrame.open();
+    this.leftMsgFrame.attr = outputAttr;
+    this.leftMsgFrame.transparent = true;
+
+    if (!this.rightMsgFrame) {
+        this.rightMsgFrame = new Frame(rightMsgX, messageStartY, rightMsgWidth, messageHeight, outputAttr, this.chatOutputFrame);
+        this.rightMsgFrame.transparent = true;
+        this.rightMsgFrame.word_wrap = true;
+        this.rightMsgFrame.h_scroll = false;
+        this.rightMsgFrame.v_scroll = false;
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.rightMsgFrame);
+    }
+    this.rightMsgFrame.open();
+    this.rightMsgFrame.attr = outputAttr;
+    this.rightMsgFrame.transparent = true;
+
+    if (!this.rightAvatarFrame) {
+        this.rightAvatarFrame = new Frame(rightAvatarX, messageStartY, avatarWidth, messageHeight, outputAttr, this.chatOutputFrame);
+        this.rightAvatarFrame.transparent = true;
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.rightAvatarFrame);
+    }
+    this.rightAvatarFrame.open();
+    this.rightAvatarFrame.attr = outputAttr;
+    this.rightAvatarFrame.transparent = true;
+
+    var inputAttr = this.paletteAttr('CHAT_INPUT', this.chatInputFrame ? this.chatInputFrame.attr : (host.attr || 0));
+    var inputY = headerHeight + outputHeight + 1;
+    if (inputY > height) inputY = height;
+    if (!this.chatInputFrame) {
+        this.chatInputFrame = new Frame(1, inputY, width, 1, inputAttr, host);
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.chatInputFrame);
+        this._lastInputRendered = '';
+    }
+    this.chatInputFrame.open();
+    this.chatInputFrame.attr = inputAttr;
+
+    if (!this._controlButtons || !this._controlButtons.length) {
+        this._buildControlButtons({
+            buttonAttr: this.paletteAttr('CHAT_BUTTON', controlsAttr),
+            buttonFocusAttr: this.paletteAttr('CHAT_BUTTON_FOCUS', controlsAttr),
+            controlsAttr: controlsAttr
+        });
+    } else {
+        this._renderControlButtons();
+        if (this._controlHotspotsDirty) {
+            this._registerControlHotspots();
+        }
+    }
+};
+
+Chat.prototype.enter = function (done) {
+    this.done = done;
+    if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
+    this._resetRuntimeState();
+    this._frameMetrics = null;
+    if (typeof Subprogram.prototype.enter === 'function') {
+        Subprogram.prototype.enter.call(this, done);
+    } else {
+        this.running = true;
+        this._ensureFrames();
+        this.draw();
+        this._done = (typeof done === 'function') ? done : function () { };
+    }
     // Start periodic redraw timer (every minute) using Synchronet Timer
-}
+};
 
 Chat.prototype.exit = function () {
     // Stop periodic redraw timer
@@ -143,11 +332,14 @@ Chat.prototype.exit = function () {
         this._redrawEvent.abort = true;
         this._redrawEvent = null;
     }
-    this.running = false;
-    this.cleanup();
+    if (typeof Subprogram.prototype.exit === 'function') {
+        Subprogram.prototype.exit.call(this);
+    } else {
+        this.running = false;
+        if (this._done) this._done();
+    }
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
-    this.done();
-}
+};
 
 Chat.prototype.attachShellTimer = function (timer) {
     this.timer = timer || null;
@@ -157,7 +349,7 @@ Chat.prototype.pauseForReason = function (reason) {
     log("Pausing chat for reason: " + reason);
     // HEY AI ASSISTANTS, this needs to be .top() not bottom quit messing it up
     if (reason === 'screensaver_on' && this.__bg_frame && typeof this.__bg_frame.top === 'function') {
-        try { this.__bg_frame.top(); this.__bg_frame.cycle(); } catch (e) { }
+        try { this.__bg_frame.top(); this.headerFrame.top(); this.chatInputFrame.top(); this.__bg_frame.cycle(); } catch (e) { }
     }
 };
 
@@ -166,6 +358,12 @@ Chat.prototype.resumeForReason = function (reason) {
     // HEY AI ASSISTANTS, this needs to be .bottom() not top quit messing it up
 
     if (reason === 'screensaver_off') {
+        this._disposeFrames();
+
+        if (this.hostFrame && typeof this.hostFrame.clear === 'function') {
+            try { this.hostFrame.clear(); } catch (_) { }
+        }
+
         if (this.__bg_frame && typeof this.__bg_frame.bottom === 'function') {
             try { this.__bg_frame.bottom(); this.__bg_frame.clear(); this.__bg_frame.cycle(); } catch (e) { }
         }
@@ -175,10 +373,26 @@ Chat.prototype.resumeForReason = function (reason) {
             } catch (e) { }
             this.shell.activeSubprogram = this;
         }
-        this.initFrames();
+        this._ensureFrames();
+        if (this.chatOutputFrame) {
+            try { this.chatOutputFrame.top(); } catch (_) { }
+            try { this.chatOutputFrame.cycle(); } catch (_) { }
+        }
+        if (this.headerFrame) {
+            try { this.headerFrame.top(); } catch (_) { }
+        }
+        if (this.chatInputFrame) {
+            try { this.chatInputFrame.top(); } catch (_) { }
+            try { this.chatInputFrame.cycle(); } catch (_) { }
+        }
+        if (this.hostFrame) {
+            try { this.hostFrame.cycle(); } catch (_) { }
+        }
         this.updateInputFrame();
         this._needsRedraw = true;
         this.draw();
+
+        this._registerControlHotspots();
     }
 };
 Chat.prototype.detachShellTimer = function () {
@@ -291,7 +505,7 @@ Chat.prototype.handleKey = function (key) {
 
 // Update the chat input/status line
 Chat.prototype.updateInputFrame = function () {
-    this._drawInputFrame(true);
+    this._refreshHeaderAndInput(true);
 };
 
 // Efficiently append new messages to the chat (call this from IconShell on new message event)
@@ -302,60 +516,21 @@ Chat.prototype.updateChat = function (packet) {
     if (this.running) this.draw();
 };
 
-Chat.prototype.cleanup = function () {
+Chat.prototype._cleanup = function () {
     if (this._activeRosterModal && typeof this._activeRosterModal.close === 'function') {
         try { this._activeRosterModal.close(); } catch (_) { }
     }
     this._activeRosterModal = null;
-    this._destroyControlButtons();
-    if (this.chatControlsFrame) {
-        try { this.chatControlsFrame.close(); } catch (_) { }
-        this.chatControlsFrame = null;
-    }
-    if (this.headerFrame) {
-        try { this.headerFrame.close(); } catch (_) { }
-        this.headerFrame = null;
-    }
-    // Close and null out all frames
-    if (this.leftAvatarFrame) {
-        this.leftAvatarFrame.close();
-        this.leftAvatarFrame = null;
-    }
-    if (this.leftMsgFrame) {
-        this.leftMsgFrame.close();
-        this.leftMsgFrame = null;
-    }
-    if (this.rightMsgFrame) {
-        this.rightMsgFrame.close();
-        this.rightMsgFrame = null;
-    }
-    if (this.rightAvatarFrame) {
-        this.rightAvatarFrame.close();
-        this.rightAvatarFrame = null;
-    }
-    if (this.chatSpacerFrame) {
-        this.chatSpacerFrame.close();
-        this.chatSpacerFrame = null;
-    }
-    if (this.chatOutputFrame) {
-        this.chatOutputFrame.close();
-        this.chatOutputFrame = null;
-    }
-    if (this.chatInputFrame) {
-        this.chatInputFrame.close();
-        this.chatInputFrame = null;
-    }
-    if (this.parentFrame) {
-        this.parentFrame.close();
-        this.parentFrame = null;
-    }
-    this.messageFrames = [];
-}
+    this._disposeFrames();
+};
+
+Chat.prototype.cleanup = Chat.prototype._cleanup;
 
 
 Chat.prototype._destroyControlButtons = function () {
     if (!this._controlButtons) {
         this._controlButtons = [];
+        this._controlHotspotsDirty = false;
         return;
     }
     for (var i = 0; i < this._controlButtons.length; i++) {
@@ -365,6 +540,7 @@ Chat.prototype._destroyControlButtons = function () {
     }
     this._controlButtons = [];
     this._clearControlHotspots();
+    this._controlHotspotsDirty = false;
 };
 
 Chat.prototype._buildControlButtons = function (opts) {
@@ -431,6 +607,7 @@ Chat.prototype._buildControlButtons = function (opts) {
         currentX += width + gap;
         if (currentX >= maxWidth) break;
     }
+    this._controlHotspotsDirty = true;
     this._registerControlHotspots();
 };
 
@@ -458,8 +635,9 @@ Chat.prototype._renderHeaderFrame = function () {
     var startX = Math.max(1, Math.floor((width - text.length) / 2) + 1);
     try {
         this.headerFrame.gotoxy(startX, 1);
-        this.headerFrame.putmsg(text);
+        this.headerFrame.putmsg(text, attr);
     } catch (_) { }
+    this._expectedHeaderAttr = attr;
 };
 
 Chat.prototype._formatControlsInfo = function () {
@@ -498,62 +676,99 @@ Chat.prototype._handleRosterRequest = function () {
     this._showRosterModal();
 };
 
-Chat.prototype._getRosterUsernames = function () {
-    var names = [];
+Chat.prototype._fetchJsonChatRoster = function () {
+    if (!this.jsonchat || !this.jsonchat.client || typeof this.jsonchat.client.who !== 'function') return [];
+    var channelName = this.channel || 'main';
+    var seenNames = {};
+    var candidates = [];
+    function addCandidate(name) {
+        if (!name) return;
+        var normalized = String(name);
+        if (seenNames[normalized]) return;
+        seenNames[normalized] = true;
+        candidates.push(normalized);
+    }
+    addCandidate(channelName);
+    addCandidate(channelName.toUpperCase());
+    addCandidate(channelName.toLowerCase());
+    if (channelName.charAt(0) !== '#') addCandidate('#' + channelName);
+    var results = [];
+    for (var i = 0; i < candidates.length; i++) {
+        var chan = candidates[i];
+        var location = 'channels.' + chan + '.messages';
+        try {
+            var whoResult = this.jsonchat.client.who('chat', location);
+            if (!whoResult) continue;
+            for (var j = 0; j < whoResult.length; j++) {
+                var entry = whoResult[j];
+                if (entry != null) results.push(entry);
+            }
+            if (results.length) break;
+        } catch (whoErr) {
+            if (typeof log === 'function') {
+                try { log('[Chat] jsonchat who failed for ' + location + ': ' + whoErr, 'chat'); } catch (_) { }
+            }
+        }
+    }
+    return results;
+};
+
+Chat.prototype._getRosterEntries = function () {
+    var entries = [];
     var seen = {};
     var sourceCounts = {};
-    function addName(raw, source) {
-        if (!raw && raw !== 0) return;
-        var name = String(raw).trim();
+    function normalize(str) {
+        return (str && str !== 0) ? String(str).trim() : '';
+    }
+    function addEntry(rawName, rawBbs, source) {
+        var name = normalize(rawName);
         if (!name.length) return;
-        var key = name.toLowerCase();
+        var bbs = normalize(rawBbs);
+        if (!bbs.length && typeof system !== 'undefined' && system && system.name) {
+            bbs = String(system.name);
+        }
+        if (!bbs.length) bbs = 'Unknown BBS';
+        var key = (name + '|' + bbs).toLowerCase();
         if (seen[key]) return;
         seen[key] = true;
         if (source) {
             if (!Object.prototype.hasOwnProperty.call(sourceCounts, source)) sourceCounts[source] = 0;
             sourceCounts[source] += 1;
         }
-        names.push(name);
+        entries.push({ username: name, bbs: bbs });
+    }
+    function extractJsonEntry(entry) {
+        if (!entry) return;
+        var possibleName;
+        if (entry.nick && typeof entry.nick === 'object') {
+            possibleName = entry.nick.name || entry.nick.alias || entry.nick.user;
+            if (!possibleName && entry.nick.toString) possibleName = entry.nick.toString();
+        } else {
+            possibleName = entry.nick || entry.name || entry.alias || entry.user || entry.id || entry.uid;
+        }
+        var possibleBbs = entry.system || (entry.nick && entry.nick.host) || entry.host || entry.origin || entry.bbs;
+        addEntry(possibleName, possibleBbs, 'jsonchat');
     }
 
     if (typeof user !== 'undefined' && user && user.alias) {
-        addName(user.alias, 'self');
+        var selfBbs = (typeof system !== 'undefined' && system && system.name) ? system.name : '';
+        addEntry(user.alias, selfBbs, 'self');
     }
 
+    var jsonRoster;
     try {
-        if (this.jsonchat) {
-            var chanId = this.channel ? this.channel.toUpperCase() : 'MAIN';
-            var chan = this.jsonchat.channels ? this.jsonchat.channels[chanId] : null;
-            if (!chan || !Array.isArray(chan.users)) {
-                if (typeof this.jsonchat.who === 'function') {
-                    try { this.jsonchat.who(this.channel || 'main'); } catch (_) { }
-                    chan = this.jsonchat.channels ? this.jsonchat.channels[chanId] : chan;
-                }
-            }
-            if (chan && Array.isArray(chan.users)) {
-                for (var i = 0; i < chan.users.length; i++) {
-                    var entry = chan.users[i];
-                    if (!entry) continue;
-                    addName(entry.nick || entry.name || entry.alias || entry, 'jsonchat');
-                }
-            }
+        jsonRoster = this._fetchJsonChatRoster();
+    } catch (_jsonErr) {
+        if (typeof log === 'function') {
+            try { log('[Chat] _fetchJsonChatRoster threw: ' + _jsonErr, 'chat'); } catch (_) { }
         }
-    } catch (_jsonErr) { }
-
-    try {
-        if (typeof system !== 'undefined' && system && system.node_list) {
-            for (var n = 0; n < system.node_list.length; n++) {
-                var node = system.node_list[n];
-                if (!node) continue;
-                if (node.useron && String(node.useron).trim().length) {
-                    addName(node.useron, 'system');
-                } else if (typeof system.username === 'function') {
-                    var alias = system.username(n + 1);
-                    if (alias) addName(alias, 'system');
-                }
-            }
+        jsonRoster = [];
+    }
+    if (jsonRoster && jsonRoster.length) {
+        for (var r = 0; r < jsonRoster.length; r++) {
+            extractJsonEntry(jsonRoster[r]);
         }
-    } catch (_sysErr) { }
+    }
 
     if (typeof log === 'function') {
         try {
@@ -562,12 +777,16 @@ Chat.prototype._getRosterUsernames = function () {
                 if (!Object.prototype.hasOwnProperty.call(sourceCounts, key)) continue;
                 breakdown.push(key + ':' + sourceCounts[key]);
             }
-            log('[Chat] roster sources => ' + (breakdown.length ? breakdown.join(', ') : 'none') + ' total=' + names.length, 'chat');
+            log('[Chat] roster sources => ' + (breakdown.length ? breakdown.join(', ') : 'none') + ' total=' + entries.length, 'chat');
         } catch (_) { }
     }
 
-    names.sort(function (a, b) { return a.localeCompare(b); });
-    return names;
+    entries.sort(function (a, b) {
+        var nameCmp = a.username.localeCompare(b.username);
+        if (nameCmp !== 0) return nameCmp;
+        return a.bbs.localeCompare(b.bbs);
+    });
+    return entries;
 };
 
 Chat.prototype._showRosterModal = function () {
@@ -581,25 +800,38 @@ Chat.prototype._showRosterModal = function () {
         this._statusText = 'Feature unavailable';
         this._lastStatusUpdateTs = Date.now();
         this._lastInputRendered = '';
-        this._drawInputFrame(true);
+        this._refreshHeaderAndInput(true);
         return;
     }
 
-    var names = [];
+    var roster = [];
     try {
-        names = this._getRosterUsernames();
+        roster = this._getRosterEntries();
     } catch (err) {
         if (typeof log === 'function') {
             try { log('[Chat] roster gather failed: ' + err, 'chat'); } catch (_) { }
         }
-        names = [];
+        roster = [];
     }
 
     if (typeof log === 'function') {
-        try { log('[Chat] roster name count => ' + names.length, 'chat'); } catch (_) { }
+        try { log('[Chat] roster entry count => ' + roster.length, 'chat'); } catch (_) { }
     }
 
-    var body = names.length ? names.join('\r\n') : 'No one else is here right now.';
+    var body;
+    if (roster.length) {
+        var lines = [];
+        for (var li = 0; li < roster.length; li++) {
+            var entry = roster[li];
+            if (!entry) continue;
+            var username = entry.username || 'Unknown';
+            var bbs = entry.bbs || 'Unknown BBS';
+            lines.push(username + ' - ' + bbs);
+        }
+        body = lines.join('\r\n');
+    } else {
+        body = 'No one else is here right now.';
+    }
     var frameAttr = this.paletteAttr('CHAT_ROSTER_MODAL_FRAME', this.chatOutputFrame ? this.chatOutputFrame.attr : 0);
     var contentAttr = this.paletteAttr('CHAT_ROSTER_MODAL_CONTENT', frameAttr);
     var titleAttr = this.paletteAttr('CHAT_ROSTER_MODAL_TITLE', frameAttr);
@@ -651,7 +883,7 @@ Chat.prototype._showRosterModal = function () {
         this._statusText = 'Unable to show roster';
         this._lastStatusUpdateTs = Date.now();
         this._lastInputRendered = '';
-        this._drawInputFrame(true);
+        this._refreshHeaderAndInput(true);
     }
 };
 
@@ -703,6 +935,7 @@ Chat.prototype._registerControlHotspots = function () {
     if (typeof log === 'function') {
         try { log('[Chat] registered control hotspots => ' + registered, 'chat'); } catch (_) { }
     }
+    this._controlHotspotsDirty = false;
 };
 
 Chat.prototype._activateControlAction = function (action) {
@@ -772,117 +1005,7 @@ Chat.prototype._processControlHotspotInput = function (key) {
 };
 
 Chat.prototype.initFrames = function () {
-    // Assume parentFrame is set externally (e.g., shell.view)
-    // If not, fallback to creating a new Frame
-    if (!this.parentFrame) {
-        // Fallback: create a full-screen frame
-        this.parentFrame = new Frame(1, 1, console.screen_columns, console.screen_rows, ICSH_ATTR('CHAT_OUTPUT'));
-        this.parentFrame.open();
-    }
-    var w = this.parentFrame.width;
-    var h = this.parentFrame.height;
-    var headerHeight = 1;
-    var inputHeight = 1;
-    var outputH = Math.max(1, h - headerHeight - inputHeight);
-    var defaultOutputAttr = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.VIEW) ? (ICSH_VALS.VIEW.BG | ICSH_VALS.VIEW.FG) : ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
-    var headerAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_HEADER', defaultOutputAttr) : defaultOutputAttr;
-    var outputAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_OUTPUT', defaultOutputAttr) : defaultOutputAttr;
-    var controlsAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_CONTROLS', outputAttr) : outputAttr;
-    var buttonAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_BUTTON', controlsAttr) : controlsAttr;
-    var buttonFocusAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_BUTTON_FOCUS', buttonAttr) : buttonAttr;
-    var defaultInputAttr = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CRUMB) ? (ICSH_VALS.CRUMB.BG | ICSH_VALS.CRUMB.FG) : ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof WHITE !== 'undefined' ? WHITE : 7));
-    var inputAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_INPUT', defaultInputAttr) : defaultInputAttr;
-
-    if (this.headerFrame) {
-        try { this.headerFrame.close(); } catch (_) { }
-    }
-    this.headerFrame = new Frame(1, 1, w, headerHeight, headerAttr, this.parentFrame);
-    this.headerFrame.open();
-    this.headerFrame.attr = headerAttr;
-    try { this.headerFrame.clear(headerAttr); } catch (_) { }
-
-    if (this.chatOutputFrame) {
-        try { this.chatOutputFrame.close(); } catch (_) { }
-    }
-    this.chatOutputFrame = new Frame(1, headerHeight + 1, w, outputH, outputAttr, this.parentFrame);
-    this.chatOutputFrame.transparent = false;
-    this.chatOutputFrame.open();
-    this.chatOutputFrame.attr = outputAttr;
-    try { this.chatOutputFrame.clear(outputAttr); } catch (_) { }
-    this.setBackgroundFrame(this.chatOutputFrame || this.parentFrame);
-
-    if (this.chatControlsFrame) {
-        try { this.chatControlsFrame.close(); } catch (_) { }
-        this.chatControlsFrame = null;
-    }
-    this._destroyControlButtons();
-    var controlHeight = Math.min(3, Math.max(0, outputH - 1));
-    if (controlHeight > 0) {
-        this.chatControlsFrame = new Frame(1, 1, w, controlHeight, controlsAttr, this.chatOutputFrame);
-        this.chatControlsFrame.transparent = false;
-        this.chatControlsFrame.open();
-        this.chatControlsFrame.attr = controlsAttr;
-        try { this.chatControlsFrame.clear(controlsAttr); } catch (_) { }
-    }
-
-    var controlOffset = (this.chatControlsFrame) ? this.chatControlsFrame.height : 0;
-    var messageStartY = Math.max(1, controlOffset + 1);
-    var messageHeight = Math.max(1, outputH - controlOffset);
-    var outputWidth = this.chatOutputFrame.width || w;
-    var avatarWidth = this.avatarWidth || 10;
-    if ((avatarWidth * 2) >= (outputWidth - 4)) avatarWidth = Math.max(2, Math.floor(outputWidth / 4));
-    if (avatarWidth < 2) avatarWidth = 2;
-    this.avatarWidth = avatarWidth;
-    var messageAreaWidth = Math.max(2, outputWidth - (avatarWidth * 2));
-    var leftMsgWidth = Math.max(2, Math.floor(messageAreaWidth / 2));
-    var rightMsgWidth = Math.max(2, messageAreaWidth - leftMsgWidth);
-    var leftAvatarX = 1;
-    var rightAvatarX = outputWidth - avatarWidth + 1;
-    var leftMsgX = leftAvatarX + avatarWidth;
-    var rightMsgX = rightAvatarX - rightMsgWidth;
-    // Column frames: avatar/message pairs on each side
-    if (this.leftAvatarFrame) { try { this.leftAvatarFrame.close(); } catch (_) { } }
-    if (this.leftMsgFrame) { try { this.leftMsgFrame.close(); } catch (_) { } }
-    if (this.rightMsgFrame) { try { this.rightMsgFrame.close(); } catch (_) { } }
-    if (this.rightAvatarFrame) { try { this.rightAvatarFrame.close(); } catch (_) { } }
-    this.leftAvatarFrame = new Frame(leftAvatarX, messageStartY, avatarWidth, messageHeight, outputAttr, this.chatOutputFrame);
-    this.leftAvatarFrame.transparent = true;
-    this.leftMsgFrame = new Frame(leftMsgX, messageStartY, leftMsgWidth, messageHeight, outputAttr, this.chatOutputFrame);
-    this.leftMsgFrame.transparent = true;
-    this.rightMsgFrame = new Frame(rightMsgX, messageStartY, rightMsgWidth, messageHeight, outputAttr, this.chatOutputFrame);
-    this.rightMsgFrame.transparent = true;
-    this.rightAvatarFrame = new Frame(rightAvatarX, messageStartY, avatarWidth, messageHeight, outputAttr, this.chatOutputFrame);
-    this.rightAvatarFrame.transparent = true;
-    this.leftAvatarFrame.open();
-    this.leftMsgFrame.open();
-    this.rightMsgFrame.open();
-    this.rightAvatarFrame.open();
-    this.chatSpacerFrame = null;
-    this.leftMsgFrame.word_wrap = true;
-    this.leftMsgFrame.h_scroll = false;
-    this.leftMsgFrame.v_scroll = false;
-    this.rightMsgFrame.word_wrap = true;
-    this.rightMsgFrame.h_scroll = false;
-    this.rightMsgFrame.v_scroll = false;
-    // Chat input frame (bottom)
-    if (this.chatInputFrame) {
-        try { this.chatInputFrame.close(); } catch (_) { }
-    }
-    var inputY = headerHeight + outputH + 1;
-    if (inputY > h) inputY = h;
-    this.chatInputFrame = new Frame(1, inputY, w, 1, inputAttr, this.parentFrame);
-    this.chatInputFrame.open();
-    this.chatInputFrame.attr = inputAttr;
-    try { this.chatInputFrame.clear(inputAttr); } catch (_) { }
-    this._lastInputRendered = '';
-
-    this._buildControlButtons({
-        buttonAttr: buttonAttr,
-        buttonFocusAttr: buttonFocusAttr,
-        controlsAttr: controlsAttr
-    });
-    this._renderHeaderFrame();
-    this._renderControlsArea();
+    this._ensureFrames();
 };
 
 Chat.prototype.refresh = function () {
@@ -892,6 +1015,20 @@ Chat.prototype.refresh = function () {
 
 Chat.prototype.cycle = function () {
     if (!this.running) return;
+    if (this.headerFrame && typeof this._expectedHeaderAttr === 'number') {
+        var actualAttr = this.headerFrame.attr;
+        if (actualAttr !== this._expectedHeaderAttr) {
+            if (this._lastHeaderAttrLog !== actualAttr) {
+                if (typeof log === 'function') {
+                    try { log('[Chat] header attr drift: expected=' + this._expectedHeaderAttr + ' actual=' + actualAttr, 'chat'); } catch (_) { }
+                }
+                this._lastHeaderAttrLog = actualAttr;
+            }
+        } else {
+            this._lastHeaderAttrLog = actualAttr;
+        }
+    }
+    this._ensureFrames();
     if (this.jsonchat && typeof this.jsonchat.cycle === 'function') {
         this.jsonchat.cycle();
     }
@@ -903,7 +1040,7 @@ Chat.prototype.cycle = function () {
             if (status !== this._statusText) {
                 this._statusText = status;
                 this._lastInputRendered = '';
-                this._drawInputFrame();
+                this._refreshHeaderAndInput();
             }
             this._lastStatusUpdateTs = now;
         }
@@ -911,7 +1048,7 @@ Chat.prototype.cycle = function () {
         this._statusText = '';
         this._lastStatusUpdateTs = now;
         this._lastInputRendered = '';
-        this._drawInputFrame();
+        this._refreshHeaderAndInput();
     }
     var messages = this._getChannelMessages();
     var signature = this._computeMessageSignature(messages);
@@ -946,9 +1083,7 @@ Chat.prototype.draw = function () {
         return;
     }
     var _perfStart = (global.__ICSH_PERF__) ? Date.now() : 0;
-    if (!this.leftAvatarFrame || !this.leftMsgFrame || !this.rightMsgFrame || !this.rightAvatarFrame || !this.chatInputFrame) {
-        this.initFrames();
-    }
+    this._ensureFrames();
     this._renderHeaderFrame();
     this._renderControlsArea();
 
@@ -985,8 +1120,11 @@ Chat.prototype.draw = function () {
 
     this._renderAvatars(groups);
     this._lastInputRendered = '';
-    this._drawInputFrame();
-    if (this.parentFrame) this.parentFrame.cycle();
+    this._refreshHeaderAndInput();
+    this.headerFrame.top();
+    this.chatInputFrame.top();
+    if (this.hostFrame) this.hostFrame.cycle();
+    else if (this.parentFrame) this.parentFrame.cycle();
 
     this._lastMessageSignature = signature;
     this._needsRedraw = false;
@@ -1691,7 +1829,13 @@ Chat.prototype._drawAvatarSet = function (frame, avatarList, avatarLib) {
     }
 };
 
-// Helper: draw input frame
+Chat.prototype._refreshHeaderAndInput = function (force) {
+    this._ensureFrames();
+    if (typeof this._renderHeaderFrame === 'function') this._renderHeaderFrame();
+    this._drawInputFrame(force);
+};
+
+// Helper: draw input frame (header handled via _refreshHeaderAndInput)
 Chat.prototype._drawInputFrame = function (force) {
     if (!this.chatInputFrame) return;
     var base = 'You: ' + this.input;

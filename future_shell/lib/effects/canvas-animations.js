@@ -1073,12 +1073,18 @@ FigletMessage.prototype._isTransparentChar = function(ch, attr){
 
 FigletMessage.prototype._clearFrame = function(frame){
     if(!frame) return;
+    if(typeof frame.clear === 'function'){
+        try { frame.clear(); } catch(e_clear){}
+        return;
+    }
     var w = frame.width || 0;
     var h = frame.height || 0;
     for(var y=0; y<h; y++){
         for(var x=0; x<w; x++){
             var refresh = (x === w-1 && y === h-1);
-            try { frame.setData(x, y, undefined, 0, refresh); } catch(e){}
+            try { frame.clearData(x, y, refresh); } catch(e_clearData){
+                try { frame.setData(x, y, ' ', 0, refresh); } catch(e_setData){}
+            }
         }
     }
 };
@@ -1087,9 +1093,14 @@ FigletMessage.prototype._createFrames = function(preservePosition){
 	var prevX = this.posX;
 	var prevY = this.posY;
 	if(this.box){
-		try { this.box.close(); } catch(e){}
+		if(this.inner){ try { this.inner.close(); } catch(e_inner){} }
+		try { this.box.close(); } catch(e_box){}
 		this.box = null;
 		this.inner = null;
+		this._clearFrame(this.f);
+		if(this.f && typeof this.f.cycle === 'function'){
+			try { this.f.cycle(); } catch(_c) {}
+		}
 	}
 	var innerHeight = Math.min(Math.max(1, this.contentHeight), Math.max(1, this.f.height - 2));
 	var innerWidth = Math.min(Math.max(1, this.contentWidth), Math.max(1, this.f.width - 2));
@@ -1204,6 +1215,10 @@ FigletMessage.prototype.tick = function(){
 FigletMessage.prototype.dispose = function(){
 	if(this.inner){ try { this.inner.close(); } catch(e){} }
 	if(this.box){ try { this.box.close(); } catch(e){} }
+	this._clearFrame(this.f);
+	if(this.f && typeof this.f.cycle === 'function'){
+		try { this.f.cycle(); } catch(_c){}
+	}
 	this.box = this.inner = null;
 	this.lines = [];
 };

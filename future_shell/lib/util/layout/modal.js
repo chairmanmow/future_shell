@@ -169,7 +169,6 @@ function Modal(opts) {
         try {
             if (ModalThemeRegistry) {
                 var paletteDump = ModalThemeRegistry.get(MODAL_THEME_BASE);
-                log('[MODAL THEME PALETTE] ' + JSON.stringify(paletteDump));
             }
             var msg = '[MODAL THEME] type=' + this.type
                 + ' frame=0x' + (this.attr & 0xFF).toString(16)
@@ -185,7 +184,7 @@ function Modal(opts) {
                 + ' cancelShadow=0x' + (this.cancelButtonShadowAttr & 0xFF).toString(16)
                 + ' echo=0x' + (this.promptEchoAttr & 0xFF).toString(16)
                 + ' overlay=0x' + (this.overlayAttr & 0xFF).toString(16);
-            log(msg);
+            //log(msg);
         } catch (_) { }
     }
     if (this.type === 'spinner' || this.type === 'progress') this._initActivityType();

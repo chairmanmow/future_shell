@@ -1313,7 +1313,7 @@ NewsReader.prototype._renderCategoryIcons = function () {
             var index = row * cols + col;
             if (index >= total) break;
             var item = items[index];
-            var x = 1 + col * cellW;
+            var x = 2 + col * cellW;
             var y = 1 + topPadding + (row - startRow) * cellH;
             if (y + metrics.height + labelHeight - 1 > frameHeight) continue;
 
@@ -1404,7 +1404,7 @@ NewsReader.prototype._renderFeedIcons = function () {
             var index = row * cols + col;
             if (index >= total) break;
             var item = items[index];
-            var x = 1 + col * cellW;
+            var x = 2 + col * cellW;
             var y = 1 + topPadding + (row - startRow) * cellH;
             if (y + metrics.height + labelHeight - 1 > frameHeight) continue;
 
