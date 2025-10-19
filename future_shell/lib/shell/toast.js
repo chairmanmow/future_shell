@@ -60,7 +60,11 @@ function toastWrapText(str, width) {
 
 function Toast(options) {
     if (!options || typeof options !== 'object') options = {};
-    this._avatarData = null;
+    this._avatarData = null; /* IconShell.showToast() wraps toast instances and assigns
+        a unique printable token (e.g. '~t1~'). The shell keeps a keystroke buffer
+        and matches that token in processKeyboardInput(), launching/dismissing the
+        toast via opts.launch/opts.action. Adjusting toast metadata? keep that
+        token-based flow (see shelllib.js). */
     this.title = options.title || false;
     this._avatarLib = (function () {
         try {

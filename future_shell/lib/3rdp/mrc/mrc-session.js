@@ -139,8 +139,22 @@ function MRC_Session(host, port, user, pass, alias) {
                     emit('topic', room, topic);
                     break;
                 case 'USERLIST':
-                    state.nicks = params.split(',');
-                    emit('nicks', state.nicks);
+                    var listRoom = state.room || '';
+                    var listStr = params || '';
+                    if (params && params.indexOf(':') !== -1) {
+                        var idx = params.indexOf(':');
+                        var maybeRoom = params.substr(0, idx);
+                        var rest = params.substr(idx + 1);
+                        if (rest && maybeRoom && maybeRoom.indexOf(',') === -1) {
+                            listRoom = maybeRoom;
+                            listStr = rest;
+                        }
+                    }
+                    var nickList = listStr ? listStr.split(',') : [];
+                    if (listRoom && state.room && listRoom.toLowerCase() === state.room.toLowerCase()) {
+                        state.nicks = nickList.slice();
+                    }
+                    emit('nicks', listRoom, nickList);
                     break;
                 case 'STATS':
                     state.stats = params.split(' ');

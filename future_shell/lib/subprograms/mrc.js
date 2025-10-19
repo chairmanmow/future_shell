@@ -147,13 +147,17 @@ var _sharedMrcService = null;
 function ensureMrcService(opts) {
     opts = opts || {};
     if (opts.shell && opts.shell.mrcService) return opts.shell.mrcService;
+    if (opts.shell) {
+        var service = new MRCService(opts);
+        opts.shell.mrcService = service;
+        try { service.setToastEnabled(true); } catch (_) { }
+        return service;
+    }
     if (_sharedMrcService) {
         try { _sharedMrcService.setToastEnabled(true); } catch (_) { }
-        if (opts.shell && !opts.shell.mrcService) opts.shell.mrcService = _sharedMrcService;
         return _sharedMrcService;
     }
     _sharedMrcService = new MRCService(opts);
-    if (opts.shell) opts.shell.mrcService = _sharedMrcService;
     try { _sharedMrcService.setToastEnabled(true); } catch (_) { }
     return _sharedMrcService;
 }
@@ -282,7 +286,7 @@ MRCService.prototype._bindSessionEvents = function () {
     var self = this;
     this.session.on('message', function (msg) { self._handleIncoming(msg); });
     this.session.on('banner', function (msg) { self._handleServerText(msg); });
-    this.session.on('nicks', function (nicks) { self._updateNickList(nicks); });
+    this.session.on('nicks', function (room, nicks) { self._updateNickList(room, nicks); });
     this.session.on('topic', function (room, topic) { self._updateTopic(room, topic); });
     this.session.on('stats', function () { self._broadcastStats(); });
     this.session.on('latency', function () { self._broadcastLatency(); });
@@ -381,9 +385,18 @@ MRCService.prototype._pushMessage = function (payload) {
     this._notify('onServiceMessage', payload);
 };
 
-MRCService.prototype._updateNickList = function (nicks) {
+MRCService.prototype._updateNickList = function (room, nicks) {
+    var sessionRoom = (this.session && typeof this.session.room === 'string') ? this.session.room : '';
+    var incomingRoom = (typeof room === 'string') ? room : '';
+    var targetRoom = incomingRoom || sessionRoom;
+    if (targetRoom && sessionRoom && targetRoom.toLowerCase() !== sessionRoom.toLowerCase()) {
+        return;
+    }
+    var list = Array.isArray(nicks) ? nicks.slice() : [];
     var self = this;
-    this.nickList = Array.isArray(nicks) ? nicks.slice() : [];
+    this.nickList = list.slice();
+    this.nickColors = {};
+    this.nickList = list.slice();
     this.nickColors = {};
     this.nickList.forEach(function (nick, idx) {
         self.nickColors[nick] = MRC_PIPE_COLOURS[idx % MRC_PIPE_COLOURS.length];
@@ -392,8 +405,16 @@ MRCService.prototype._updateNickList = function (nicks) {
 };
 
 MRCService.prototype._updateTopic = function (room, topic) {
-    this.roomName = room || this.roomName;
+    var sessionRoom = (this.session && typeof this.session.room === 'string') ? this.session.room : '';
+    var incomingRoom = (typeof room === 'string') ? room : '';
+    var targetRoom = incomingRoom || sessionRoom || (typeof this.roomName === 'string' ? this.roomName : '');
+    if (targetRoom && sessionRoom && targetRoom.toLowerCase() !== sessionRoom.toLowerCase()) {
+        return;
+    }
+    this.roomName = targetRoom || this.roomName || '';
     this.roomTopic = topic || '';
+    this._notify('onServiceTopic', { room: this.roomName, topic: this.roomTopic });
+};
     this._notify('onServiceTopic', { room: this.roomName, topic: this.roomTopic });
 };
 

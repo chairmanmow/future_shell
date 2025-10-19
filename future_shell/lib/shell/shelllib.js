@@ -1,3 +1,8 @@
+if (typeof dbug !== 'function') {
+    try { load('future_shell/lib/util/debug.js'); } catch (e) {
+        dbug = function() {};
+    }
+}
 
 load("event-timer.js");
 var ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
@@ -168,6 +173,8 @@ IconShell.prototype.init = function () {
     // Toast tracking
     this.toasts = [];
     this._toastHotspots = {};
+    this._toastKeyBuffer = '';
+    this._toastTokenCounter = 0;
     // Track reserved hotspot commands so we avoid collisions
     this._reservedHotspotCommands = {};
     if (typeof ICSH_HOTSPOT_FILL_CMD === 'string' && ICSH_HOTSPOT_FILL_CMD.length === 1) {
@@ -346,6 +353,31 @@ IconShell.prototype.processKeyboardInput = function (ch) {
             }
         }
         return true;
+    }
+    if (typeof ch === 'string' && ch.length && this.toasts && this.toasts.length) {
+        this._toastKeyBuffer = ((typeof this._toastKeyBuffer === 'string') ? this._toastKeyBuffer : '') + ch;
+        if (this._toastKeyBuffer.length > 32) this._toastKeyBuffer = this._toastKeyBuffer.slice(-32);
+        for (var token in this._toastHotspots) {
+            if (!this._toastHotspots.hasOwnProperty(token)) continue;
+            if (token && this._toastKeyBuffer && this._toastKeyBuffer.slice(-token.length) === token) {
+                var selectedToastToken = this._toastHotspots[token];
+                log('[toast] hotspot token match=' + JSON.stringify(token));
+                var launchedToken = false;
+                if (selectedToastToken && selectedToastToken.__shellMeta && typeof selectedToastToken.__shellMeta.action === 'function') {
+                    try { selectedToastToken.__shellMeta.action(); launchedToken = true; } catch (actionErr) { log('[toast] action handler error: ' + actionErr); }
+                } else if (selectedToastToken && selectedToastToken.__shellMeta && selectedToastToken.__shellMeta.launch) {
+                    log('[toast] hotspot launch=' + selectedToastToken.__shellMeta.launch);
+                    launchedToken = this._launchToastTarget(selectedToastToken.__shellMeta.launch, selectedToastToken);
+                }
+                if (launchedToken) {
+                    if (selectedToastToken && typeof selectedToastToken.dismiss === 'function') selectedToastToken.dismiss();
+                } else {
+                    log('[toast] launch not handled; toast remains visible');
+                }
+                this._toastKeyBuffer = '';
+                return true;
+            }
+        }
     }
     if (typeof ch === 'string' && this._toastHotspots && this._toastHotspots[ch]) {
         var selectedToast = this._toastHotspots[ch];
@@ -1011,6 +1043,7 @@ IconShell.prototype.showToast = function (params) {
         command: null
     };
     this.toasts.push(toast);
+    if (this.toasts.length === 1) this._toastKeyBuffer = '';
     if (this.toasts.length === 1 && typeof console !== 'undefined' && console && typeof console.mouse_mode !== 'undefined') {
         if (typeof this._toastMouseRestore === 'undefined') this._toastMouseRestore = console.mouse_mode;
         console.mouse_mode = true;
@@ -1039,6 +1072,10 @@ IconShell.prototype._removeToastFromList = function (toast) {
 		console.mouse_mode = this._toastMouseRestore;
 		try { log('[toast] mouse mode restored'); } catch (_) { }
 		this._toastMouseRestore = undefined;
+	}
+	if (!this.toasts.length) {
+		this._toastKeyBuffer = '';
+		this._toastTokenCounter = 0;
 	}
 	this._reflowAllToasts();
 };
@@ -1107,13 +1144,11 @@ IconShell.prototype._registerToastHotspot = function (toast) {
     if (!this._toastHotspots) this._toastHotspots = {};
     if (!toast.__shellMeta) toast.__shellMeta = {};
     if (!toast.__shellMeta.command) {
-        var token = '~';
-        if (this._reservedHotspotCommands && this._reservedHotspotCommands[token]) {
-            for (var code = 33; code <= 126; code++) {
-                var ch = String.fromCharCode(code);
-                if (/[A-Za-z0-9]/.test(ch)) continue;
-                if (!this._reservedHotspotCommands[ch]) { token = ch; break; }
-            }
+        this._toastTokenCounter = (this._toastTokenCounter || 0) + 1;
+        var token = '~t' + this._toastTokenCounter.toString(36) + '~';
+        while (this._reservedHotspotCommands && this._reservedHotspotCommands[token]) {
+            this._toastTokenCounter += 1;
+            token = '~t' + this._toastTokenCounter.toString(36) + '~';
         }
         if (!this._reservedHotspotCommands) this._reservedHotspotCommands = {};
         this._reservedHotspotCommands[token] = true;
