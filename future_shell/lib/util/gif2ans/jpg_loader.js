@@ -6,7 +6,7 @@
 function JPGLoaderFactory() {
 
     /* -------------------- CONFIG/DEBUG -------------------- */
-    var DEBUG = true;                 // set false to quiet
+    var DEBUG = false;                 // set false to quiet
     var RESILIENT = true;             // enable bounded resync + soft fallbacks
     var RESYNC_MAX_SHIFT = 7;         // try up to N bit drops when desynced
     var stats = { huffResync: 0, huffSoftDC: 0, huffSoftAC: 0 };

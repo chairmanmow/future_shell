@@ -6,6 +6,55 @@ if (typeof registerModuleExports !== 'function') {
 }
 var MAX_TOAST_WIDTH = 40;
 var DEFAULT_TOAST_TIMEOUT = 30000; // 30 seconds
+var TOAST_PIPE_RE = /\|[0-9A-Za-z]{2}/g;
+var TOAST_CTRL_A_RE = /\x01./g;
+var TOAST_ANSI_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
+
+function toastStripColors(str) {
+    if (!str) return '';
+    return String(str).replace(TOAST_ANSI_RE, '').replace(TOAST_PIPE_RE, '').replace(TOAST_CTRL_A_RE, '');
+}
+
+function toastLongestWord(str) {
+    if (!str) return 0;
+    var longest = 0;
+    var parts = str.split(/\s+/);
+    for (var i = 0; i < parts.length; i++) {
+        if (parts[i].length > longest) longest = parts[i].length;
+    }
+    return longest;
+}
+
+function toastFallbackWrap(str, width) {
+    if (width <= 0) return [String(str)];
+    var lines = [];
+    var segments = String(str).replace(/\r/g, '\n').split('\n');
+    for (var i = 0; i < segments.length; i++) {
+        var seg = segments[i];
+        if (!seg.length) {
+            lines.push('');
+            continue;
+        }
+        while (seg.length > width) {
+            lines.push(seg.substr(0, width));
+            seg = seg.substr(width);
+        }
+        lines.push(seg);
+    }
+    return lines;
+}
+
+function toastWrapText(str, width) {
+    if (width <= 0) return [String(str)];
+    if (typeof word_wrap === 'function') {
+        try {
+            var wrapped = word_wrap(str, width, str.length, false);
+            if (Array.isArray(wrapped)) return wrapped;
+            if (typeof wrapped === 'string') return wrapped.split(/\r?\n/);
+        } catch (_) { }
+    }
+    return toastFallbackWrap(str, width);
+}
 // Position keywords: 'top-left','top-right','bottom-left','bottom-right','center'
 // For now we implement corner logic + center; bottom variants offset 1 row above bottom to avoid crumb bar.
 
@@ -38,6 +87,9 @@ function Toast(options) {
         try { log('[Chat] avatar_lib unavailable after attempts: ' + candidates.join(', ')); } catch (_) { }
         return null;
     })();
+    var timeout = (typeof options.timeout === 'number') ? options.timeout : DEFAULT_TOAST_TIMEOUT;
+    var userOnDone = options.onDone;
+    var hasAvatar = false;
     if (options.avatar && this._avatarLib) {
         if (options.avatar.netaddr === system.name) {
             var uNum = system.matchuser(options.avatar.username);
@@ -46,15 +98,26 @@ function Toast(options) {
         } else if (options.avatar.username && options.avatar.netaddr) {
             this.avatarData = this._avatarLib.read_netuser(options.avatar.username, options.avatar.netaddr);
         }
+        if (this.avatarData) hasAvatar = true;
     }
-    var message = options.message || "";
-    var timeout = (typeof options.timeout === 'number') ? options.timeout : DEFAULT_TOAST_TIMEOUT;
-    var onDone = options.onDone;
-    var width = Math.min(MAX_TOAST_WIDTH, Math.max(8, message.length + 4));
-    if (this.avatarData) {
-        width = width + 6; // avatar width
-    }
-    var height = this.avatarData ? 6 : options.height || 3;
+    var rawMessage = options.message;
+    if (rawMessage === undefined || rawMessage === null) rawMessage = '';
+    rawMessage = String(rawMessage);
+    var cleanMessage = toastStripColors(rawMessage);
+    var longestWord = toastLongestWord(cleanMessage);
+    var titleText = this.title ? toastStripColors(String(this.title)) : '';
+    var minWidth = Math.max(12, longestWord + 4);
+    if (titleText.length) minWidth = Math.max(minWidth, titleText.length + 4);
+    if (hasAvatar) minWidth = Math.max(minWidth, 20);
+    if (typeof options.width === 'number' && options.width > 0) minWidth = Math.max(minWidth, options.width);
+    var width = Math.min(MAX_TOAST_WIDTH, minWidth);
+    var messageWrapWidth = Math.max(10, width - (hasAvatar ? 8 : 2));
+    var wrappedLines = toastWrapText(cleanMessage, messageWrapWidth);
+    if (!wrappedLines || !wrappedLines.length) wrappedLines = [''];
+    var contentHeight = wrappedLines.length;
+    var minHeight = hasAvatar ? 6 : 3;
+    var height = Math.max(minHeight, contentHeight + 2);
+    if (typeof options.height === 'number' && options.height > height) height = options.height;
     if (height < 1) height = 1;
     if (height > console.screen_rows) height = console.screen_rows;
     var pos = options.position || 'bottom-right';
@@ -93,29 +156,44 @@ function Toast(options) {
     if (typeof this.msgContainer.drawBorder === 'function') {
         this.msgContainer.drawBorder(BG_BLUE, !!this.title ? { x: 1, y: 1, attr: WHITE | BG_GREEN, text: this.title } : null);
     }
-    this.msgFrame.centralize(this.msgContainer)
     if (this.avatarData) {
         this.avatarFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 10, Math.min(6, this.toastFrame.height), ICSH_ATTR('TOAST_AVATAR'), this.toastFrame);
         this.insertAvatarData();
     }
-    this.msgFrame.centralize(this.msgContainer);
-    this.msgFrame.centerWrap(message);
     this.toastFrame.draw();
     this.toastFrame.open();
+    var self = this;
+    (function renderLines(frame, lines) {
+        if (!frame || !lines) return;
+        if (typeof frame.clear === 'function') frame.clear();
+        frame.home();
+        for (var i = 0; i < lines.length && i < frame.height; i++) {
+            frame.gotoxy(1, i + 1);
+            var line = lines[i];
+            if (line.length > frame.width) line = line.substr(0, frame.width);
+            frame.putmsg(line);
+        }
+        if (typeof frame.cycle === 'function') frame.cycle();
+    })(this.msgFrame, wrappedLines);
 
     this._dismissed = false;
     this._startTime = time();
     this._timeout = timeout;
-    this._onDone = onDone;
+    this._onDone = userOnDone;
+    this._wrappedLines = wrappedLines;
+    this._wrapWidth = messageWrapWidth;
+    this._rawMessage = rawMessage;
+    this._cleanMessage = cleanMessage;
 
-    var self = this;
     this.dismiss = function (parentFrame) {
         if (self._dismissed) return;
         self._dismissed = true;
         self.toastFrame.clear();
         self.toastFrame.close();
         if (self.parentFrame && typeof self.parentFrame.cycle === 'function') self.parentFrame.cycle();
-        if (typeof self._onDone === 'function') self._onDone(self);
+        if (typeof self._onDone === 'function') {
+            try { self._onDone(self); } catch (_) { }
+        }
     };
 }
 

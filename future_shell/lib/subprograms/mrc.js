@@ -17,7 +17,7 @@ var MRC_PIPE_COLOURS = [2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15];
 
 var DEFAULT_MRC_SETTINGS = {
     root: { server: 'localhost', port: 5000 },
-    startup: { room: 'lobby', motd: true, splash: true },
+    startup: { room: 'futureland', motd: true, splash: true },
     aliases: {},
     client: {},
     show_nicks: {},
@@ -233,6 +233,27 @@ MRCService.prototype._loadTwitList = function () {
     });
 };
 
+MRCService.prototype._resolveWrapColor = function (fromUser, rawBody) {
+    var colorCode = null;
+    if (typeof rawBody === 'string') {
+        var matches = rawBody.match(/\|([0-9]{2})/g);
+        if (matches && matches.length) {
+            for (var m = matches.length - 1; m >= 0; m--) {
+                var parsed = parseInt(matches[m].substr(1), 10);
+                if (!isNaN(parsed) && parsed >= 0 && parsed <= 15) {
+                    colorCode = parsed;
+                    break;
+                }
+            }
+        }
+    }
+    var isSelf = fromUser && typeof fromUser === 'string' && typeof user !== 'undefined' && user && user.alias && fromUser.toLowerCase() === user.alias.toLowerCase();
+    if (colorCode === null && isSelf && typeof this.msgColor === 'number') colorCode = this.msgColor;
+    if (colorCode === null && fromUser && this.nickColors && this.nickColors[fromUser] !== undefined) colorCode = this.nickColors[fromUser];
+    if (colorCode === null) colorCode = (typeof this.msgColor === 'number') ? this.msgColor : 7;
+    return (colorCode !== null) ? ctrlA(format('|%02d', colorCode)) : '';
+};
+
 MRCService.prototype._scheduleCycle = function () {
     var self = this;
     if (this.timer && typeof this.timer.addEvent === 'function') {
@@ -250,7 +271,7 @@ MRCService.prototype._sendStartupMetadata = function () {
     safe(function () { self.session.send_command('TERMSIZE:' + console.screen_columns + 'x' + console.screen_rows); });
     safe(function () { self.session.send_command('BBSMETA: SecLevel(' + user.security.level + ') SysOp(' + system.operator + ')'); });
     safe(function () { self.session.send_command('USERIP:' + (bbs.atcode('IP') === '127.0.0.1' ? client.ip_address : bbs.atcode('IP'))); });
-    var targetRoom = this.settings.startup.room || 'lobby';
+    var targetRoom = this.settings.startup.room || 'futureland';
     safe(function () { self.session.join(targetRoom); });
     if (this.settings.startup.motd) {
         safe(function () { self.session.motd(''); });
@@ -282,7 +303,8 @@ MRCService.prototype._handlePrivateEcho = function (target, msg) {
         system: false,
         body: ctrlA(msg),
         plain: stripSyncColors(msg),
-        display: display
+        display: display,
+        wrapColor: this._resolveWrapColor(user.alias, msg)
     });
 };
 
@@ -324,7 +346,8 @@ MRCService.prototype._handleIncoming = function (msg) {
         system: false,
         body: ctrlA(msg.body || ''),
         plain: plain,
-        display: display
+        display: display,
+        wrapColor: this._resolveWrapColor(msg.from_user, msg.body)
     };
     if (mention) this.session.mention_count = (this.session.mention_count || 0) + 1;
     this._pushMessage(payload);
@@ -347,16 +370,14 @@ MRCService.prototype._handleServerText = function (text) {
         system: true,
         body: ctrlA(text),
         plain: stripSyncColors(text),
-        display: display
+        display: display,
+        wrapColor: ''
     });
 };
 
 MRCService.prototype._pushMessage = function (payload) {
     this.messages.push(payload);
     this.messages = truncateLines(this.messages, this.maxMessageLines);
-    if (typeof log === 'function') {
-        try { log('[MRCService] pushMessage total=' + this.messages.length + ' type=' + (payload.system ? 'system' : 'chat')); } catch (_) { }
-    }
     this._notify('onServiceMessage', payload);
 };
 
@@ -398,13 +419,16 @@ MRCService.prototype._notify = function (fnName, payload) {
 
 MRCService.prototype._showToastForMessage = function (payload) {
     if (!this.shell || typeof this.shell.showToast !== 'function') return;
+    if (this.shell.activeSubprogram && this.shell.activeSubprogram.name === 'mrc') return;
     var signature = payload.from + ':' + payload.plain;
     if (this._toastHistory.indexOf(signature) >= 0) return;
     if (this._toastHistory.length >= this._toastHistoryMax) this._toastHistory.shift();
     this._toastHistory.push(signature);
+    var self = this;
     this.shell.showToast({
         title: payload.from || 'MRC',
-        message: (payload.from || 'MRC') + ': ' + (payload.plain || '').substr(0, 120)
+        message: (payload.from || 'MRC') + ': ' + (payload.plain || '').substr(0, 120),
+        launch: 'mrc'
     });
 };
 
@@ -514,6 +538,10 @@ function MRC(opts) {
     opts = opts || {};
     opts.name = 'mrc';
     Subprogram.call(this, opts);
+    this._redrawThrottleMs = 200;
+    this._lastRenderTs = 0;
+    this._throttlePending = null;
+    this._lastKeyTs = 0;
     if (typeof this.registerColors === 'function') {
         this.registerColors({
             CHAT_HEADER: { BG: BG_BLUE, FG: WHITE },
@@ -557,6 +585,8 @@ function MRC(opts) {
     this._buttonHotspotTokens = {};
     this._buttonKeyMap = {};
     this._hotspotBuffer = '';
+    this._wrappedLineCache = null;
+    this._wrappedLineCacheWidth = 0;
 }
 
 if (typeof extend === 'function') extend(MRC, Subprogram);
@@ -575,21 +605,17 @@ MRC.prototype.enter = function (done) {
         }
     }
     if (this.service && Array.isArray(this.service.messages)) {
-        this._messageLines = this.service.messages.map(function (entry) { return entry.display; });
+        this._messageLines = this.service.messages.slice();
         this._messageLines = truncateLines(this._messageLines, this._maxLines);
-        if (typeof log === 'function') {
-            try { log('[MRC] enter cached messages=' + this._messageLines.length); } catch (_) { }
-        }
+        this._invalidateWrappedMessageLines();
     }
     Subprogram.prototype.enter.call(this, done);
 };
 
 MRC.prototype.onServiceSnapshot = function (snapshot) {
-    if (typeof log === 'function') {
-        try { log('[MRC] snapshot messages=' + (snapshot.messages ? snapshot.messages.length : 0)); } catch (_) { }
-    }
-    this._messageLines = snapshot.messages.map(function (msg) { return msg.display; });
+    this._messageLines = snapshot.messages.slice();
     this._messageLines = truncateLines(this._messageLines, this._maxLines);
+    this._invalidateWrappedMessageLines();
     this._room = snapshot.room || this._room;
     this._topic = snapshot.topic || this._topic;
     this._stats = snapshot.stats || this._stats;
@@ -605,8 +631,9 @@ MRC.prototype.onServiceMessage = function (payload) {
     if (typeof log === 'function') {
         try { log('[MRC] onServiceMessage from ' + (payload ? payload.from : 'unknown')); } catch (_) { }
     }
-    this._messageLines.push(payload.display);
+    this._messageLines.push(payload);
     this._messageLines = truncateLines(this._messageLines, this._maxLines);
+    this._invalidateWrappedMessageLines();
     if (!this._userScrolled) this._scrollOffset = 0;
     this._needsRedraw = true;
     if (this.running) this.draw();
@@ -729,7 +756,7 @@ MRC.prototype._ensureFrames = function () {
     var messagesHeight = Math.max(1, height - messagesTop - this.footerHeight + 1);
     if (!this.messagesFrame) {
         this.messagesFrame = new Frame(1, messagesTop, messageWidth, messagesHeight, messagesAttr, host);
-        this.messagesFrame.word_wrap = true;
+        this.messagesFrame.word_wrap = false;
         this.messagesFrame.open();
         this.registerFrame(this.messagesFrame);
     } else {
@@ -926,26 +953,153 @@ MRC.prototype._renderFooter = function () {
     this.footerFrame.cycle();
 };
 
+MRC.prototype._refreshFooterInput = function () {
+    if (!this.footerFrame) return;
+    var attr = this.footerFrame.attr || this.paletteAttr('CHAT_INPUT', BG_BLUE | WHITE);
+    if (typeof this.footerFrame.attr !== 'number' || this.footerFrame.attr !== attr) {
+        this.footerFrame.attr = attr;
+    }
+    var width = this.footerFrame.width;
+    var inputLine = '> ' + this._inputBuffer;
+    var available = Math.max(1, width);
+    var trimmed = inputLine;
+    if (inputLine.length > available) {
+        trimmed = inputLine.substr(inputLine.length - available);
+    }
+    var spaces = '';
+    if (trimmed.length < available) spaces = new Array(available - trimmed.length + 1).join(' ');
+    try {
+        this.footerFrame.gotoxy(1, Math.max(1, this.footerFrame.height));
+        this.footerFrame.putmsg(trimmed + spaces, attr);
+        this.footerFrame.cycle();
+    } catch (_) { }
+};
+
 MRC.prototype._renderMessages = function () {
     if (!this.messagesFrame) return;
-    if (typeof log === 'function') {
-        try { log('[MRC] _renderMessages lines=' + this._messageLines.length + ' scrollOffset=' + this._scrollOffset); } catch (_) { }
-    }
+    var width = Math.max(1, this.messagesFrame.width);
+    var wrappedLines = this._getWrappedMessageLines(width);
     var attr = this.messagesFrame.attr || this.paletteAttr('CHAT_OUTPUT', BG_BLACK | LIGHTGRAY);
     this.messagesFrame.attr = attr;
     this.messagesFrame.clear(attr);
     var height = this.messagesFrame.height;
-    var total = this._messageLines.length;
+    var total = wrappedLines.length;
+    if (total <= 0) total = 0;
+    var maxOffset = Math.max(0, total - height);
+    if (this._scrollOffset > maxOffset) this._scrollOffset = maxOffset;
     var start = Math.max(0, total - height - this._scrollOffset);
     var end = Math.max(0, total - this._scrollOffset);
     var y = 1;
     for (var i = start; i < end; i++) {
         if (y > height) break;
         this.messagesFrame.gotoxy(1, y++);
-        this.messagesFrame.putmsg(this._messageLines[i]);
+        this.messagesFrame.putmsg(wrappedLines[i]);
     }
     if (this.messageScroll) this.messageScroll.cycle();
     this.messagesFrame.cycle();
+};
+
+MRC.prototype._invalidateWrappedMessageLines = function () {
+    this._wrappedLineCache = null;
+    this._wrappedLineCacheWidth = 0;
+};
+
+MRC.prototype._getWrappedMessageLines = function (width) {
+    var effectiveWidth = Math.max(1, width || 1);
+    if (this._wrappedLineCache && this._wrappedLineCacheWidth === effectiveWidth) {
+        return this._wrappedLineCache;
+    }
+    var lines = [];
+    for (var i = 0; i < this._messageLines.length; i++) {
+        var message = this._messageLines[i];
+        var wrapped = this._wrapMessageForWidth(message, effectiveWidth);
+        if (!wrapped || !wrapped.length) {
+            lines.push('');
+            continue;
+        }
+        for (var w = 0; w < wrapped.length; w++) {
+            if (wrapped[w] === undefined) continue;
+            lines.push(wrapped[w]);
+        }
+    }
+    if (!lines.length) lines.push('');
+    this._wrappedLineCache = lines;
+    this._wrappedLineCacheWidth = effectiveWidth;
+    return this._wrappedLineCache;
+};
+
+MRC.prototype._wrapMessageForWidth = function (message, width) {
+    var payload = message;
+    var normalized;
+    if (payload && typeof payload === 'object' && payload.display !== undefined) {
+        normalized = String(payload.display);
+    } else if (message === undefined || message === null) {
+        normalized = '';
+        payload = { display: '' };
+    } else {
+        normalized = String(message);
+        payload = { display: normalized };
+    }
+    if (!normalized.length) return [''];
+    var wrappedStr = null;
+    if (typeof word_wrap === 'function') {
+        try {
+            wrappedStr = word_wrap(normalized, width, normalized.length, false);
+        } catch (_) {
+            wrappedStr = null;
+        }
+    }
+    var candidate;
+    if (typeof wrappedStr === 'string') {
+        candidate = wrappedStr;
+    } else if (Array.isArray(wrappedStr)) {
+        candidate = wrappedStr.join('\n');
+    }
+    if (typeof candidate !== 'string' || !candidate.length) {
+        candidate = this._fallbackWrap(normalized, width);
+    }
+    var sanitized = candidate.replace(/\r/g, '\n');
+    var parts = sanitized.split('\n');
+    while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
+    if (!parts.length) parts.push('');
+    return this._applyWrapColor(parts, payload.wrapColor);
+};
+
+MRC.prototype._fallbackWrap = function (text, width) {
+    if (!text || !text.length) return '';
+    var segments = text.replace(/\r/g, '\n').split('\n');
+    var wrapped = [];
+    for (var i = 0; i < segments.length; i++) {
+        var segment = segments[i];
+        if (!segment.length) {
+            wrapped.push('');
+            continue;
+        }
+        var remaining = segment;
+        while (remaining.length > width) {
+            wrapped.push(remaining.substr(0, width));
+            remaining = remaining.substr(width);
+        }
+        if (remaining.length || !wrapped.length) wrapped.push(remaining);
+    }
+    return wrapped.join('\n');
+};
+
+MRC.prototype._applyWrapColor = function (lines, wrapColor) {
+    if (!wrapColor || !lines || lines.length <= 1) return lines;
+    for (var i = 1; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line) continue;
+        var idx = 0;
+        while (idx < line.length && (line.charAt(idx) === ' ' || line.charAt(idx) === '\t')) idx++;
+        var leading = line.substr(0, idx);
+        var rest = line.substr(idx);
+        if (!rest.length) continue;
+        var firstChar = rest.charAt(0);
+        if (firstChar === '\x01' || firstChar === '\x1b') continue;
+        lines[i] = leading + wrapColor + rest;
+    }
+    return lines;
 };
 
 MRC.prototype._renderNickList = function () {
@@ -985,11 +1139,25 @@ MRC.prototype._renderButtons = function () {
 };
 
 MRC.prototype.draw = function () {
-    if (typeof log === 'function') {
-        try {
-            var hostState = this.hostFrame ? ('open=' + (this.hostFrame.is_open ? 'true' : 'false') + ' pos=' + this.hostFrame.x + ',' + this.hostFrame.y + ' size=' + this.hostFrame.width + 'x' + this.hostFrame.height) : 'none';
-            log('[MRC] draw hostFrame ' + hostState + ' lines=' + this._messageLines.length);
-        } catch (_) { }
+    var nowTs = Date.now();
+    if (this._lastRenderTs && (nowTs - this._lastRenderTs) < this._redrawThrottleMs) {
+        if (this.timer && typeof this.timer.addEvent === 'function') {
+            if (!this._throttlePending) {
+                var self = this;
+                try {
+                    this._throttlePending = this.timer.addEvent(this._redrawThrottleMs, false, function () {
+                        self._throttlePending = null;
+                        self.draw();
+                    });
+                } catch (_) { }
+            }
+            this._needsRedraw = true;
+            return;
+        }
+    }
+    if (this._throttlePending) {
+        try { this._throttlePending.abort = true; } catch (_) { }
+        this._throttlePending = null;
     }
     this._ensureFrames();
     this._renderHeader();
@@ -1011,50 +1179,69 @@ MRC.prototype.draw = function () {
             try { this.hostFrame.cycle(); } catch (_) { }
         }
     }
-    if (this.parentFrame) {
+    if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
         try { this.parentFrame.cycle(); } catch (_) { }
     }
+    this._lastRenderTs = nowTs;
 };
 
 MRC.prototype.handleKey = function (key) {
     if (key === null || typeof key === 'undefined' || key === '') return true;
-    var page = this.messagesFrame ? Math.max(1, this.messagesFrame.height - 1) : 5;
+    this._lastKeyTs = Date.now();
+    var frameHeight = this.messagesFrame ? Math.max(1, this.messagesFrame.height) : 6;
+    var page = Math.max(1, frameHeight - 1);
+    var fallbackWidth = 80;
+    if (typeof console !== 'undefined' && console && console.screen_columns) {
+        fallbackWidth = Math.max(1, console.screen_columns);
+    }
+    var cacheWidth = this.messagesFrame ? Math.max(1, this.messagesFrame.width) : fallbackWidth;
+    var totalLines = this._getWrappedMessageLines(cacheWidth).length;
+    var maxOffset = Math.max(0, totalLines - frameHeight);
     if (key === '\x1B') {
         if (!this._exiting) this._exiting = true;
         this.exit();
         return false;
     }
     if (this._processButtonHotspotInput(key)) return true;
+    var needsFullRedraw = false;
     switch (key) {
         case KEY_UP:
-            this._scrollOffset = Math.min(this._scrollOffset + 1, this._messageLines.length);
+            this._scrollOffset = Math.min(this._scrollOffset + 1, maxOffset);
             this._userScrolled = this._scrollOffset > 0;
+            needsFullRedraw = true;
             break;
         case KEY_DOWN:
             this._scrollOffset = Math.max(0, this._scrollOffset - 1);
             this._userScrolled = this._scrollOffset > 0;
+            needsFullRedraw = true;
             break;
         case KEY_PGUP:
-            this._scrollOffset = Math.min(this._scrollOffset + page, this._messageLines.length);
+            this._scrollOffset = Math.min(this._scrollOffset + page, maxOffset);
             this._userScrolled = this._scrollOffset > 0;
+            needsFullRedraw = true;
             break;
         case KEY_PGDN:
             this._scrollOffset = Math.max(0, this._scrollOffset - page);
             this._userScrolled = this._scrollOffset > 0;
+            needsFullRedraw = true;
             break;
         case KEY_HOME:
-            this._scrollOffset = this._messageLines.length;
+            this._scrollOffset = maxOffset;
             this._userScrolled = this._scrollOffset > 0;
+            needsFullRedraw = true;
             break;
         case KEY_END:
             this._scrollOffset = 0;
             this._userScrolled = false;
+            needsFullRedraw = true;
             break;
         case KEY_LEFT:
             this.service.rotateMsgColor(-1);
+            needsFullRedraw = true;
             break;
         case KEY_RIGHT:
             this.service.rotateMsgColor(1);
+            needsFullRedraw = true;
             break;
         case '\r':
         case '\n':
@@ -1062,38 +1249,49 @@ MRC.prototype.handleKey = function (key) {
             this._inputBuffer = '';
             this._scrollOffset = 0;
             this._userScrolled = false;
+            this._refreshFooterInput();
+            needsFullRedraw = true;
             break;
         case '\b':
         case '\x7F':
             if (this._inputBuffer.length) {
                 this._inputBuffer = this._inputBuffer.slice(0, -1);
                 this.service.pauseTypingFor(1000);
+                this._refreshFooterInput();
             }
             break;
         case '\t':
             this._autoComplete();
+            this._refreshFooterInput();
             break;
         case KEY_F1:
             this._requestHelp();
+            needsFullRedraw = true;
             break;
         case '\x11': // Ctrl+Q
             this._requestExit();
+            needsFullRedraw = true;
             break;
         case '\x14': // Ctrl+T
             this.service.setToastEnabled(!this._toastEnabled);
+            needsFullRedraw = true;
             break;
         case '\x0E': // Ctrl+N
             this.service.setNickListVisible(!this._showNickList);
+            needsFullRedraw = true;
             break;
         default:
             if (typeof key === 'string' && key.length === 1 && key >= ' ') {
                 this._inputBuffer += key;
                 this.service.pauseTypingFor(1000);
+                this._refreshFooterInput();
             }
             break;
     }
-    this._needsRedraw = true;
-    if (this.running) this.draw();
+    if (needsFullRedraw) {
+        this._needsRedraw = true;
+        if (this.running) this.draw();
+    }
     return true;
 };
 
@@ -1119,6 +1317,11 @@ MRC.prototype._autoComplete = function () {
 };
 
 MRC.prototype.cleanup = function () {
+    if (this._throttlePending && typeof this._throttlePending === 'object') {
+        try { this._throttlePending.abort = true; } catch (_) { }
+    }
+    this._throttlePending = null;
+    this._lastRenderTs = 0;
     this.service.removeListener(this);
     this._destroyButtons();
     Subprogram.prototype.cleanup.call(this);

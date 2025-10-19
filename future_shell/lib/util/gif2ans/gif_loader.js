@@ -4,7 +4,7 @@
 // handles transparency, interlace, local/global palettes.
 
 function GIFLoaderFactory() {
-    var DEBUG = true;
+    var DEBUG = false;
     function dbg() { if (!DEBUG) return; var s = "[gif] " + Array.prototype.slice.call(arguments).join(" "); try { log(s) } catch (e) { try { print(s) } catch (_) { } } }
 
     function looksGIF(s) {

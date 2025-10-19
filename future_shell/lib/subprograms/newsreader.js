@@ -291,7 +291,7 @@ function getNewsreaderConfig(forceReload) {
         categories: newsreaderCloneCategoryMap(_newsreaderConfigCache.categories)
     };
 }
-var IMAGE_CACHE_LIMIT = 4;
+var IMAGE_CACHE_LIMIT = 1;
 var NEWSREADER_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 var NEWSREADER_ASCII_ENTITY_MAP = {
     160: ' ',
@@ -552,6 +552,7 @@ NewsReader.prototype._destroyArticlePreviewFrame = function () {
         }
         this.articleImagePreviewFrame = null;
     }
+    try { if (typeof js !== 'undefined' && js && typeof js.gc === 'function') js.gc(true); } catch (_eGc) { }
 };
 
 NewsReader.prototype._destroyArticleLinkButton = function () {
@@ -3566,7 +3567,26 @@ NewsReader.prototype._getImageAnsi = function (url) {
 
         if (!overlayShown) overlayShown = this._showLoadingOverlay('Converting image from :' + url);
         this._setStatus('Rendering image preview...');
-        var ansiResult = convertImageToANSI(source, width, true, null, { returnObject: true });
+        // var ansiResult = convertImageToANSI(source, width, true, null, { returnObject: true, preprocess: 'cga' });
+        // var ansiResult = convertImageToANSI(source, width, true, null, {
+        //     returnObject: true,
+        //     preprocess: 'cga_comic',
+        //     preSigmoidal: "8x50%",
+        //     preSaturation: 145,
+        //     preDither: "o2x2",
+        //     prePosterize: 16,
+        //     preHeightScale: 200
+        // });
+        var ansiResult = convertImageToANSI(source, width, true, null, {
+            returnObject: true,
+            preprocess: 'cga_comic',
+            preSigmoidal: "8x50%",
+            preSaturation: 145,
+            preDither: "none",     // <— disable dithering
+            blur: 0.25,            // optional: tiny pre-blur to avoid aliasing
+            prePosterize: 20,      // slightly lower to keep edges crisp
+            preHeightScale: 100    // let gif2ans do sizing
+        });
         var preview = this._normalizeAnsiPreview(ansiResult);
         ansiResult = null;
         if (preview && typeof preview.ansi === 'string' && preview.ansi.length) {
