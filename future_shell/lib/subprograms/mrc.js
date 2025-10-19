@@ -190,22 +190,13 @@ function MRCService(opts) {
     this._toastHistoryMax = 40;
     this._timerEvent = null;
     this._ownTimer = null;
+    this._lastMessageEpoch = Date.now();
+    this._lastBacklogTs = this._lastMessageEpoch;
+    this._externalSuspendInfo = null;
+    this._backlogPath = null;
 
-    this.session = new MRC_Session(
-        this.serverHost,
-        this.serverPort,
-        user.alias,
-        user.security.password,
-        this.alias
-    );
-    this.session.msg_color = this.msgColor;
-    this.session.twit_list = this.twitList.slice();
-
-    this._bindSessionEvents();
-    this.session.connect();
-    this.connected = true;
+    this._initializeSession();
     this._scheduleCycle();
-    this._sendStartupMetadata();
 }
 
 MRCService.prototype._loadToastPreference = function (fallback) {
@@ -258,6 +249,31 @@ MRCService.prototype._resolveWrapColor = function (fromUser, rawBody) {
     return (colorCode !== null) ? ctrlA(format('|%02d', colorCode)) : '';
 };
 
+MRCService.prototype._initializeSession = function () {
+    if (this.session && typeof this.session.disconnect === 'function') {
+        try { this.session.disconnect(); } catch (_) { }
+    }
+    var newSession = new MRC_Session(
+        this.serverHost,
+        this.serverPort,
+        user.alias,
+        user.security.password,
+        this.alias
+    );
+    newSession.msg_color = this.msgColor;
+    newSession.twit_list = this.twitList.slice();
+    this.session = newSession;
+    this._bindSessionEvents();
+    try {
+        newSession.connect();
+        this.connected = true;
+        this._sendStartupMetadata();
+    } catch (err) {
+        this.connected = false;
+        this._handleServerText('Unable to connect to MRC: ' + err);
+    }
+};
+
 MRCService.prototype._scheduleCycle = function () {
     var self = this;
     if (this.timer && typeof this.timer.addEvent === 'function') {
@@ -297,12 +313,14 @@ MRCService.prototype._bindSessionEvents = function () {
 };
 
 MRCService.prototype._handlePrivateEcho = function (target, msg) {
+    var epoch = Date.now();
     var display = format('\x01n\x01h[%s]\x01n \x01c%s\x01n -> \x01c%s\x01n %s', nowTimestamp(), user.alias, target, ctrlA(msg));
     this._pushMessage({
         id: ++this._messageSeq,
         from: user.alias,
         to: target,
-        timestamp: new Date(),
+        timestamp: new Date(epoch),
+        epoch: epoch,
         mention: false,
         system: false,
         body: ctrlA(msg),
@@ -318,10 +336,13 @@ MRCService.prototype._handleDisconnect = function () {
     this._notify('onServiceDisconnect', {});
 };
 
-MRCService.prototype._handleIncoming = function (msg) {
+MRCService.prototype._handleIncoming = function (msg, opts) {
+    opts = opts || {};
     if (!msg || typeof msg !== 'object') return;
     if (msg.from_user === 'SERVER') {
-        this._handleServerText(msg.body || '');
+        if (typeof msg.ts === 'number') opts.ts = msg.ts;
+        if (msg.backlog === true && opts.backlog === undefined) opts.backlog = true;
+        this._handleServerText(msg.body || '', opts);
         return;
     }
     if (this.twitList.length && msg.from_user && this.twitList.indexOf(String(msg.from_user).toLowerCase()) >= 0) {
@@ -335,6 +356,7 @@ MRCService.prototype._handleIncoming = function (msg) {
     if (msg.to_room && msg.to_room !== '' && this.session.room && msg.to_room.toLowerCase() !== this.session.room.toLowerCase()) {
         return;
     }
+    var epoch = (typeof msg.ts === 'number') ? msg.ts : Date.now();
     var display = format('\x01n\x01h[%s]\x01n %s%s\x01n%s',
         nowTimestamp(),
         mention ? '\x01h\x01r! ' : '',
@@ -345,44 +367,232 @@ MRCService.prototype._handleIncoming = function (msg) {
         id: ++this._messageSeq,
         from: msg.from_user || 'System',
         to: msg.to_user || '',
-        timestamp: new Date(),
+        timestamp: new Date(epoch),
+        epoch: epoch,
         mention: mention,
         system: false,
         body: ctrlA(msg.body || ''),
         plain: plain,
         display: display,
-        wrapColor: this._resolveWrapColor(msg.from_user, msg.body)
+        wrapColor: this._resolveWrapColor(msg.from_user, msg.body),
+        backlog: opts.backlog === true
     };
     if (mention) this.session.mention_count = (this.session.mention_count || 0) + 1;
     this._pushMessage(payload);
-    this._showToastForMessage(payload);
+    if (!payload.backlog) this._showToastForMessage(payload);
 
     // if (this.toastEnabled && this.shell && msg.from_user && msg.from_user.toLowerCase() !== user.alias.toLowerCase()) {
     //     this._showToastForMessage(payload);
     // }
 };
 
-MRCService.prototype._handleServerText = function (text) {
+MRCService.prototype._handleServerText = function (text, opts) {
+    opts = opts || {};
     if (!text) return;
+    var epoch = (typeof opts.ts === 'number') ? opts.ts : Date.now();
     var display = format('\x01n\x01h[%s]\x01n \x01c%s\x01n %s', nowTimestamp(), 'System', ctrlA(text));
     this._pushMessage({
         id: ++this._messageSeq,
         from: 'System',
         to: '',
-        timestamp: new Date(),
+        timestamp: new Date(epoch),
+        epoch: epoch,
         mention: false,
         system: true,
         body: ctrlA(text),
         plain: stripSyncColors(text),
         display: display,
-        wrapColor: ''
+        wrapColor: '',
+        backlog: opts.backlog === true,
+        presence: opts.presence === true
     });
 };
 
 MRCService.prototype._pushMessage = function (payload) {
+    if (typeof payload.epoch !== 'number') payload.epoch = Date.now();
     this.messages.push(payload);
     this.messages = truncateLines(this.messages, this.maxMessageLines);
+    this._lastMessageEpoch = Math.max(this._lastMessageEpoch || 0, payload.epoch);
+    this._lastBacklogTs = this._lastMessageEpoch;
     this._notify('onServiceMessage', payload);
+};
+
+MRCService.prototype._resolveBacklogPath = function () {
+    if (this._backlogPath) return this._backlogPath;
+    var baseDir = '';
+    try {
+        if (system && system.mods_dir) baseDir = system.mods_dir;
+    } catch (_) { }
+    if (!baseDir || !baseDir.length) {
+        baseDir = 'mods/';
+    }
+    if (baseDir.slice(-1) !== '/' && baseDir.slice(-1) !== '\\') baseDir += '/';
+    baseDir += 'future_shell/';
+    if (baseDir.slice(-1) !== '/' && baseDir.slice(-1) !== '\\') baseDir += '/';
+    this._backlogPath = baseDir + 'data/mrc_backlog.json';
+    return this._backlogPath;
+};
+
+MRCService.prototype._readBacklogRooms = function () {
+    var path = this._resolveBacklogPath();
+    if (!path) return null;
+    var f = new File(path);
+    if (!f.exists) return null;
+    if (!f.open('r')) return null;
+    var raw = '';
+    try {
+        raw = f.read(f.length);
+        if (typeof raw !== 'string') raw = String(raw || '');
+    } catch (_) {
+        try {
+            raw = f.read();
+        } catch (__) {
+            raw = '';
+        }
+    } finally {
+        f.close();
+    }
+    if (!raw || !raw.length) return null;
+    try {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && parsed.rooms && typeof parsed.rooms === 'object') {
+            return parsed.rooms;
+        }
+    } catch (_) { }
+    return null;
+};
+
+MRCService.prototype._fetchBacklogSince = function (sinceTs, roomOverride) {
+    var rooms = this._readBacklogRooms();
+    if (!rooms) return 0;
+    var key = '';
+    if (typeof roomOverride === 'string' && roomOverride.length) {
+        key = roomOverride.toLowerCase();
+    } else if (this.session && typeof this.session.room === 'string' && this.session.room.length) {
+        key = this.session.room.toLowerCase();
+    } else {
+        key = '__global__';
+    }
+    var list = rooms[key] || [];
+    if (!list.length) return 0;
+    var updates = [];
+    for (var i = 0; i < list.length; i++) {
+        var entry = list[i];
+        if (!entry || typeof entry.ts !== 'number') continue;
+        if (entry.ts <= sinceTs) continue;
+        updates.push({
+            from_user: entry.from_user,
+            to_user: entry.to_user,
+            to_room: entry.to_room,
+            from_room: entry.from_room,
+            body: entry.body,
+            ts: entry.ts
+        });
+    }
+    if (!updates.length) return 0;
+    updates.sort(function (a, b) { return a.ts - b.ts; });
+    for (var u = 0; u < updates.length; u++) {
+        this._handleIncoming(updates[u], { backlog: true });
+    }
+    return updates.length;
+};
+
+MRCService.prototype._formatProgramName = function (programId) {
+    if (!programId || !programId.length) return 'an external program';
+    return String(programId).replace(/^exec_xtrn:/i, '').replace(/[_]+/g, ' ');
+};
+
+MRCService.prototype._sendPresenceNotice = function (event, programId, missedCount) {
+    if (!this.session || !this.connected) return;
+    var verb = (event === 'returned') ? 'returned from' : 'left to run';
+    var programName = this._formatProgramName(programId);
+    var suffix = '.';
+    if (event === 'returned' && typeof missedCount === 'number' && missedCount > 0) {
+        suffix = format(' (cached %d message%s).', missedCount, (missedCount === 1) ? '' : 's');
+    }
+    var remote = format('|10[FSXTRN]|07 %s %s |15%s|07%s',
+        user.alias,
+        verb,
+        programName,
+        suffix
+    );
+    try {
+        this.session.send_notme(remote);
+        this.flush();
+    } catch (_) { }
+    var local;
+    if (event === 'returned') {
+        if (typeof missedCount === 'number' && missedCount > 0) {
+            local = format('Returned from %s with %d message%s cached.', programName, missedCount, (missedCount === 1) ? '' : 's');
+        } else {
+            local = format('Returned from %s.', programName);
+        }
+    } else {
+        local = format('Left to run %s.', programName);
+    }
+    if (local && local.trim().length) {
+        this._handleServerText(local, { backlog: true, presence: true });
+    }
+};
+
+MRCService.prototype.handleExternalSuspend = function (info) {
+    var programId = (info && info.programId) || '';
+    this._externalSuspendInfo = {
+        programId: programId,
+        lastSeenTs: this._lastMessageEpoch || Date.now(),
+        room: (this.session && typeof this.session.room === 'string') ? this.session.room : ''
+    };
+    if (this.connected) {
+        this._sendPresenceNotice('left', programId, 0);
+    }
+};
+
+MRCService.prototype.handleExternalResume = function (info) {
+    var suspendInfo = this._externalSuspendInfo || {};
+    var programId = (info && info.programId) || suspendInfo.programId || '';
+    var sinceTs = suspendInfo.lastSeenTs || this._lastMessageEpoch || 0;
+    var roomKey = (info && info.room) || suspendInfo.room || this.roomName || '';
+    var fetched = 0;
+    if (!this.connected) {
+        this._initializeSession();
+    }
+    if (this.connected) {
+        if (roomKey || this.roomName) {
+            var targetRoom = roomKey || this.roomName;
+            this.ensureActiveRoom(targetRoom);
+            roomKey = this.roomName || targetRoom || roomKey;
+        }
+        fetched = this._fetchBacklogSince(sinceTs, roomKey);
+        this._sendPresenceNotice('returned', programId, fetched);
+    }
+    this._externalSuspendInfo = null;
+};
+
+MRCService.prototype.ensureActiveRoom = function (roomHint) {
+    if (!this.connected || !this.session || typeof this.session.join !== 'function') return false;
+    var fallbackRoom = '';
+    if (this.settings && this.settings.startup && this.settings.startup.room) fallbackRoom = this.settings.startup.room;
+    var target = roomHint || this.roomName || fallbackRoom || '';
+    if (!target) return false;
+    var cleanTarget = String(target).replace(/^#/, '').trim();
+    if (!cleanTarget.length) return false;
+    var current = '';
+    if (typeof this.session.room === 'string') current = this.session.room.replace(/^#/, '').trim().toLowerCase();
+    var desired = cleanTarget.toLowerCase();
+    if (!current || current !== desired) {
+        try {
+            this.session.join(cleanTarget);
+            this.flush();
+        } catch (joinErr) {
+            try { this._handleServerText('Attempt to join #' + cleanTarget + ' failed: ' + joinErr); } catch (_) { }
+            return false;
+        }
+    }
+    if (!this.roomName || this.roomName.toLowerCase() !== desired) {
+        this.roomName = cleanTarget;
+        this._notify('onServiceTopic', { room: this.roomName, topic: this.roomTopic });
+    }
+    return true;
 };
 
 MRCService.prototype._updateNickList = function (room, nicks) {
@@ -415,8 +625,6 @@ MRCService.prototype._updateTopic = function (room, topic) {
     this.roomTopic = topic || '';
     this._notify('onServiceTopic', { room: this.roomName, topic: this.roomTopic });
 };
-    this._notify('onServiceTopic', { room: this.roomName, topic: this.roomTopic });
-};
 
 MRCService.prototype._broadcastStats = function () {
     this.stats = this.session.stats ? this.session.stats.slice() : this.stats;
@@ -441,6 +649,9 @@ MRCService.prototype._notify = function (fnName, payload) {
 MRCService.prototype._showToastForMessage = function (payload) {
     if (!this.shell || typeof this.shell.showToast !== 'function') return;
     if (this.shell.activeSubprogram && this.shell.activeSubprogram.name === 'mrc') return;
+    if (!payload || payload.backlog) return;
+    if (payload.presence) return;
+    if (payload.plain && payload.plain.indexOf('[FSXTRN]') !== -1) return;
     var signature = payload.from + ':' + payload.plain;
     if (this._toastHistory.indexOf(signature) >= 0) return;
     if (this._toastHistory.length >= this._toastHistoryMax) this._toastHistory.shift();
@@ -624,6 +835,13 @@ MRC.prototype.enter = function (done) {
         } else if (typeof this.service.cycle === 'function') {
             try { this.service.cycle(); } catch (_) { }
         }
+        if (!this.service.connected && typeof this.service._initializeSession === 'function') {
+            try { this.service._initializeSession(); } catch (_) { }
+        }
+        if (typeof this.service.ensureActiveRoom === 'function') {
+            var preferredRoom = this.service.roomName || (this.service.settings && this.service.settings.startup && this.service.settings.startup.room) || '';
+            try { this.service.ensureActiveRoom(preferredRoom); } catch (_) { }
+        }
     }
     if (this.service && Array.isArray(this.service.messages)) {
         this._messageLines = this.service.messages.slice();
@@ -786,6 +1004,7 @@ MRC.prototype._ensureFrames = function () {
         this.messagesFrame.height = messagesHeight;
     }
     this.messagesFrame.attr = messagesAttr;
+    this.setBackgroundFrame(this.messagesFrame);
     if (!this.messageScroll) {
         this.messageScroll = new ScrollBar(this.messagesFrame, { autohide: true });
     }

@@ -7,6 +7,9 @@ IconShell.prototype.runExternal = function (fn, opts) {
     var programId = opts.programId || 'unknown';
     var startTs = trackUsage ? Date.now() : 0;
     try {
+        if (typeof this._notifyMrcExternalSuspend === 'function') {
+            try { this._notifyMrcExternalSuspend({ programId: programId }); } catch (_) { }
+        }
         // Optional: dissolve animation before clearing and launching external
         // if (this.view && typeof dissolve === 'function') {
         //     dissolve(this.view, ICSH_VALS.ANIMATION.COLOR, 0); // 2ms delay for visible effect
@@ -56,7 +59,20 @@ IconShell.prototype.runExternal = function (fn, opts) {
                 log(LOG_ERROR, 'runExternal usage tracking error: ' + trackErr);
             }
         }
+        if (typeof this._notifyMrcExternalResume === 'function') {
+            try { this._notifyMrcExternalResume({ programId: programId }); } catch (_) { }
+        }
     }
+};
+
+IconShell.prototype._notifyMrcExternalSuspend = function (info) {
+    if (!this.mrcService || typeof this.mrcService.handleExternalSuspend !== 'function') return;
+    try { this.mrcService.handleExternalSuspend(info || {}); } catch (_) { }
+};
+
+IconShell.prototype._notifyMrcExternalResume = function (info) {
+    if (!this.mrcService || typeof this.mrcService.handleExternalResume !== 'function') return;
+    try { this.mrcService.handleExternalResume(info || {}); } catch (_) { }
 };
 
 // Queue a subprogram launch so the triggering key (e.g. ENTER) is fully processed

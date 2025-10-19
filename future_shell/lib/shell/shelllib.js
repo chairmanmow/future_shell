@@ -1078,6 +1078,39 @@ IconShell.prototype._removeToastFromList = function (toast) {
 		this._toastTokenCounter = 0;
 	}
 	this._reflowAllToasts();
+	if (!this.toasts.length) {
+		try { this._restoreHotspotsAfterToast(); } catch (e) { log('[toast] hotspot restore error: ' + e); }
+	}
+};
+
+IconShell.prototype._restoreHotspotsAfterToast = function () {
+	if (this._screensaverHotspotActive) return;
+	if (this.activeSubprogram && this.activeSubprogram.running) {
+		var sub = this.activeSubprogram;
+		var restored = false;
+		if (typeof sub.restoreHotspots === 'function') {
+			try { sub.restoreHotspots(); restored = true; } catch (restoreErr) { log('[toast] subprogram restoreHotspots error: ' + restoreErr); }
+		}
+		if (typeof sub.resumeForReason === 'function') {
+			try { sub.resumeForReason('toast_closed'); } catch (resumeErr) { log('[toast] subprogram resumeForReason error: ' + resumeErr); }
+		}
+		if (!restored && typeof sub.refresh === 'function') {
+			try { sub.refresh(); restored = true; } catch (refreshErr) { log('[toast] subprogram refresh error: ' + refreshErr); }
+		}
+		if (!restored && typeof sub.draw === 'function') {
+			try { sub.draw(); restored = true; } catch (drawErr) { log('[toast] subprogram draw error: ' + drawErr); }
+		}
+		if (restored && sub.parentFrame && typeof sub.parentFrame.cycle === 'function') {
+			try { sub.parentFrame.cycle(); } catch (_) { }
+		}
+	} else {
+		if (this.grid && this.grid.cells && this.grid.cells.length) {
+			this._clearHotspots();
+			this._addMouseHotspots();
+		} else {
+			this.drawFolder({ skipHeaderRefresh: true });
+		}
+	}
 };
 
 IconShell.prototype._launchToastTarget = function (target, toast) {

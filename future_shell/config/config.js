@@ -226,6 +226,32 @@ var BUILTIN_ACTIONS = {
 			if (typeof instance.attachShellTimer === 'function') instance.attachShellTimer(this.timer);
 		}
 	}),
+	shell_prefs: new SubprogramActionHandler('ShellPrefs', {
+		module: 'future_shell/lib/subprograms/shell_prefs.js',
+		queueName: 'shell-prefs',
+		instanceProperty: 'shellPrefsSub',
+		loadFailureMessage: 'Failed loading shell_prefs.js ',
+		missingMessage: 'ShellPrefs class missing after load',
+		options: function () {
+			return {
+				parentFrame: this.root,
+				shell: this,
+				timer: this.timer,
+				userNumber: (typeof user !== 'undefined' && user && typeof user.number === 'number') ? user.number : null,
+				userAlias: (typeof user !== 'undefined' && user && user.alias) ? user.alias : null
+			};
+		},
+		onReuse: function (instance) {
+			if (!instance) return;
+			instance.parentFrame = this.root;
+			instance.shell = this;
+			instance.timer = this.timer;
+			if (typeof user !== 'undefined' && user) {
+				if (typeof user.number === 'number') instance.userNumber = user.number;
+				if (user.alias) instance.userAlias = user.alias;
+			}
+		}
+	}),
 	privatemsg: new SubprogramActionHandler('PrivateMsg', {
 		module: 'future_shell/lib/subprograms/private_msg.js',
 		queueName: 'private-msg',

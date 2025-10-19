@@ -1,3 +1,41 @@
+## 🧾 Licensing Overview
+
+This project is released under the **HM Watch Apps License (HMWA-1.1)** — a custom license designed specifically for Synchronet shells.
+It’s not your average “MIT” situation — this license protects the creative identity of the **Futureland shell** while still encouraging learning and customization.
+
+### ✅ What You Can Do
+- **Sysops:** You can install this shell on your own BBS for **personal use**.
+  - You can connect it to your own host or to the [Futureland Gateway](https://futureland.today).
+  - You can modify it, tweak it, or leave it untouched — as long as only you (the sysop) use it.
+- **Developers:** All source code is available as an **example** to learn from.
+  Feel free to adapt snippets or techniques for your own shells or mods.
+
+### 🚫 What You Can’t Do
+- You **can’t** give shell access to non-sysop users (public callers, guests, etc.) without a special license.
+- You **can’t** run an **unmodified, stock, or clone-like** version for public users.
+  Public versions must be **meaningfully customized** — new icons, menus, colors, or artwork that make it your own.
+- You **can’t** remove the license text or claim the original shell as your own work.
+
+### 🔓 How to Get a Public License
+HM Watch Apps gladly grants extended licenses to people who actively **enrich the BBS scene**, such as:
+- Art groups or ANSI/ASCII artists who release work on 16Colors or similar archives.
+- Door game developers, coders, and creative sysops building new content for Synchronet.
+- BBS operators who maintain unique, customized, or long-running boards.
+
+> This license is **not for sale.** Extended permissions are granted case-by-case — reach out if you’re doing something cool for the community.
+
+### 🕰️ If the Project Goes Dormant
+If Futureland and this project ever go dark for a long stretch (about a year or more) and development appears abandoned, the last released version automatically becomes **freeware** — no restrictions.
+If development later resumes, new versions will follow their own updated license terms.
+
+### ⚖️ TL;DR
+- Personal/sysop use = fine.
+- Public access = get permission and make it your own.
+- Abandoned project = freeware.
+- Futureland lives on = please respect the creative work.
+
+Full license text: [LICENSE](./future_shell/LICENSE)
+
 # IconShell / GuiShell for Synchronet
 
 Modern-ish icon based shell and supporting subprograms for a Synchronet BBS.  
