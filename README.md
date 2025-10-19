@@ -34,7 +34,7 @@ If development later resumes, new versions will follow their own updated license
 - Abandoned project = freeware.
 - Futureland lives on = please respect the creative work.
 
-Full license text: [LICENSE](./future_shell/LICENSE)
+Full license text: [LICENSE](./future_shell/LICENSE.md)
 
 # IconShell / GuiShell for Synchronet
 
