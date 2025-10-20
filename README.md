@@ -31,16 +31,16 @@ Modern icon-driven shell, desktop, and supporting subprogram suite for Synchrone
 ## Repository Layout
 ```
 mods/
-  guishell.js                     # Entry point loaded at logon
-  guishell.ini                    # Desktop/menu configuration
+  future_shell.js                 # Entry point loaded at logon (?future_shell)
   README.md                       # This document
   future_shell/
     assets/                       # Icon artwork (*.ans / *.bin)
     config/
+      guishell.ini                # Desktop/menu configuration
       config.js                   # INI loader, builtin actions, theme registry
       theme.ini                   # Optional color overrides (shared + newsreader)
       newsreader.ini              # Feed/category configuration
-    data/                         # JSON data (usage stats, prefs, etc.)
+    data/                         # JSON data (usage stats, prefs, prefs.json, etc.)
     lib/
       shell/                      # Core shell UI (toast, launch, hotkeys, etc.)
       subprograms/                # Individual subprogram implementations
@@ -50,11 +50,11 @@ mods/
 ---
 
 ## Installation
-1. **Clone / copy** this repository into your Synchronet `exec/mods/` directory so that `mods/guishell.js` exists.
+1. **Clone / copy** this repository into your Synchronet `exec/mods/` directory so that `mods/future_shell.js` exists.
 2. **Ensure assets** from `future_shell/assets/` are deployed (add your own ANSI/BIN art as desired).
 3. **Launch the shell** from your logon script or menu command:
    ```javascript
-   load("mods/guishell.js");
+   load("mods/future_shell.js");
    ```
 4. Optional: disable or adjust the matrix screensaver if using clients (like fTelnet) that do not handle continuous screen writes well.
 
@@ -62,6 +62,7 @@ mods/
 
 ## Configuration
 ### Desktop (`guishell.ini`)
+Located in `mods/future_shell/config/guishell.ini`.
 - `[GuiShell]` &mdash; global settings (welcome banner, inactivity).
 - `[Menu]` &mdash; comma-separated list of item keys in display order.
 - `[Item.<key>]` sections support types:
