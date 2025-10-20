@@ -973,17 +973,19 @@ if (typeof lazyLoadModule !== 'function') {
             line = (selected ? '\x01n\x01h' : '\x01n') + line;
             try { f.gotoxy(1, lineY); f.putmsg(line); } catch (_e2) { }
             var cmd = null;
-            if (usedHotspots < hotspotChars.length) cmd = hotspotChars[usedHotspots++];
-            if (cmd) {
-                board._hotspotMap[cmd] = 'search-result:' + i;
-                if (typeof console.add_hotspot === 'function') {
-                    try { console.add_hotspot(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1); } catch (_e3) { }
-                }
+        if (usedHotspots < hotspotChars.length) cmd = hotspotChars[usedHotspots++];
+        if (cmd) {
+            board._hotspotMap[cmd] = 'search-result:' + i;
+            if (typeof board._addHotspotArea === 'function') board._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
+            else if (typeof console.add_hotspot === 'function') {
+                try { console.add_hotspot(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1); } catch (_e3) { }
             }
         }
-        try { f.cycle(); } catch (_e4) { }
-        board._writeStatus('SEARCH: Enter=Read  ESC/Bksp=Back  ' + (board._searchSelection + 1) + '/' + board._searchResults.length);
     }
+    try { f.cycle(); } catch (_e4) { }
+    board._writeStatus('SEARCH: Enter=Read  ESC/Bksp=Back  ' + (board._searchSelection + 1) + '/' + board._searchResults.length);
+    if (typeof board._applyPendingHotspots === 'function') board._applyPendingHotspots();
+}
 
     function PostView(board) {
         BaseView.call(this, board, 'post');

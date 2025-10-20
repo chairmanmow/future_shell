@@ -4,6 +4,7 @@ load("future_shell/lib/util/debug.js");
 load('future_shell/lib/subprograms/message_boards/message_board_ui.js');
 load('future_shell/lib/subprograms/message_boards/message_board_views.js');
 load('future_shell/lib/util/layout/button.js');
+load('future_shell/lib/subprograms/subprogram_hotspots.js');
 if (typeof lazyLoadModule !== 'function' || typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
@@ -677,6 +678,12 @@ function MessageBoard(opts) {
         shell: opts.shell,
         timer: opts.timer
     });
+    this._pendingHotspotDefs = [];
+    try {
+        this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'message-board', layerName: 'message-board', priority: 75 });
+    } catch (_hotspotErr) {
+        this.hotspots = null;
+    }
     this._init();
 }
 
@@ -1209,6 +1216,7 @@ MessageBoard.prototype._resetState = function () {
     this.selection = 0; this.scrollOffset = 0;
     this.items = [];
     this._hotspotMap = {};
+    this._pendingHotspotDefs = [];
     this.threadHeaders = [];
     this.threadSelection = 0; this.threadScrollOffset = 0;
     this.threadTree = null; this.threadNodeIndex = []; this.threadTreeSelection = 0;
@@ -1285,10 +1293,57 @@ MessageBoard.prototype._resetState = function () {
 };
 
 MessageBoard.prototype._releaseHotspots = function () {
-    if (typeof console.clear_hotspots === 'function') {
+    this._hotspotMap = {};
+    this._pendingHotspotDefs = [];
+    if (this.hotspots && typeof this.hotspots.clear === 'function') this.hotspots.clear();
+    else if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
         try { console.clear_hotspots(); } catch (e) { }
     }
-    this._hotspotMap = {};
+};
+
+MessageBoard.prototype._addHotspotArea = function (key, swallow, minX, maxX, startY, endY, opts) {
+    if (key === undefined || key === null) return;
+    if (typeof minX !== 'number' || typeof maxX !== 'number' || typeof startY !== 'number') return;
+    if (typeof endY !== 'number') endY = startY;
+    if (maxX < minX) {
+        var tmpX = minX; minX = maxX; maxX = tmpX;
+    }
+    if (endY < startY) {
+        var tmpY = startY; startY = endY; endY = tmpY;
+    }
+    if (!this._pendingHotspotDefs) this._pendingHotspotDefs = [];
+    this._pendingHotspotDefs.push({
+        key: key,
+        x: minX,
+        y: startY,
+        width: Math.max(1, Math.floor(maxX - minX + 1)),
+        height: Math.max(1, Math.floor(endY - startY + 1)),
+        swallow: !!swallow,
+        owner: (opts && opts.owner) || 'message-board',
+        data: opts && opts.data || null
+    });
+};
+
+MessageBoard.prototype._applyPendingHotspots = function () {
+    if (!this._pendingHotspotDefs) this._pendingHotspotDefs = [];
+    if (this.hotspots && typeof this.hotspots.set === 'function') {
+        this.hotspots.set(this._pendingHotspotDefs);
+    } else if (typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
+        // Fallback if helper unavailable
+        for (var i = 0; i < this._pendingHotspotDefs.length; i++) {
+            var def = this._pendingHotspotDefs[i];
+            if (!def) continue;
+            var key = def.key;
+            var swallow = !!def.swallow;
+            var startX = def.x;
+            var startY = def.y;
+            var endX = startX + Math.max(1, def.width || 1) - 1;
+            var endY = startY + Math.max(1, def.height || 1) - 1;
+            for (var y = startY; y <= endY; y++) {
+                try { console.add_hotspot(key, swallow, startX, endX, y); } catch (_) { }
+            }
+        }
+    }
 };
 
 MessageBoard.prototype._init = function (reentry) {
@@ -1317,6 +1372,7 @@ MessageBoard.prototype._init = function (reentry) {
     this.selection = 0; this.scrollOffset = 0; this.items = [];
     this.grid = null; this.iconShellUtil = null; this.perPage = 0;
     this.hotspotsEnabled = false; this._hotspotMap = {};
+    this._pendingHotspotDefs = [];
     this.threadHeaders = []; this.threadSelection = 0; this.threadScrollOffset = 0;
     this.threadTree = null; this.threadNodeIndex = []; this.threadTreeSelection = 0; this._threadFrame = null;
     this._iconCells = [];
@@ -2710,18 +2766,16 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
             var lowerGroupHot = this._readGroupIconHotspotKey.toLowerCase();
             if (lowerGroupHot !== this._readGroupIconHotspotKey) this._hotspotMap[lowerGroupHot] = 'read-group-icon';
         }
-        if (typeof console.add_hotspot === 'function') {
-            var gMinX = this._readGroupIconFrame.x;
-            var gMaxX = this._readGroupIconFrame.x + this._readGroupIconFrame.width - 1;
-            for (var gy = 0; gy < this._readGroupIconFrame.height; gy++) {
-                try { console.add_hotspot(this._readGroupIconHotspotKey, false, gMinX, gMaxX, this._readGroupIconFrame.y + gy); } catch (_ge) { }
-            }
-            if (this._readGroupIconHotspotKey.length === 1) {
-                var lowerGroupHotspot = this._readGroupIconHotspotKey.toLowerCase();
-                if (lowerGroupHotspot !== this._readGroupIconHotspotKey) {
-                    for (var gy2 = 0; gy2 < this._readGroupIconFrame.height; gy2++) {
-                        try { console.add_hotspot(lowerGroupHotspot, false, gMinX, gMaxX, this._readGroupIconFrame.y + gy2); } catch (_ge2) { }
-                    }
+        var gMinX = this._readGroupIconFrame.x;
+        var gMaxX = this._readGroupIconFrame.x + this._readGroupIconFrame.width - 1;
+        for (var gy = 0; gy < this._readGroupIconFrame.height; gy++) {
+            this._addHotspotArea(this._readGroupIconHotspotKey, false, gMinX, gMaxX, this._readGroupIconFrame.y + gy);
+        }
+        if (this._readGroupIconHotspotKey.length === 1) {
+            var lowerGroupHotspot = this._readGroupIconHotspotKey.toLowerCase();
+            if (lowerGroupHotspot !== this._readGroupIconHotspotKey) {
+                for (var gy2 = 0; gy2 < this._readGroupIconFrame.height; gy2++) {
+                    this._addHotspotArea(lowerGroupHotspot, false, gMinX, gMaxX, this._readGroupIconFrame.y + gy2);
                 }
             }
         }
@@ -2734,23 +2788,22 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
             var lowerHot = this._readSubIconHotspotKey.toLowerCase();
             if (lowerHot !== this._readSubIconHotspotKey) this._hotspotMap[lowerHot] = 'read-sub-icon';
         }
-        if (typeof console.add_hotspot === 'function') {
-            var minX = this._readSubIconFrame.x;
-            var maxX = this._readSubIconFrame.x + this._readSubIconFrame.width - 1;
-            for (var sy = 0; sy < this._readSubIconFrame.height; sy++) {
-                try { console.add_hotspot(this._readSubIconHotspotKey, false, minX, maxX, this._readSubIconFrame.y + sy); } catch (e) { }
-            }
-            if (this._readSubIconHotspotKey.length === 1) {
-                var lowerHotspot = this._readSubIconHotspotKey.toLowerCase();
-                if (lowerHotspot !== this._readSubIconHotspotKey) {
-                    for (var sy2 = 0; sy2 < this._readSubIconFrame.height; sy2++) {
-                        try { console.add_hotspot(lowerHotspot, false, minX, maxX, this._readSubIconFrame.y + sy2); } catch (e) { }
-                    }
+        var minX = this._readSubIconFrame.x;
+        var maxX = this._readSubIconFrame.x + this._readSubIconFrame.width - 1;
+        for (var sy = 0; sy < this._readSubIconFrame.height; sy++) {
+            this._addHotspotArea(this._readSubIconHotspotKey, false, minX, maxX, this._readSubIconFrame.y + sy);
+        }
+        if (this._readSubIconHotspotKey.length === 1) {
+            var lowerHotspot = this._readSubIconHotspotKey.toLowerCase();
+            if (lowerHotspot !== this._readSubIconHotspotKey) {
+                for (var sy2 = 0; sy2 < this._readSubIconFrame.height; sy2++) {
+                    this._addHotspotArea(lowerHotspot, false, minX, maxX, this._readSubIconFrame.y + sy2);
                 }
             }
         }
     }
     try { hf.cycle(); } catch (e) { }
+    this._applyPendingHotspots();
 };
 
 // Fetch avatar for a message without rendering. Returns {obj, attempts:[{netaddr,username,ok,reason}], chosen:{...}}
@@ -3093,14 +3146,13 @@ MessageBoard.prototype._registerThreadSearchHotspot = function () {
         for (var hk = 0; hk < hotKeys.length; hk++) {
             this._hotspotMap[hotKeys[hk]] = entry.type;
         }
-        if (typeof console.add_hotspot === 'function') {
-            for (var y = minY; y <= maxY; y++) {
-                for (var hk2 = 0; hk2 < hotKeys.length; hk2++) {
-                    try { console.add_hotspot(hotKeys[hk2], false, minX, maxX, y); } catch (_hsErr) { }
-                }
+        for (var y = minY; y <= maxY; y++) {
+            for (var hk2 = 0; hk2 < hotKeys.length; hk2++) {
+                this._addHotspotArea(hotKeys[hk2], false, minX, maxX, y);
             }
         }
     }
+    this._applyPendingHotspots();
 };
 
 MessageBoard.prototype._renderThreadControlsStatus = function (opts) {
@@ -3619,13 +3671,12 @@ MessageBoard.prototype._paintSearchResults = function () {
         }
         if (cmd) {
             this._hotspotMap[cmd] = 'search-result:' + i;
-            if (typeof console.add_hotspot === 'function') {
-                try { console.add_hotspot(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1); } catch (e) { }
-            }
+            this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
         }
     }
     try { f.cycle(); } catch (e) { }
     this._writeStatus('SEARCH: Enter=Read  ESC/Bksp=Back  ' + (this._searchSelection + 1) + '/' + this._searchResults.length);
+    this._applyPendingHotspots();
 };
 
 MessageBoard.prototype._handleSearchKey = function (key) {
@@ -3641,9 +3692,7 @@ MessageBoard.prototype._handleSearchKey = function (key) {
 MessageBoard.prototype._paintIconGrid = function () {
     this._clearIconGrid();
     this.outputFrame.clear();
-    // Clear previous hotspots
-    if (typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch (e) { } }
-    this._hotspotMap = {};
+    this._releaseHotspots();
     if (!this.items.length) { this.outputFrame.putmsg('No items'); return; }
     // Lazy load Icon and reuse existing icon infrastructure
     if (!this._Icon) { try { this._Icon = load('future_shell/lib/shell/icon.js').Icon || Icon; } catch (e) { try { load('future_shell/lib/shell/icon.js'); this._Icon = Icon; } catch (e2) { } } }
@@ -3743,12 +3792,10 @@ MessageBoard.prototype._paintIconGrid = function () {
             for (var cIdx = 0; cIdx < commands.length; cIdx++) {
                 var mappedCmd = commands[cIdx];
                 this._hotspotMap[mappedCmd] = globalIndex;
-                if (typeof console.add_hotspot === 'function') {
-                    for (var hy = 0; hy < metrics.iconH; hy++) {
-                        try { console.add_hotspot(mappedCmd, false, iconFrame.x, iconFrame.x + iconFrame.width - 1, iconFrame.y + hy); } catch (e) { }
-                    }
-                    try { console.add_hotspot(mappedCmd, false, labelFrame.x, labelFrame.x + labelFrame.width - 1, labelFrame.y); } catch (e) { }
+                for (var hy = 0; hy < metrics.iconH; hy++) {
+                    this._addHotspotArea(mappedCmd, false, iconFrame.x, iconFrame.x + iconFrame.width - 1, iconFrame.y + hy);
                 }
+                this._addHotspotArea(mappedCmd, false, labelFrame.x, labelFrame.x + labelFrame.width - 1, labelFrame.y);
             }
         }
         idx++;
@@ -3758,6 +3805,7 @@ MessageBoard.prototype._paintIconGrid = function () {
     else if (this.view === 'sub') baseHelp = 'Enter=Open  S=Search  ESC=Groups  Backspace=Groups ';
     else baseHelp = '';
     this._writeStatus(this.view.toUpperCase() + ': ' + (this.selection + 1) + '/' + this.items.length + ' PgUp/PgDn Navigate ' + baseHelp);
+    this._applyPendingHotspots();
 };
 
 MessageBoard.prototype._clearIconGrid = function () {
@@ -3972,9 +4020,7 @@ MessageBoard.prototype._paintFlatList = function () {
         if (usedHotspots < hotspotChars.length) {
             var cmd = hotspotChars[usedHotspots++];
             this._hotspotMap[cmd] = i;
-            if (typeof console.add_hotspot === 'function') {
-                try { console.add_hotspot(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1); } catch (_flatHotErr) { }
-            }
+            this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
         }
     }
     this._writeStatus('FLAT: Enter=Read  P=Post  O=Order  Backspace=Threads  ESC=Subs  ' + (this.flatSelection + 1) + '/' + headers.length);
@@ -4436,9 +4482,7 @@ MessageBoard.prototype._paintThreadList = function () {
         if (usedHotspots < hotspotChars.length) {
             var cmd = hotspotChars[usedHotspots++];
             this._hotspotMap[cmd] = i;
-            if (typeof console.add_hotspot === 'function') {
-                try { console.add_hotspot(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1); } catch (e) { }
-            }
+            this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
         }
         row++;
     }
@@ -4867,8 +4911,7 @@ MessageBoard.prototype._paintThreadTree = function () {
     this._writeStatus('THREADS (tree ' + orderLabelTree + '): Enter=Expand/Read  Space=Expand/Collapse  S=Search  Backspace=Subs  ' + (this.threadTreeSelection + 1) + '/' + this.threadNodeIndex.length);
     try { f.cycle(); } catch (e) { }
     // Add hotspots for visible nodes (excluding beyond 36)
-    if (typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch (e) { } }
-    this._hotspotMap = {};
+    this._releaseHotspots();
     var chars = this._hotspotChars || [];
     var offset = (this.threadTree && typeof this.threadTree.offset === 'number') ? this.threadTree.offset : 0; // tree internal scroll offset (0-based)
     var visibleHeight = f.height; // number of rows available
@@ -4884,7 +4927,7 @@ MessageBoard.prototype._paintThreadTree = function () {
         var cmd = chars[mappedCount];
         this._hotspotMap[cmd] = i; // map to node index
         var min_x = f.x; var max_x = f.x + f.width - 1; var y = f.y + visibleRow - 1;
-        try { console.add_hotspot(cmd, false, min_x, max_x, y - 1); } catch (e) { }
+        this._addHotspotArea(cmd, false, min_x, max_x, y - 1);
         mappedCount++;
     }
     // If there are still nodes beyond the visible window or beyond hotspot char capacity, mark overflow
@@ -4895,6 +4938,7 @@ MessageBoard.prototype._paintThreadTree = function () {
     }
     if (overflow) this._writeStatus('THREADS (tree ' + orderLabelTree + '): Enter=Expand/Read  Space=Expand/Collapse  S=Search  Backspace=Subs  ' + (this.threadTreeSelection + 1) + '/' + this.threadNodeIndex.length + ' (Scroll / hotspots ' + mappedCount + '/' + chars.length + ')');
     this._registerThreadSearchHotspot();
+    this._applyPendingHotspots();
 };
 
 

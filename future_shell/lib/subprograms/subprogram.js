@@ -299,9 +299,23 @@ Subprogram.prototype.sendFramesToBottom = function () {
     this.parentFrame.cycle();
 };
 
-Subprogram.prototype.pauseForReason = function (reason) { };
+Subprogram.prototype.pauseForReason = function (reason) {
+    if (this.hotspots && typeof this.hotspots.deactivate === 'function') {
+        try { this.hotspots.deactivate(); } catch (_) { }
+    }
+};
 
-Subprogram.prototype.resumeForReason = function (reason) { };
+Subprogram.prototype.resumeForReason = function (reason) {
+    this.restoreHotspots();
+};
+
+Subprogram.prototype.restoreHotspots = function () {
+    if (this.hotspots && typeof this.hotspots.activate === 'function') {
+        try { this.hotspots.activate(); } catch (_) { }
+        return true;
+    }
+    return false;
+};
 
 Subprogram.prototype.setParentFrame = function (f) {
     this.parentFrame = f;

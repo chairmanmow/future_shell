@@ -8,6 +8,8 @@ IconShell.prototype.runExternal = function (fn, opts) {
     var trackUsage = (opts.trackUsage !== false);
     var programId = opts.programId || 'unknown';
     var broadcastLaunch = opts.broadcast !== false;
+    var activeBefore = this.activeSubprogram || null;
+    var shouldResumeSub = !!(activeBefore && activeBefore.running);
     if (broadcastLaunch && LaunchQueue && typeof LaunchQueue.record === 'function' && programId && programId !== 'unknown') {
         try {
             log('[launch_queue] recording launch programId=' + programId + ' label=' + (opts.label || programId) + ' icon=' + (opts.icon || ''));
@@ -29,6 +31,9 @@ IconShell.prototype.runExternal = function (fn, opts) {
         if (typeof this._notifyMrcExternalSuspend === 'function') {
             try { this._notifyMrcExternalSuspend({ programId: programId }); } catch (_) { }
         }
+        if (shouldResumeSub && typeof activeBefore.pauseForReason === 'function') {
+            try { activeBefore.pauseForReason('external_launch'); } catch (_) { }
+        }
         // Optional: dissolve animation before clearing and launching external
         // if (this.view && typeof dissolve === 'function') {
         //     dissolve(this.view, ICSH_VALS.ANIMATION.COLOR, 0); // 2ms delay for visible effect
@@ -42,20 +47,42 @@ IconShell.prototype.runExternal = function (fn, opts) {
         var endTs = Date.now();
         console.clear();
         this.recreateFramesIfNeeded();
-        // Refresh dynamic children (games menu rebuilding) if we're returning to shell folder view.
-        var node = this.stack && this.stack.length ? this.stack[this.stack.length - 1] : null;
-        if (!this.activeSubprogram) {
-            if (node && node.label && node.label.toLowerCase().indexOf("game") !== -1 && typeof getGamesMenuItems === 'function') {
-                node.children = getGamesMenuItems();
-                this.assignViewHotkeys(node.children);
+        var handledBySubprogram = false;
+        var activeAfter = this.activeSubprogram || null;
+        if (shouldResumeSub && activeBefore && activeBefore === activeAfter) {
+            if (typeof activeBefore.setParentFrame === 'function') {
+                try { activeBefore.setParentFrame(this.subFrame || this.view); } catch (_) { }
             }
-            if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
-        } else {
-            // If a subprogram is active, allow it to repaint its own frames instead of drawing folder over them.
-            if (typeof this.activeSubprogram.refresh === 'function') {
-                try { this.activeSubprogram.refresh(); } catch (e) { }
-            } else if (typeof this.activeSubprogram.draw === 'function') {
-                try { this.activeSubprogram.draw(); } catch (e) { }
+            if (typeof activeBefore.resumeForReason === 'function') {
+                try { activeBefore.resumeForReason('external_return'); } catch (_) { }
+            }
+            if (typeof activeBefore.refresh === 'function') {
+                try { activeBefore.refresh(); handledBySubprogram = true; } catch (e) { dbug('runExternal subprogram refresh error: ' + e, 'external'); }
+            } else if (typeof activeBefore.draw === 'function') {
+                try { activeBefore.draw(); handledBySubprogram = true; } catch (e) { dbug('runExternal subprogram draw error: ' + e, 'external'); }
+            }
+        }
+        if (!handledBySubprogram) {
+            var node = this.stack && this.stack.length ? this.stack[this.stack.length - 1] : null;
+            if (!this.activeSubprogram || !this.activeSubprogram.running) {
+                if (node && node.label && node.label.toLowerCase().indexOf("game") !== -1 && typeof getGamesMenuItems === 'function') {
+                    node.children = getGamesMenuItems();
+                    this.assignViewHotkeys(node.children);
+                }
+                this.drawFolder();
+            } else {
+                var sub = this.activeSubprogram;
+                if (typeof sub.setParentFrame === 'function') {
+                    try { sub.setParentFrame(this.subFrame || this.view); } catch (_) { }
+                }
+                if (typeof sub.resumeForReason === 'function' && sub !== activeBefore) {
+                    try { sub.resumeForReason('external_return'); } catch (_) { }
+                }
+                if (typeof sub.refresh === 'function') {
+                    try { sub.refresh(); } catch (e) { dbug('runExternal subprogram refresh error: ' + e, 'external'); }
+                } else if (typeof sub.draw === 'function') {
+                    try { sub.draw(); } catch (e) { dbug('runExternal subprogram draw error: ' + e, 'external'); }
+                }
             }
         }
         // Reset inactivity so the screensaver won't instantly resume.
