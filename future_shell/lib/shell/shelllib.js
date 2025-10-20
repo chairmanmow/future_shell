@@ -1,6 +1,6 @@
 if (typeof dbug !== 'function') {
     try { load('future_shell/lib/util/debug.js'); } catch (e) {
-        dbug = function() {};
+        dbug = function () { };
     }
 }
 
@@ -11,6 +11,8 @@ try { load('future_shell/lib/effects/screensaver.js'); } catch (e) { }
 try { load('future_shell/lib/util/perf.js'); } catch (e) { }
 try { load('future_shell/lib/subprograms/subprogram.js'); } catch (e) { }
 try { load('future_shell/lib/subprograms/mrc.js'); } catch (e) { dbug('shell init unable to preload mrc.js: ' + e, 'mrc'); }
+try { load('future_shell/lib/util/launch_queue.js'); } catch (e) { dbug('shell init unable to load launch_queue.js: ' + e, 'launch'); }
+try { load('future_shell/lib/util/hotspot_manger.js'); } catch (e) { dbug('shell init unable to load hotspot_manger.js: ' + e, 'hotspot'); }
 
 var SHELL_KEY_TOKEN_UP = (typeof KEY_UP !== 'undefined') ? KEY_UP : '\x1B[A';
 var SHELL_KEY_TOKEN_DOWN = (typeof KEY_DOWN !== 'undefined') ? KEY_DOWN : '\x1B[B';
@@ -175,11 +177,31 @@ IconShell.prototype.init = function () {
     this._toastHotspots = {};
     this._toastKeyBuffer = '';
     this._toastTokenCounter = 0;
+    this._toastSequenceStartTs = 0;
+    this._toastSequenceTimeoutMs = 600;
+    this._toastHotspotStashActive = false;
+    this._toastDismissCmd = this._reserveHotspotCmd('\u0006');
+    this._lastLaunchEventId = undefined;
     this._shellPrefsInstance = null;
     // Track reserved hotspot commands so we avoid collisions
     this._reservedHotspotCommands = {};
     if (typeof ICSH_HOTSPOT_FILL_CMD === 'string' && ICSH_HOTSPOT_FILL_CMD.length === 1) {
         this._reservedHotspotCommands[ICSH_HOTSPOT_FILL_CMD] = true;
+    }
+    this.hotspotManager = null;
+    this._gridHotspotLayerId = null;
+    this._toastHotspotLayerId = null;
+    this._screensaverHotspotLayerId = null;
+    if (typeof HotSpotManager === 'function') {
+        try {
+            this.hotspotManager = new HotSpotManager({ console: console, baseLayerName: 'shell-grid', baseLayerPriority: 10 });
+            this._gridHotspotLayerId = this.hotspotManager.getBaseLayerId();
+            this._toastHotspotLayerId = this.hotspotManager.ensureLayer('toast-overlay', 100, { active: false });
+            this._screensaverHotspotLayerId = this.hotspotManager.ensureLayer('screensaver', 200, { active: false });
+        } catch (hotspotErr) {
+            this.hotspotManager = null;
+            try { dbug('hotspot manager init error: ' + hotspotErr, 'hotspot'); } catch (_) { }
+        }
     }
     // Screensaver hotspot state
     this._screensaverDismissCmd = this._reserveHotspotCmd('\u0007');
@@ -237,6 +259,7 @@ IconShell.prototype.init = function () {
             }
         }); // 60 seconds
         this._resizePollEvent = this.timer.addEvent(3000, true, function () {
+            self._pollLaunchQueue();
             self._checkConsoleResize();
         });
         this._nodeMsgEvent = this.timer.addEvent(5000, true, function () {
@@ -305,6 +328,124 @@ IconShell.prototype.init = function () {
     }
 };
 
+IconShell.prototype._computeToastDismissRegions = function (toastRects) {
+    if (!toastRects || !toastRects.length) return [];
+    var root = this.root;
+    var consoleCols = (typeof console !== 'undefined' && console && typeof console.screen_columns === 'number') ? console.screen_columns : 0;
+    var consoleRows = (typeof console !== 'undefined' && console && typeof console.screen_rows === 'number') ? console.screen_rows : 0;
+    var startX = root ? root.x : 1;
+    var startY = root ? root.y : 1;
+    var width = root ? root.width : consoleCols;
+    var height = root ? root.height : consoleRows;
+    if (!width) width = consoleCols || 80;
+    if (!height) height = consoleRows || 24;
+    if (!width || !height) return [];
+    var endX = startX + Math.max(0, width - 1);
+    var endY = startY + Math.max(0, height - 1);
+
+    var coverage = {};
+    for (var i = 0; i < toastRects.length; i++) {
+        var rect = toastRects[i];
+        if (!rect) continue;
+        var x1 = Math.max(startX, rect.x);
+        var y1 = Math.max(startY, rect.y);
+        var x2 = Math.min(endX, rect.x + Math.max(1, rect.width) - 1);
+        var y2 = Math.min(endY, rect.y + Math.max(1, rect.height) - 1);
+        if (x1 > x2 || y1 > y2) continue;
+        for (var y = y1; y <= y2; y++) {
+            if (!coverage[y]) coverage[y] = [];
+            coverage[y].push({ start: x1, end: x2 });
+        }
+    }
+
+    function mergeIntervals(list) {
+        if (!list || !list.length) return [];
+        list.sort(function (a, b) { return a.start - b.start; });
+        var merged = [];
+        var current = { start: list[0].start, end: list[0].end };
+        for (var i2 = 1; i2 < list.length; i2++) {
+            var next = list[i2];
+            if (next.start <= current.end + 1) {
+                if (next.end > current.end) current.end = next.end;
+            } else {
+                merged.push(current);
+                current = { start: next.start, end: next.end };
+            }
+        }
+        merged.push(current);
+        return merged;
+    }
+
+    var uncoveredByRow = {};
+    for (var row = startY; row <= endY; row++) {
+        var merged = mergeIntervals(coverage[row]);
+        var cursor = startX;
+        var segments = [];
+        if (!merged.length) {
+            segments.push({ x1: startX, x2: endX });
+        } else {
+            for (var m = 0; m < merged.length; m++) {
+                var interval = merged[m];
+                if (interval.start > cursor) {
+                    segments.push({ x1: cursor, x2: interval.start - 1 });
+                }
+                if (interval.end + 1 > cursor) cursor = interval.end + 1;
+                if (cursor > endX) break;
+            }
+            if (cursor <= endX) {
+                segments.push({ x1: cursor, x2: endX });
+            }
+        }
+        if (segments.length) uncoveredByRow[row] = segments;
+    }
+
+    var regions = [];
+    var active = {};
+    for (var yRow = startY; yRow <= endY; yRow++) {
+        var segmentsForRow = uncoveredByRow[yRow] || [];
+        var nextActive = {};
+        for (var s = 0; s < segmentsForRow.length; s++) {
+            var seg = segmentsForRow[s];
+            if (seg.x1 > seg.x2) continue;
+            var key = seg.x1 + ':' + seg.x2;
+            var region = active[key];
+            if (region) {
+                region.height += 1;
+                nextActive[key] = region;
+            } else {
+                nextActive[key] = {
+                    x: seg.x1,
+                    y: yRow,
+                    width: seg.x2 - seg.x1 + 1,
+                    height: 1
+                };
+            }
+        }
+        for (var activeKey in active) {
+            if (!active.hasOwnProperty(activeKey)) continue;
+            if (!nextActive[activeKey]) regions.push(active[activeKey]);
+        }
+        active = nextActive;
+    }
+    for (var remainingKey in active) {
+        if (active.hasOwnProperty(remainingKey)) regions.push(active[remainingKey]);
+    }
+    return regions;
+};
+
+IconShell.prototype._dismissAllToasts = function () {
+    if (!this.toasts || !this.toasts.length) return;
+    var pending = this.toasts.slice();
+    for (var i = pending.length - 1; i >= 0; i--) {
+        var toast = pending[i];
+        if (toast && typeof toast.dismiss === 'function') {
+            try { toast.dismiss(); } catch (e) { try { log('[toast] dismiss error: ' + e); } catch (_) { } }
+        }
+    }
+    this._toastKeyBuffer = '';
+    this._toastSequenceStartTs = 0;
+};
+
 // Main loop: delegate to subprogram if active
 IconShell.prototype.main = function () {
     try {
@@ -355,29 +496,63 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         }
         return true;
     }
+    if (ch === this._toastDismissCmd) {
+        if (this.toasts && this.toasts.length) {
+            log('[toast] dismiss via outside hotspot');
+            this._dismissAllToasts();
+        }
+        return true;
+    }
     if (typeof ch === 'string' && ch.length && this.toasts && this.toasts.length) {
+        var toastNowTs = Date.now();
         this._toastKeyBuffer = ((typeof this._toastKeyBuffer === 'string') ? this._toastKeyBuffer : '') + ch;
         if (this._toastKeyBuffer.length > 32) this._toastKeyBuffer = this._toastKeyBuffer.slice(-32);
+        var matchedToken = null;
+        var pendingPrefix = false;
         for (var token in this._toastHotspots) {
             if (!this._toastHotspots.hasOwnProperty(token)) continue;
-            if (token && this._toastKeyBuffer && this._toastKeyBuffer.slice(-token.length) === token) {
-                var selectedToastToken = this._toastHotspots[token];
-                log('[toast] hotspot token match=' + JSON.stringify(token));
-                var launchedToken = false;
-                if (selectedToastToken && selectedToastToken.__shellMeta && typeof selectedToastToken.__shellMeta.action === 'function') {
-                    try { selectedToastToken.__shellMeta.action(); launchedToken = true; } catch (actionErr) { log('[toast] action handler error: ' + actionErr); }
-                } else if (selectedToastToken && selectedToastToken.__shellMeta && selectedToastToken.__shellMeta.launch) {
-                    log('[toast] hotspot launch=' + selectedToastToken.__shellMeta.launch);
-                    launchedToken = this._launchToastTarget(selectedToastToken.__shellMeta.launch, selectedToastToken);
+            if (!token) continue;
+            if (this._toastKeyBuffer && this._toastKeyBuffer.slice(-token.length) === token) {
+                matchedToken = token;
+                break;
+            }
+            if (token.length > 1) {
+                var sliceLen = Math.min(token.length, this._toastKeyBuffer.length);
+                if (sliceLen > 0) {
+                    var suffix = this._toastKeyBuffer.slice(-sliceLen);
+                    if (token.substring(0, sliceLen) === suffix) pendingPrefix = true;
                 }
-                if (launchedToken) {
-                    if (selectedToastToken && typeof selectedToastToken.dismiss === 'function') selectedToastToken.dismiss();
-                } else {
-                    log('[toast] launch not handled; toast remains visible');
-                }
-                this._toastKeyBuffer = '';
+            }
+        }
+        if (matchedToken) {
+            var selectedToastToken = this._toastHotspots[matchedToken];
+            log('[toast] hotspot token match=' + JSON.stringify(matchedToken));
+            var launchedToken = false;
+            if (selectedToastToken && selectedToastToken.__shellMeta && typeof selectedToastToken.__shellMeta.action === 'function') {
+                try { selectedToastToken.__shellMeta.action(); launchedToken = true; } catch (actionErr) { log('[toast] action handler error: ' + actionErr); }
+            } else if (selectedToastToken && selectedToastToken.__shellMeta && selectedToastToken.__shellMeta.launch) {
+                log('[toast] hotspot launch=' + selectedToastToken.__shellMeta.launch);
+                launchedToken = this._launchToastTarget(selectedToastToken.__shellMeta.launch, selectedToastToken);
+            }
+            if (launchedToken) {
+                if (selectedToastToken && typeof selectedToastToken.dismiss === 'function') selectedToastToken.dismiss();
+            } else {
+                log('[toast] launch not handled; toast remains visible');
+            }
+            this._toastKeyBuffer = '';
+            this._toastSequenceStartTs = 0;
+            return true;
+        }
+        if (pendingPrefix) {
+            var timeoutMs = (typeof this._toastSequenceTimeoutMs === 'number') ? this._toastSequenceTimeoutMs : 600;
+            if (!this._toastSequenceStartTs || (toastNowTs - this._toastSequenceStartTs) > timeoutMs) {
+                this._toastSequenceStartTs = toastNowTs;
+            }
+            if (this._toastKeyBuffer.length > 1 && (toastNowTs - this._toastSequenceStartTs) <= timeoutMs) {
                 return true;
             }
+        } else {
+            this._toastSequenceStartTs = 0;
         }
     }
     if (typeof ch === 'string' && this._toastHotspots && this._toastHotspots[ch]) {
@@ -822,13 +997,75 @@ IconShell.prototype._handleInactivity = function (nowTs) {
 };
 
 IconShell.prototype._cycleToasts = function () {
-    if (!this.toasts || !this.toasts.length) return;
-    for (var i = 0; i < this.toasts.length; i++) {
-        var toast = this.toasts[i];
-        if (toast && typeof toast.cycle === 'function') {
-            try { toast.cycle(); } catch (e) { dbug('toast cycle error: ' + e, 'toast'); }
+    if (this.toasts && this.toasts.length) {
+        for (var i = 0; i < this.toasts.length; i++) {
+            var toast = this.toasts[i];
+            if (toast && typeof toast.cycle === 'function') {
+                try { toast.cycle(); } catch (e) { dbug('toast cycle error: ' + e, 'toast'); }
+            }
         }
     }
+};
+
+IconShell.prototype._pollLaunchQueue = function () {
+    if (typeof LaunchQueue === 'undefined' || !LaunchQueue || typeof LaunchQueue.listSince !== 'function') return;
+    if (typeof this._lastLaunchEventId === 'undefined') {
+        if (typeof LaunchQueue.latestId === 'function') this._lastLaunchEventId = LaunchQueue.latestId();
+        else this._lastLaunchEventId = 0;
+        return;
+    }
+    var events = [];
+    try { events = LaunchQueue.listSince(this._lastLaunchEventId || 0); }
+    catch (e) { try { log('launch_queue: listSince failed (' + e + ')'); } catch (_) { } return; }
+    if (!events || !events.length) {
+        try { log('launch_queue: no new events (lastId=' + (this._lastLaunchEventId || 0) + ')'); } catch (_) { }
+        return;
+    }
+    var currentNode = (typeof bbs !== 'undefined' && typeof bbs.node_num === 'number') ? bbs.node_num : null;
+    for (var i = 0; i < events.length; i++) {
+        var evt = events[i];
+        if (!evt || typeof evt.id !== 'number') continue;
+        if (evt.node !== null && currentNode !== null && evt.node === currentNode) {
+            if (evt.id > this._lastLaunchEventId) this._lastLaunchEventId = evt.id;
+            continue;
+        }
+        try { log('[launch_queue] handling event id=' + evt.id + ' node=' + evt.node + ' program=' + evt.programId); } catch (_) { }
+        this._handleLaunchEvent(evt);
+        if (evt.id > this._lastLaunchEventId) this._lastLaunchEventId = evt.id;
+    }
+    if (typeof LaunchQueue.trim === 'function') {
+        try { LaunchQueue.trim(); } catch (_) { }
+    }
+};
+
+IconShell.prototype._handleLaunchEvent = function (evt) {
+    if (!evt) return;
+    var alias = evt.userAlias || 'Another user';
+    var label = evt.label || evt.programId || 'program';
+    var message = alias + ' started ' + label;
+    var shell = this;
+    var actionFn = null;
+    if (evt.programId) {
+        actionFn = function () {
+            shell.runExternal(function () {
+                try { bbs.exec_xtrn(evt.programId); } catch (e) { log('launch toast exec_xtrn failed: ' + e); }
+            }, {
+                programId: evt.programId,
+                label: label,
+                icon: evt.icon || null,
+                broadcast: false
+            });
+        };
+    }
+    this.showToast({
+        title: alias,
+        message: message,
+        category: 'launch_notice',
+        sender: evt.programId || label,
+        programIcon: evt.icon || 'program',
+        timeout: 12000,
+        action: actionFn
+    });
 };
 
 IconShell.prototype._flushPendingFolderRedraw = function () {
@@ -1005,11 +1242,33 @@ IconShell.prototype._stopScreenSaver = function () {
 
 IconShell.prototype._activateScreensaverHotspot = function () {
     if (this._screensaverHotspotActive) return;
-    if (typeof console.add_hotspot !== 'function') return;
-
     if (typeof this._clearHotspots === 'function') this._clearHotspots();
     else if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
 
+    if (this.hotspotManager && this._screensaverHotspotLayerId) {
+        var shellRoot = this.root;
+        var startXMgr = shellRoot ? shellRoot.x : 1;
+        var startYMgr = shellRoot ? shellRoot.y : 1;
+        var widthMgr = shellRoot ? shellRoot.width : console.screen_columns;
+        var heightMgr = shellRoot ? shellRoot.height : console.screen_rows;
+        widthMgr = Math.max(1, widthMgr || console.screen_columns || 80);
+        heightMgr = Math.max(1, heightMgr || console.screen_rows || 24);
+        var defs = [{
+            key: this._screensaverDismissCmd || '__ICSH_SAVER__',
+            x: startXMgr,
+            y: startYMgr,
+            width: widthMgr,
+            height: heightMgr,
+            swallow: true,
+            owner: 'screensaver'
+        }];
+        this.hotspotManager.setLayerHotspots(this._screensaverHotspotLayerId, defs);
+        this.hotspotManager.activateLayer(this._screensaverHotspotLayerId);
+        if (this._gridHotspotLayerId) this.hotspotManager.deactivateLayer(this._gridHotspotLayerId);
+        this._screensaverHotspotActive = true;
+        return;
+    }
+    if (typeof console.add_hotspot !== 'function') return;
     var root = this.root;
     var startX = root ? root.x : 1;
     var startY = root ? root.y : 1;
@@ -1027,8 +1286,14 @@ IconShell.prototype._activateScreensaverHotspot = function () {
 
 IconShell.prototype._removeScreensaverHotspot = function () {
     if (!this._screensaverHotspotActive) return;
-    if (typeof this._clearHotspots === 'function') this._clearHotspots();
-    else if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
+    if (this.hotspotManager && this._screensaverHotspotLayerId) {
+        this.hotspotManager.clearLayer(this._screensaverHotspotLayerId);
+        this.hotspotManager.deactivateLayer(this._screensaverHotspotLayerId);
+        if (this._gridHotspotLayerId) this.hotspotManager.activateLayer(this._gridHotspotLayerId);
+    } else {
+        if (typeof this._clearHotspots === 'function') this._clearHotspots();
+        else if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
+    }
     this._screensaverHotspotActive = false;
 };
 
@@ -1134,52 +1399,55 @@ IconShell.prototype._toastPosition = function (toast) {
 };
 
 IconShell.prototype._removeToastFromList = function (toast) {
-	if (!this.toasts || !this.toasts.length) return;
-	var idx = this.toasts.indexOf(toast);
-	if (idx !== -1) this.toasts.splice(idx, 1);
-	if (!this.toasts.length && typeof console !== 'undefined' && console && typeof console.mouse_mode !== 'undefined' && typeof this._toastMouseRestore !== 'undefined') {
-		console.mouse_mode = this._toastMouseRestore;
-		try { log('[toast] mouse mode restored'); } catch (_) { }
-		this._toastMouseRestore = undefined;
-	}
-	if (!this.toasts.length) {
-		this._toastKeyBuffer = '';
-		this._toastTokenCounter = 0;
-	}
-	this._reflowAllToasts();
-	if (!this.toasts.length) {
-		try { this._restoreHotspotsAfterToast(); } catch (e) { log('[toast] hotspot restore error: ' + e); }
-	}
+    if (!this.toasts || !this.toasts.length) return;
+    var idx = this.toasts.indexOf(toast);
+    if (idx !== -1) this.toasts.splice(idx, 1);
+    if (!this.toasts.length && typeof console !== 'undefined' && console && typeof console.mouse_mode !== 'undefined' && typeof this._toastMouseRestore !== 'undefined') {
+        console.mouse_mode = this._toastMouseRestore;
+        try { log('[toast] mouse mode restored'); } catch (_) { }
+        this._toastMouseRestore = undefined;
+    }
+    if (!this.toasts.length) {
+        this._toastKeyBuffer = '';
+        this._toastTokenCounter = 0;
+        this._toastSequenceStartTs = 0;
+    }
+    this._reflowAllToasts();
+    this._refreshToastHotspotLayer();
+    if (!this.toasts.length) {
+        this._releaseToastHotspotExclusivity();
+        try { this._restoreHotspotsAfterToast(); } catch (e) { log('[toast] hotspot restore error: ' + e); }
+    }
 };
 
 IconShell.prototype._restoreHotspotsAfterToast = function () {
-	if (this._screensaverHotspotActive) return;
-	if (this.activeSubprogram && this.activeSubprogram.running) {
-		var sub = this.activeSubprogram;
-		var restored = false;
-		if (typeof sub.restoreHotspots === 'function') {
-			try { sub.restoreHotspots(); restored = true; } catch (restoreErr) { log('[toast] subprogram restoreHotspots error: ' + restoreErr); }
-		}
-		if (typeof sub.resumeForReason === 'function') {
-			try { sub.resumeForReason('toast_closed'); } catch (resumeErr) { log('[toast] subprogram resumeForReason error: ' + resumeErr); }
-		}
-		if (!restored && typeof sub.refresh === 'function') {
-			try { sub.refresh(); restored = true; } catch (refreshErr) { log('[toast] subprogram refresh error: ' + refreshErr); }
-		}
-		if (!restored && typeof sub.draw === 'function') {
-			try { sub.draw(); restored = true; } catch (drawErr) { log('[toast] subprogram draw error: ' + drawErr); }
-		}
-		if (restored && sub.parentFrame && typeof sub.parentFrame.cycle === 'function') {
-			try { sub.parentFrame.cycle(); } catch (_) { }
-		}
-	} else {
-		if (this.grid && this.grid.cells && this.grid.cells.length) {
-			this._clearHotspots();
-			this._addMouseHotspots();
-		} else {
-			this.drawFolder({ skipHeaderRefresh: true });
-		}
-	}
+    if (this._screensaverHotspotActive) return;
+    if (this.activeSubprogram && this.activeSubprogram.running) {
+        var sub = this.activeSubprogram;
+        var restored = false;
+        if (typeof sub.restoreHotspots === 'function') {
+            try { sub.restoreHotspots(); restored = true; } catch (restoreErr) { log('[toast] subprogram restoreHotspots error: ' + restoreErr); }
+        }
+        if (typeof sub.resumeForReason === 'function') {
+            try { sub.resumeForReason('toast_closed'); } catch (resumeErr) { log('[toast] subprogram resumeForReason error: ' + resumeErr); }
+        }
+        if (!restored && typeof sub.refresh === 'function') {
+            try { sub.refresh(); restored = true; } catch (refreshErr) { log('[toast] subprogram refresh error: ' + refreshErr); }
+        }
+        if (!restored && typeof sub.draw === 'function') {
+            try { sub.draw(); restored = true; } catch (drawErr) { log('[toast] subprogram draw error: ' + drawErr); }
+        }
+        if (restored && sub.parentFrame && typeof sub.parentFrame.cycle === 'function') {
+            try { sub.parentFrame.cycle(); } catch (_) { }
+        }
+    } else {
+        if (this.grid && this.grid.cells && this.grid.cells.length) {
+            this._clearHotspots();
+            this._addMouseHotspots();
+        } else {
+            this.drawFolder({ skipHeaderRefresh: true });
+        }
+    }
 };
 
 IconShell.prototype._launchToastTarget = function (target, toast) {
@@ -1241,6 +1509,82 @@ IconShell.prototype._launchToastTarget = function (target, toast) {
     }
     return handled;
 };
+IconShell.prototype._ensureToastHotspotExclusivity = function () {
+    if (!this.hotspotManager || !this._toastHotspotLayerId) return;
+    if (this._toastHotspotStashActive) return;
+    try {
+        this.hotspotManager.stashHotSpots();
+        this._toastHotspotStashActive = true;
+    } catch (stashErr) {
+        try { log('[toast] hotspot stash error: ' + stashErr); } catch (_) { }
+    }
+};
+
+IconShell.prototype._releaseToastHotspotExclusivity = function () {
+    if (!this.hotspotManager || !this._toastHotspotLayerId) return;
+    if (!this._toastHotspotStashActive) return;
+    try {
+        this.hotspotManager.restoreStashedHotSpots();
+    } catch (restoreErr) {
+        try { log('[toast] hotspot restore error: ' + restoreErr); } catch (_) { }
+    }
+    this._toastHotspotStashActive = false;
+};
+
+IconShell.prototype._refreshToastHotspotLayer = function () {
+    if (!this.hotspotManager || !this._toastHotspotLayerId) return;
+    var defs = [];
+    var toastRects = [];
+    for (var key in this._toastHotspots) {
+        if (!this._toastHotspots.hasOwnProperty(key)) continue;
+        var toast = this._toastHotspots[key];
+        if (!toast || toast._dismissed || !toast.toastFrame) continue;
+        var frame = toast.toastFrame;
+        var meta = toast.__shellMeta || {};
+        toast.__shellMeta = meta;
+        var toastHeight = Math.max(1, frame.height || 1);
+        meta.rect = {
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: toastHeight
+        };
+        defs.push({
+            key: key,
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: toastHeight,
+            swallow: false,
+            owner: 'toast',
+            data: { launch: meta.launch || null }
+        });
+        toastRects.push(meta.rect);
+    }
+    if (defs.length) {
+        if (this._toastDismissCmd) {
+            var dismissRegions = this._computeToastDismissRegions(toastRects);
+            for (var i = 0; i < dismissRegions.length; i++) {
+                var region = dismissRegions[i];
+                defs.push({
+                    key: this._toastDismissCmd,
+                    x: region.x,
+                    y: region.y,
+                    width: region.width,
+                    height: region.height,
+                    swallow: false,
+                    owner: 'toast-dismiss'
+                });
+            }
+        }
+        this._ensureToastHotspotExclusivity();
+        this.hotspotManager.setLayerHotspots(this._toastHotspotLayerId, defs);
+        this.hotspotManager.activateLayer(this._toastHotspotLayerId);
+    } else {
+        this.hotspotManager.clearLayer(this._toastHotspotLayerId);
+        this.hotspotManager.deactivateLayer(this._toastHotspotLayerId);
+    }
+};
 IconShell.prototype._registerToastHotspot = function (toast) {
     if (!toast || !toast.toastFrame) return;
     if (!this._toastHotspots) this._toastHotspots = {};
@@ -1258,22 +1602,31 @@ IconShell.prototype._registerToastHotspot = function (toast) {
     }
     var cmd = toast.__shellMeta.command;
     if (!cmd) return;
+    if (this.hotspotManager && this._toastHotspotLayerId && !this._toastHotspotStashActive) {
+        this._ensureToastHotspotExclusivity();
+    }
     this._toastHotspots[cmd] = toast;
     log('[toast] register hotspot cmd=' + JSON.stringify(cmd) + ' code=' + (cmd ? cmd.charCodeAt(0) : 'null') + ' launch=' + (toast.__shellMeta.launch || ''));
+    var frame = toast.toastFrame;
+    var toastHeight = Math.max(1, frame.height || 1);
+    toast.__shellMeta.rect = {
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: toastHeight
+    };
+    if (this.hotspotManager && this._toastHotspotLayerId) {
+        this._refreshToastHotspotLayer();
+        return;
+    }
     if (typeof console.add_hotspot !== 'function') return;
-    var startX = toast.toastFrame.x;
-    var endX = toast.toastFrame.x + toast.toastFrame.width - 1;
-    var startY = toast.toastFrame.y;
-    var endY = toast.toastFrame.y + toast.toastFrame.height - 1;
+    var startX = frame.x;
+    var endX = frame.x + frame.width - 1;
+    var startY = frame.y;
+    var endY = frame.y + toastHeight - 1;
     for (var y = startY; y <= endY; y++) {
         try { console.add_hotspot(cmd, false, startX, endX, y); } catch (_) { }
     }
-    toast.__shellMeta.rect = {
-        x: toast.toastFrame.x,
-        y: toast.toastFrame.y,
-        width: toast.toastFrame.width,
-        height: toast.toastFrame.height
-    };
 };
 
 IconShell.prototype._unregisterToastHotspot = function (toast) {
@@ -1285,6 +1638,10 @@ IconShell.prototype._unregisterToastHotspot = function (toast) {
     toast.__shellMeta.command = null;
     toast.__shellMeta.rect = null;
     log('[toast] unregister hotspot cmd=' + JSON.stringify(cmd) + ' code=' + (cmd ? cmd.charCodeAt(0) : 'null'));
+    if (this.hotspotManager && this._toastHotspotLayerId) {
+        this._refreshToastHotspotLayer();
+        return;
+    }
     if (typeof console.delete_hotspot === 'function') {
         try { console.delete_hotspot(cmd); } catch (_) { }
     }
@@ -1300,6 +1657,16 @@ IconShell.prototype._updateToastHotspot = function (toast) {
     }
     log('[toast] update hotspot launch=' + (meta.launch || ''));
     var cmd = meta.command;
+    meta.rect = {
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: Math.max(1, frame.height || 1)
+    };
+    if (this.hotspotManager && this._toastHotspotLayerId) {
+        this._refreshToastHotspotLayer();
+        return;
+    }
     if (cmd && typeof console.delete_hotspot === 'function') {
         try { console.delete_hotspot(cmd); } catch (_) { }
     }

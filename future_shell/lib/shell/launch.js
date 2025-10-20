@@ -1,10 +1,29 @@
 load(system.mods_dir + 'future_shell/lib/util/usage_tracker.js');
+load(system.mods_dir + 'future_shell/lib/util/launch_queue.js');
 var UsageTracker = this.UsageTracker || {};
+var LaunchQueue = this.LaunchQueue || {};
 
 IconShell.prototype.runExternal = function (fn, opts) {
     opts = opts || {};
     var trackUsage = (opts.trackUsage !== false);
     var programId = opts.programId || 'unknown';
+    var broadcastLaunch = opts.broadcast !== false;
+    if (broadcastLaunch && LaunchQueue && typeof LaunchQueue.record === 'function' && programId && programId !== 'unknown') {
+        try {
+            log('[launch_queue] recording launch programId=' + programId + ' label=' + (opts.label || programId) + ' icon=' + (opts.icon || ''));
+            LaunchQueue.record({
+                programId: programId,
+                label: opts.label || programId,
+                icon: opts.icon || null,
+                timestamp: Date.now(),
+                node: (typeof bbs !== 'undefined' && typeof bbs.node_num === 'number') ? bbs.node_num : null,
+                userAlias: (typeof user !== 'undefined' && user && user.alias) ? user.alias : null,
+                userNumber: (typeof user !== 'undefined' && user && typeof user.number === 'number') ? user.number : null
+            });
+        } catch (queueErr) {
+            try { log('launch_queue: record failed (' + queueErr + ')'); } catch (_) { }
+        }
+    }
     var startTs = trackUsage ? Date.now() : 0;
     try {
         if (typeof this._notifyMrcExternalSuspend === 'function') {
@@ -66,11 +85,13 @@ IconShell.prototype.runExternal = function (fn, opts) {
 };
 
 IconShell.prototype._notifyMrcExternalSuspend = function (info) {
+    return;
     if (!this.mrcService || typeof this.mrcService.handleExternalSuspend !== 'function') return;
     try { this.mrcService.handleExternalSuspend(info || {}); } catch (_) { }
 };
 
 IconShell.prototype._notifyMrcExternalResume = function (info) {
+    return;
     if (!this.mrcService || typeof this.mrcService.handleExternalResume !== 'function') return;
     try { this.mrcService.handleExternalResume(info || {}); } catch (_) { }
 };

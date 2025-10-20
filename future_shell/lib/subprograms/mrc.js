@@ -510,28 +510,43 @@ MRCService.prototype._sendPresenceNotice = function (event, programId, missedCou
     if (event === 'returned' && typeof missedCount === 'number' && missedCount > 0) {
         suffix = format(' (cached %d message%s).', missedCount, (missedCount === 1) ? '' : 's');
     }
-    var remote = format('|10[FSXTRN]|07 %s %s |15%s|07%s',
+    var brackets = '';
+    if (event === 'returned') {
+        brackets = '|10[RETURNED FROM APP]|07 ';
+    } else {
+        brackets = '|12[LAUNCHED APP]|07 ';
+    }
+    var remote = format(brackets + '%s %s |15%s|07%s',
         user.alias,
         verb,
         programName,
         suffix
     );
+    var broadcastOk = false;
     try {
-        this.session.send_notme(remote);
+        if (typeof this.session.send_room_message === 'function') {
+            this.session.send_room_message(remote);
+            broadcastOk = true;
+        } else {
+            this.session.send_notme(remote);
+            broadcastOk = true;
+        }
         this.flush();
     } catch (_) { }
-    var local;
-    if (event === 'returned') {
-        if (typeof missedCount === 'number' && missedCount > 0) {
-            local = format('Returned from %s with %d message%s cached.', programName, missedCount, (missedCount === 1) ? '' : 's');
+    if (!broadcastOk) {
+        var local;
+        if (event === 'returned') {
+            if (typeof missedCount === 'number' && missedCount > 0) {
+                local = format('Returned from %s with %d message%s cached.', programName, missedCount, (missedCount === 1) ? '' : 's');
+            } else {
+                local = format('Returned from %s.', programName);
+            }
         } else {
-            local = format('Returned from %s.', programName);
+            local = format('Left to run %s.', programName);
         }
-    } else {
-        local = format('Left to run %s.', programName);
-    }
-    if (local && local.trim().length) {
-        this._handleServerText(local, { backlog: true, presence: true });
+        if (local && local.trim().length) {
+            this._handleServerText(local, { backlog: true, presence: true });
+        }
     }
 };
 
@@ -662,7 +677,8 @@ MRCService.prototype._showToastForMessage = function (payload) {
         message: (payload.from || 'MRC') + ': ' + (payload.plain || '').substr(0, 120),
         launch: 'mrc',
         category: 'mrc',
-        sender: payload.from || 'mrc'
+        sender: payload.from || 'mrc',
+        programIcon: 'mrc'
     });
 };
 

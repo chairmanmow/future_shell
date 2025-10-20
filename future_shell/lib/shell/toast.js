@@ -93,6 +93,7 @@ function Toast(options) {
     })();
     var timeout = (typeof options.timeout === 'number') ? options.timeout : DEFAULT_TOAST_TIMEOUT;
     var userOnDone = options.onDone;
+    var programIconName = (typeof options.programIcon === 'string' && options.programIcon.length) ? options.programIcon : null;
     var hasAvatar = false;
     if (options.avatar && this._avatarLib) {
         if (options.avatar.netaddr === system.name) {
@@ -104,6 +105,7 @@ function Toast(options) {
         }
         if (this.avatarData) hasAvatar = true;
     }
+    var hasProgramIcon = !!programIconName && !hasAvatar;
     var rawMessage = options.message;
     if (rawMessage === undefined || rawMessage === null) rawMessage = '';
     rawMessage = String(rawMessage);
@@ -112,14 +114,14 @@ function Toast(options) {
     var titleText = this.title ? toastStripColors(String(this.title)) : '';
     var minWidth = Math.max(12, longestWord + 4);
     if (titleText.length) minWidth = Math.max(minWidth, titleText.length + 4);
-    if (hasAvatar) minWidth = Math.max(minWidth, 20);
+    if (hasAvatar || hasProgramIcon) minWidth = Math.max(minWidth, 20);
     if (typeof options.width === 'number' && options.width > 0) minWidth = Math.max(minWidth, options.width);
     var width = Math.min(MAX_TOAST_WIDTH, minWidth);
-    var messageWrapWidth = Math.max(10, width - (hasAvatar ? 8 : 2));
+    var messageWrapWidth = Math.max(10, width - ((hasAvatar || hasProgramIcon) ? 8 : 2));
     var wrappedLines = toastWrapText(cleanMessage, messageWrapWidth);
     if (!wrappedLines || !wrappedLines.length) wrappedLines = [''];
     var contentHeight = wrappedLines.length;
-    var minHeight = hasAvatar ? 6 : 3;
+    var minHeight = (hasAvatar || hasProgramIcon) ? 6 : 3;
     var height = Math.max(minHeight, contentHeight + 2);
     if (typeof options.height === 'number' && options.height > height) height = options.height;
     if (height < 1) height = 1;
@@ -136,8 +138,8 @@ function Toast(options) {
             x = 1; y = scrH - height; break; // leave last line for crumb
         case 'bottom-right':
             x = scrW - width + 1; y = scrH - height;
-            if (this.avatarData) {
-                x = x - 7; // avatar width + padding offset frame to left;
+            if (hasAvatar || hasProgramIcon) {
+                x = x - 7; // left graphic width + padding offset frame to left;
             }
             break;
         case 'center':
@@ -153,7 +155,7 @@ function Toast(options) {
     this.avatarFrame = null;
     this.parentFrame = options.parentFrame || undefined;
     this.toastFrame = new Frame(x, y, width, height, ICSH_VALS.TOAST_FRAME.BG | ICSH_VALS.TOAST_FRAME.FG, this.parentFrame);
-    var msgX = this.avatarData ? 6 : 0;
+    var msgX = (hasAvatar || hasProgramIcon) ? 6 : 0;
     this.msgContainer = new Frame((2 * msgX) + this.toastFrame.x, this.toastFrame.y, this.toastFrame.width - msgX, this.toastFrame.height, ICSH_ATTR('TOAST_MSG'), this.toastFrame);
     this.msgFrame = new Frame(this.msgContainer.x + 1, this.msgContainer.y + 1, this.msgContainer.width - 2, this.msgContainer.height - 2, ICSH_ATTR('TOAST_MSG'), this.msgContainer);
     this.toastFrame.transparent = true;
@@ -163,6 +165,9 @@ function Toast(options) {
     if (this.avatarData) {
         this.avatarFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 10, Math.min(6, this.toastFrame.height), ICSH_ATTR('TOAST_AVATAR'), this.toastFrame);
         this.insertAvatarData();
+    } else if (hasProgramIcon) {
+        this.programIconFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 12, Math.min(6, this.toastFrame.height), ICSH_ATTR('TOAST_AVATAR'), this.toastFrame);
+        this._renderProgramIcon(programIconName);
     }
     this.toastFrame.draw();
     this.toastFrame.open();
@@ -200,6 +205,32 @@ function Toast(options) {
         }
     };
 }
+
+Toast.prototype._renderProgramIcon = function (iconName) {
+    if (!this.programIconFrame || !iconName) return;
+    var iconBase = 'future_shell/assets/' + iconName;
+    var binPath = system.mods_dir + iconBase + '.bin';
+    var ansPath = system.mods_dir + iconBase + '.ans';
+    try {
+        if (file_exists(binPath)) {
+            this.programIconFrame.load(binPath, this.programIconFrame.width, this.programIconFrame.height);
+            if (typeof this.programIconFrame.open === 'function') this.programIconFrame.open();
+            if (typeof this.programIconFrame.cycle === 'function') this.programIconFrame.cycle();
+            this.programIconFrame.transparent = true;
+            return;
+        }
+        if (file_exists(ansPath)) {
+            this.programIconFrame.load(ansPath, this.programIconFrame.width, this.programIconFrame.height);
+            if (typeof this.programIconFrame.open === 'function') this.programIconFrame.open();
+            if (typeof this.programIconFrame.cycle === 'function') this.programIconFrame.cycle();
+            this.programIconFrame.transparent = true;
+            return;
+        }
+    } catch (e) {
+        try { log('Toast program icon load failed: ' + e); } catch (_) { }
+    }
+    try { this.programIconFrame.clear(ICSH_ATTR('TOAST_MSG')); } catch (_) { }
+};
 
 // Call this in your main loop to check for auto-dismiss
 Toast.prototype.cycle = function () {

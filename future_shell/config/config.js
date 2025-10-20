@@ -515,7 +515,8 @@ function _informUser(shell, msg) {
 	} catch (e) { }
 }
 
-function makeExecXtrnAction(code) {
+function makeExecXtrnAction(code, metadata) {
+	metadata = metadata || {};
 	code = (code || '').trim();
 	if (code.charAt(0) === ":")
 		code = code.substring(1);
@@ -540,7 +541,11 @@ function makeExecXtrnAction(code) {
 					_icsh_err('exec_xtrn(' + code + ') failed: ' + ex);
 					_informUser(self, 'Launch failed: ' + code);
 				}
-			}, { programId: code });
+			}, {
+				programId: code,
+				label: metadata.label || metadata.programLabel || code,
+				icon: metadata.icon || metadata.iconFile || null
+			});
 		} catch (e) {
 			_icsh_err('Unhandled error launching external ' + code + ': ' + e);
 			_informUser(self, 'Error launching: ' + code);
@@ -548,19 +553,19 @@ function makeExecXtrnAction(code) {
 	};
 }
 
-function makeCommandAction(spec) {
+function makeCommandAction(spec, metadata) {
 	if (!spec) return null;
 	if (spec.indexOf('exec_xtrn:') === 0) {
 		var code = spec.substring(9).trim();
-		return makeExecXtrnAction(code);
+		return makeExecXtrnAction(code, metadata);
 	}
 	// Shorthand: leading ':' means external door code (":ECREADER" -> ECREADER)
 	if (spec.charAt(0) === ':' && spec.length > 1) {
-		return makeExecXtrnAction(spec.substring(1).trim());
+		return makeExecXtrnAction(spec.substring(1).trim(), metadata);
 	}
 	// Shorthand: bare word with no spaces & no prefix assumed to be external code
 	if (/^[A-Za-z0-9_]{2,}$/.test(spec)) {
-		return makeExecXtrnAction(spec.trim());
+		return makeExecXtrnAction(spec.trim(), metadata);
 	}
 	if (spec.indexOf('js:') === 0) {
 		var body = spec.substring(3);
@@ -615,7 +620,7 @@ function _buildItemRecursive(key, ini, ancestry) {
 	}
 	if (type === 'command') {
 		var actSpec = sect.command;
-		var actionFn = makeCommandAction(actSpec);
+		var actionFn = makeCommandAction(actSpec, { label: label, icon: icon });
 		if (!actionFn) { _icsh_warn('Invalid command action for ' + key); return null; }
 		obj.type = 'item'; obj.action = actionFn; return obj;
 	}
@@ -1205,10 +1210,10 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 			iconFile: "apps",
 			get children() { return ensureXtrnMenuLoaded() ? getItemsForXtrnSection(0) : []; }
 		},
-		{ label: "Messages", type: "item", iconFile: "messages", action: makeExecXtrnAction("ECREADER") },
+		{ label: "Messages", type: "item", iconFile: "messages", action: makeExecXtrnAction("ECREADER", { label: "Messages", icon: "messages" }) },
 		{ label: "News", type: "item", iconFile: "news", action: BUILTIN_ACTIONS.newsreader },
 		{ label: "Mail", type: "item", iconFile: "mail", dynamic: true, action: BUILTIN_ACTIONS.mail },
-		{ label: "Files", type: "item", iconFile: "folder", action: makeExecXtrnAction("ANSIVIEW") },
+		{ label: "Files", type: "item", iconFile: "folder", action: makeExecXtrnAction("ANSIVIEW", { label: "Files", icon: "folder" }) },
 		{ label: "Hello", type: "item", iconFile: "folder", action: BUILTIN_ACTIONS.hello },
 		{ label: "Sys Info", type: "item", iconFile: "kingcomputer", action: BUILTIN_ACTIONS.sysinfo },
 		{ label: "Usage", type: "item", iconFile: "calendar", action: BUILTIN_ACTIONS.usage_viewer },

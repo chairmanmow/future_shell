@@ -284,6 +284,10 @@ IconShell.prototype._shelveFolderFrames = function () {
 };
 
 IconShell.prototype._clearHotspots = function () {
+    if (this.hotspotManager && this._gridHotspotLayerId) {
+        this.hotspotManager.clearLayer(this._gridHotspotLayerId);
+        return;
+    }
     if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
 };
 
@@ -452,35 +456,89 @@ IconShell.prototype._highlightSelectedCell = function () {
 IconShell.prototype._addMouseHotspots = function () {
     // Note: Passing swallow=false to avoid "hungry" hotspots that appear to consume
     // clicks beyond their intended horizontal bounds on partially filled rows.
-    if (this.grid && this.grid.cells && typeof console.add_hotspot === 'function') {
-        var FILL_CMD = (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined') ? ICSH_HOTSPOT_FILL_CMD : '\x7F';
-        var perRow = {}; // rowIndex -> { y, iconHeight, rightMost }
+    if (!this.grid || !this.grid.cells) return;
+    if (this.hotspotManager && this._gridHotspotLayerId) {
+        var defs = [];
+        var fillCmd = (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined') ? ICSH_HOTSPOT_FILL_CMD : '\x7F';
+        var perRow = {};
         for (var i = 0; i < this.grid.cells.length; i++) {
             var cell = this.grid.cells[i];
-            var item = cell.item;
-            if (!item.hotkey || item.type === 'placeholder') continue; // skip placeholders
-            var cmd = item.hotkey;
-            var min_x = cell.icon.x;
-            var max_x = cell.icon.x + cell.icon.width - 1; // strictly icon width
-            var y = cell.icon.y;
-            dbug('[HOTSPOT] i=' + i + ' label=' + (item.label || '') + ' hotkey=' + cmd + ' x=' + min_x + '-' + max_x + ' y=' + y + '-' + (y + cell.icon.height - 1), 'hotspots');
-            for (var row = 0; row < cell.icon.height; row++) {
-                try { console.add_hotspot(cmd, false, min_x, max_x, y + row); } catch (e) { }
-            }
-            // Optionally include label line for easier clicking (keep within same horizontal bounds)
-            try { console.add_hotspot(cmd, false, min_x, max_x, y + cell.icon.height); } catch (e) { }
-            var rIdx = Math.floor(i / this.grid.cols);
-            if (!perRow[rIdx]) perRow[rIdx] = { y: y, iconHeight: cell.icon.height, rightMost: max_x };
-            else if (max_x > perRow[rIdx].rightMost) perRow[rIdx].rightMost = max_x;
+            if (!cell || !cell.icon) continue;
+            var item = cell.item || {};
+            if (!item.hotkey || item.type === 'placeholder') continue;
+            var iconX = cell.icon.x;
+            var iconY = cell.icon.y;
+            var iconW = cell.icon.width;
+            var iconH = cell.icon.height;
+            defs.push({
+                key: item.hotkey,
+                x: iconX,
+                y: iconY,
+                width: iconW,
+                height: iconH + 1,
+                swallow: false,
+                owner: 'grid',
+                data: { index: i, label: item.label || '' }
+            });
+            var rowIdx = Math.floor(i / this.grid.cols);
+            var rightMost = iconX + iconW - 1;
+            if (!perRow[rowIdx]) perRow[rowIdx] = { y: iconY, iconHeight: iconH, rightMost: rightMost };
+            else if (rightMost > perRow[rowIdx].rightMost) perRow[rowIdx].rightMost = rightMost;
         }
-        // Add filler hotspots (swallow clicks) for gap area to the right of last real icon in each row
-        var viewRight = this.view.x + this.view.width - 1;
-        for (var rk in perRow) {
-            var info = perRow[rk];
-            if (info.rightMost < viewRight) {
-                for (var ry = 0; ry <= info.iconHeight; ry++) { // cover icon + label line
-                    try { console.add_hotspot(FILL_CMD, false, info.rightMost + 1, viewRight, info.y + ry); } catch (e) { }
+        if (this.view && typeof this.view.x === 'number' && typeof this.view.width === 'number') {
+            var viewRight = this.view.x + this.view.width - 1;
+            for (var rk in perRow) {
+                if (!perRow.hasOwnProperty(rk)) continue;
+                var info = perRow[rk];
+                if (info.rightMost < viewRight) {
+                    var fillerWidth = viewRight - info.rightMost;
+                    if (fillerWidth > 0) {
+                        defs.push({
+                            key: fillCmd,
+                            x: info.rightMost + 1,
+                            y: info.y,
+                            width: fillerWidth,
+                            height: info.iconHeight + 1,
+                            swallow: false,
+                            owner: 'grid-filler'
+                        });
+                    }
                 }
+            }
+        }
+        this.hotspotManager.setLayerHotspots(this._gridHotspotLayerId, defs);
+        this.hotspotManager.activateLayer(this._gridHotspotLayerId);
+        return;
+    }
+    if (typeof console.add_hotspot !== 'function') return;
+    var FILL_CMD = (typeof ICSH_HOTSPOT_FILL_CMD !== 'undefined') ? ICSH_HOTSPOT_FILL_CMD : '\x7F';
+    var perRowLegacy = {}; // rowIndex -> { y, iconHeight, rightMost }
+    for (var j = 0; j < this.grid.cells.length; j++) {
+        var legacyCell = this.grid.cells[j];
+        var legacyItem = legacyCell.item;
+        if (!legacyItem.hotkey || legacyItem.type === 'placeholder') continue; // skip placeholders
+        var cmd = legacyItem.hotkey;
+        var min_x = legacyCell.icon.x;
+        var max_x = legacyCell.icon.x + legacyCell.icon.width - 1; // strictly icon width
+        var y = legacyCell.icon.y;
+        dbug('[HOTSPOT] i=' + j + ' label=' + (legacyItem.label || '') + ' hotkey=' + cmd + ' x=' + min_x + '-' + max_x + ' y=' + y + '-' + (y + legacyCell.icon.height - 1), 'hotspots');
+        for (var row = 0; row < legacyCell.icon.height; row++) {
+            try { console.add_hotspot(cmd, false, min_x, max_x, y + row); } catch (e) { }
+        }
+        // Optionally include label line for easier clicking (keep within same horizontal bounds)
+        try { console.add_hotspot(cmd, false, min_x, max_x, y + legacyCell.icon.height); } catch (e) { }
+        var rIdx = Math.floor(j / this.grid.cols);
+        if (!perRowLegacy[rIdx]) perRowLegacy[rIdx] = { y: y, iconHeight: legacyCell.icon.height, rightMost: max_x };
+        else if (max_x > perRowLegacy[rIdx].rightMost) perRowLegacy[rIdx].rightMost = max_x;
+    }
+    // Add filler hotspots (swallow clicks) for gap area to the right of last real icon in each row
+    var viewRightLegacy = this.view.x + this.view.width - 1;
+    for (var key in perRowLegacy) {
+        if (!perRowLegacy.hasOwnProperty(key)) continue;
+        var infoLegacy = perRowLegacy[key];
+        if (infoLegacy.rightMost < viewRightLegacy) {
+            for (var ry = 0; ry <= infoLegacy.iconHeight; ry++) { // cover icon + label line
+                try { console.add_hotspot(FILL_CMD, false, infoLegacy.rightMost + 1, viewRightLegacy, infoLegacy.y + ry); } catch (e) { }
             }
         }
     }

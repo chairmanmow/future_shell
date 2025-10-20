@@ -35,9 +35,9 @@ function getItemsForXtrnSection(index) {
 	var items = [];
 	var gameSec = xtrn_area.sec_list[index];
 	if (!gameSec || !gameSec.can_access || !gameSec.prog_list) return items;
-	for (var p = 0; p < gameSec.prog_list.length; p++) {
-		var prog = gameSec.prog_list[p];
-		if (!prog.can_access) continue;
+    for (var p = 0; p < gameSec.prog_list.length; p++) {
+        var prog = gameSec.prog_list[p];
+        if (!prog.can_access) continue;
 		// Deterministic color from label/code
 		var colorSeed = prog.name + prog.code;
 		// NOTE: Dynamic rotating background colors. Could be externalized later via
@@ -52,30 +52,37 @@ function getItemsForXtrnSection(index) {
 		hash = Math.abs(hash);
 		var iconBg = bgColors[hash % bgColors.length];
 		var iconFg = fgColors[(hash >> 3) % fgColors.length];
-		var item = {
-			label: prog.name,
-			type: "item",
-			hotkey: null,
-			action: (function (code, name) {
-				return function () { this.runExternal(function () { bbs.exec_xtrn(code); }, { programId: code }); };
-			})(prog.code, prog.name)
-		};
+        var item = {
+            label: prog.name,
+            type: "item",
+            hotkey: null
+        };
 		var codeUpper = prog.code.toUpperCase();
 		// 1) User-specified custom icon mapping (explicit override)
-		if (ICON_LOOKUP.hasOwnProperty(codeUpper)) {
-			item.iconFile = ICON_LOOKUP[codeUpper];
-		}
-		// 2) Else if a matching .ans/.bin file exists (case-insensitive base name match)
-		else if (DYNAMIC_ICON_FILES.hasOwnProperty(codeUpper)) {
-			item.iconFile = DYNAMIC_ICON_FILES[codeUpper];
-		}
-		// 3) Fallback to generated color tile
-		else {
-			item.iconBg = iconBg;
-			item.iconFg = iconFg;
-		}
-		items.push(item);
-	}
+        if (ICON_LOOKUP.hasOwnProperty(codeUpper)) {
+            item.iconFile = ICON_LOOKUP[codeUpper];
+        }
+        // 2) Else if a matching .ans/.bin file exists (case-insensitive base name match)
+        else if (DYNAMIC_ICON_FILES.hasOwnProperty(codeUpper)) {
+            item.iconFile = DYNAMIC_ICON_FILES[codeUpper];
+        }
+        // 3) Fallback to generated color tile
+        else {
+            item.iconBg = iconBg;
+            item.iconFg = iconFg;
+        }
+        var actionIcon = item.iconFile || null;
+        item.action = (function (code, name, iconFile) {
+            return function () {
+                this.runExternal(function () { bbs.exec_xtrn(code); }, {
+                    programId: code,
+                    label: name,
+                    icon: iconFile || null
+                });
+            };
+        })(prog.code, prog.name, actionIcon);
+        items.push(item);
+    }
 	items.sort(function (a, b) {
 		var la = a.label.toLowerCase();
 		var lb = b.label.toLowerCase();
