@@ -175,6 +175,7 @@ IconShell.prototype.init = function () {
     this._toastHotspots = {};
     this._toastKeyBuffer = '';
     this._toastTokenCounter = 0;
+    this._shellPrefsInstance = null;
     // Track reserved hotspot commands so we avoid collisions
     this._reservedHotspotCommands = {};
     if (typeof ICSH_HOTSPOT_FILL_CMD === 'string' && ICSH_HOTSPOT_FILL_CMD.length === 1) {
@@ -424,10 +425,15 @@ IconShell.prototype._processChatUpdate = function (packet) {
         if (!this.activeSubprogram || this.activeSubprogram !== this.chat) {
             // Only show if message has text
             if (packet.data && packet.data.str) {
+                var nickName = (packet.data && packet.data.nick && (packet.data.nick.name || packet.data.nick)) ? (packet.data.nick.name || packet.data.nick) : 'Chat';
+                var netAddr = (packet.data && packet.data.nick && (packet.data.nick.host || packet.data.nick.netaddr)) ? (packet.data.nick.host || packet.data.nick.netaddr) : system.name;
                 this.showToast({
-                    message: packet.data.nick.name + ': ' + packet.data.str,
-                    avatar: { username: packet.data.nick.name, netaddr: packet.data.nick.host },
-                    title: packet.data.nick.name
+                    message: nickName + ': ' + packet.data.str,
+                    avatar: { username: nickName, netaddr: netAddr },
+                    title: nickName,
+                    launch: 'chat',
+                    category: 'json-chat',
+                    sender: nickName
                 });
             }
         }
@@ -438,17 +444,27 @@ IconShell.prototype._processChatUpdate = function (packet) {
     }
     // someone has joined
     if (packet && packet.oper && packet.oper.toUpperCase() === "SUBSCRIBE") {
+        var joinNick = packet.data && packet.data.nick ? packet.data.nick : 'Someone';
+        var joinSystem = packet.data && packet.data.system ? packet.data.system : system.name;
         this.showToast({
-            message: packet.data.nick + ' from ' + packet.data.system + " is here.",
-            avatar: { username: packet.data.nick, netaddr: packet.data.system },
-            title: packet.data.nick
+            message: joinNick + ' from ' + joinSystem + " is here.",
+            avatar: { username: joinNick, netaddr: joinSystem },
+            title: joinNick,
+            launch: 'chat',
+            category: 'json-chat',
+            sender: joinNick
         });
     }
     if (packet && packet.oper && packet.oper.toUpperCase() === "UNSUBSCRIBE") {
+        var leaveNick = packet.data && packet.data.nick ? packet.data.nick : 'Someone';
+        var leaveSystem = packet.data && packet.data.system ? packet.data.system : system.name;
         this.showToast({
-            message: packet.data.nick + ' from ' + packet.data.system + " has left.",
-            avatar: { username: packet.data.nick, netaddr: packet.data.system },
-            title: packet.data.nick
+            message: leaveNick + ' from ' + leaveSystem + " has left.",
+            avatar: { username: leaveNick, netaddr: leaveSystem },
+            title: leaveNick,
+            launch: 'chat',
+            category: 'json-chat',
+            sender: leaveNick
         });
     }
 
@@ -812,7 +828,6 @@ IconShell.prototype._cycleToasts = function () {
         if (toast && typeof toast.cycle === 'function') {
             try { toast.cycle(); } catch (e) { dbug('toast cycle error: ' + e, 'toast'); }
         }
-        if (toast && !toast._dismissed) this._updateToastHotspot(toast);
     }
 };
 
@@ -1017,6 +1032,45 @@ IconShell.prototype._removeScreensaverHotspot = function () {
     this._screensaverHotspotActive = false;
 };
 
+IconShell.prototype._getShellPrefs = function () {
+    if (this._shellPrefsInstance) return this._shellPrefsInstance;
+    if (typeof ShellPrefs === 'undefined') {
+        try {
+            load('future_shell/lib/subprograms/shell_prefs.js');
+        } catch (loadErr) {
+            try { log('[shell-prefs] load failed: ' + loadErr); } catch (_) { }
+        }
+    }
+    if (typeof ShellPrefs !== 'function') return null;
+    var opts = { shell: this };
+    try {
+        if (typeof user !== 'undefined' && user) {
+            if (typeof user.number === 'number') opts.userNumber = user.number;
+            if (user.alias) opts.userAlias = user.alias;
+        }
+    } catch (_) { }
+    try {
+        this._shellPrefsInstance = new ShellPrefs(opts);
+    } catch (instantiateErr) {
+        try { log('[shell-prefs] instantiate failed: ' + instantiateErr); } catch (_) { }
+        this._shellPrefsInstance = null;
+    }
+    return this._shellPrefsInstance;
+};
+
+IconShell.prototype.reloadShellPrefs = function () {
+    var prefs = this._shellPrefsInstance;
+    if (!prefs) prefs = this._getShellPrefs();
+    if (prefs && typeof prefs._load === 'function') {
+        try { prefs._load(); } catch (e) { try { log('[shell-prefs] reload failed: ' + e); } catch (_) { } }
+    }
+    return prefs;
+};
+
+IconShell.prototype.onShellPrefsSaved = function () {
+    this.reloadShellPrefs();
+};
+
 IconShell.prototype.showToast = function (params) {
     var self = this;
     var opts = params || {};
@@ -1025,7 +1079,22 @@ IconShell.prototype.showToast = function (params) {
     var launch = null;
     if (typeof opts.launch === 'string') launch = opts.launch;
     else if (typeof opts.subprogram === 'string') launch = opts.subprogram;
-    log('[toast] showToast title=' + (opts.title || '') + ' launch=' + (launch || ''));
+    var category = (typeof opts.category === 'string' && opts.category.length) ? opts.category : null;
+    var sender = (typeof opts.sender === 'string' && opts.sender.length) ? opts.sender : null;
+    if (category || sender) {
+        var prefs = this.reloadShellPrefs();
+        if (prefs && typeof prefs.shouldDisplayNotification === 'function') {
+            var allow = true;
+            try { allow = prefs.shouldDisplayNotification(category, sender); }
+            catch (_) { allow = true; }
+            try { log('[toast] prefs check category=' + (category || '') + ' sender=' + (sender || '') + ' allow=' + allow); } catch (_) { }
+            if (!allow) {
+                try { log('[toast] suppressed category=' + (category || 'unknown') + ' sender=' + (sender || 'unknown')); } catch (_) { }
+                return null;
+            }
+        }
+    }
+    log('[toast] showToast title=' + (opts.title || '') + ' launch=' + (launch || '') + ' category=' + (category || ''));
     var position = opts.position || 'bottom-right';
     var userOnDone = opts.onDone;
     opts.onDone = function (t) {
@@ -1199,6 +1268,12 @@ IconShell.prototype._registerToastHotspot = function (toast) {
     for (var y = startY; y <= endY; y++) {
         try { console.add_hotspot(cmd, false, startX, endX, y); } catch (_) { }
     }
+    toast.__shellMeta.rect = {
+        x: toast.toastFrame.x,
+        y: toast.toastFrame.y,
+        width: toast.toastFrame.width,
+        height: toast.toastFrame.height
+    };
 };
 
 IconShell.prototype._unregisterToastHotspot = function (toast) {
@@ -1208,6 +1283,7 @@ IconShell.prototype._unregisterToastHotspot = function (toast) {
     delete this._toastHotspots[cmd];
     if (this._reservedHotspotCommands) delete this._reservedHotspotCommands[cmd];
     toast.__shellMeta.command = null;
+    toast.__shellMeta.rect = null;
     log('[toast] unregister hotspot cmd=' + JSON.stringify(cmd) + ' code=' + (cmd ? cmd.charCodeAt(0) : 'null'));
     if (typeof console.delete_hotspot === 'function') {
         try { console.delete_hotspot(cmd); } catch (_) { }
@@ -1215,8 +1291,18 @@ IconShell.prototype._unregisterToastHotspot = function (toast) {
 };
 
 IconShell.prototype._updateToastHotspot = function (toast) {
-    if (!toast || toast._dismissed) return;
-    log('[toast] update hotspot launch=' + (toast.__shellMeta && toast.__shellMeta.launch || ''));
+    if (!toast || toast._dismissed || !toast.toastFrame) return;
+    var meta = toast.__shellMeta || {};
+    var rect = meta.rect || {};
+    var frame = toast.toastFrame;
+    if (rect && rect.x === frame.x && rect.y === frame.y && rect.width === frame.width && rect.height === frame.height) {
+        return;
+    }
+    log('[toast] update hotspot launch=' + (meta.launch || ''));
+    var cmd = meta.command;
+    if (cmd && typeof console.delete_hotspot === 'function') {
+        try { console.delete_hotspot(cmd); } catch (_) { }
+    }
     this._registerToastHotspot(toast);
 };
 
@@ -1285,9 +1371,7 @@ IconShell.prototype._reflowToastsForPosition = function (position) {
             this._updateToastHotspot(tm);
         }
     }
-    for (var z = 0; z < stack.length; z++) {
-        if (stack[z] && !stack[z]._dismissed) this._updateToastHotspot(stack[z]);
-    }
+    // Hotspots already updated during positioning above.
 };
 
 

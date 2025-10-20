@@ -660,7 +660,9 @@ MRCService.prototype._showToastForMessage = function (payload) {
     this.shell.showToast({
         title: payload.from || 'MRC',
         message: (payload.from || 'MRC') + ': ' + (payload.plain || '').substr(0, 120),
-        launch: 'mrc'
+        launch: 'mrc',
+        category: 'mrc',
+        sender: payload.from || 'mrc'
     });
 };
 

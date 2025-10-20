@@ -656,6 +656,27 @@ function NewsReader(opts) {
 }
 extend(NewsReader, Subprogram);
 
+function stripBlinkSequences(input) {
+    if (!input) return input;
+    return String(input).replace(/\x1B\[([0-9;]*?)m/g, function (match, params) {
+        if (!params) return match;
+        var list = params.split(';').filter(function (p) { return p.length; });
+        if (!list.length) return match;
+        var filtered = [];
+        var changed = false;
+        for (var i = 0; i < list.length; i++) {
+            if (list[i] === '5') {
+                changed = true;
+                continue;
+            }
+            filtered.push(list[i]);
+        }
+        if (!changed) return match;
+        if (!filtered.length) return '\x1B[0m';
+        return '\x1B[' + filtered.join(';') + 'm';
+    });
+}
+
 NewsReader.prototype._resetState = function () {
     this._destroyArticleIcon();
     this._destroyCategoryIcons();
@@ -1124,7 +1145,7 @@ NewsReader.prototype._renderAnsiPreview = function (frame, payload, opts) {
     opts = opts || {};
     var startRow = (typeof opts.startRow === 'number' && opts.startRow > 0) ? Math.floor(opts.startRow) : 0;
     var maxRows = (typeof opts.maxRows === 'number' && opts.maxRows > 0) ? Math.floor(opts.maxRows) : null;
-    var text = normalized.ansi;
+    var text = stripBlinkSequences(normalized.ansi);
     var width = Math.max(1, normalized.cols || frame.width || 80);
     var totalRows = (typeof normalized.rows === 'number') ? Math.max(0, normalized.rows) : this._countAnsiLines(text);
     if (startRow >= totalRows) startRow = Math.max(0, totalRows - 1);
@@ -2206,7 +2227,7 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
                 attr: WHITE | BG_CYAN,
                 focusAttr: focusAttr,
                 shadowAttr: shadowAttr,
-                backgroundColors: [RED, BG_RED],
+                backgroundColors: [LIGHTGRAY, BG_LIGHTGRAY],
                 shadowColors: [BLACK, BG_BLACK],
                 onClick: callback
             });
@@ -3276,7 +3297,7 @@ NewsReader.prototype._ensureArticleIcon = function (options) {
 
     var bgRed = BG_RED;
     var fgBlack = (typeof BLACK === 'number') ? BLACK : 0;
-    var containerAttr = bgRed | fgBlack;
+    var containerAttr = this.paletteAttr('READ_HEADER');
 
     var needsRebuild = true;
     if (this.articleHeaderFrame && this._currentIconKey === iconName && this._articleHeaderHasIcon === useIcon && this._articleHeaderHasCategory === hasCategoryIcon) needsRebuild = false;
@@ -3361,7 +3382,8 @@ NewsReader.prototype._ensureArticleIcon = function (options) {
 
     if (useIcon && this.articleIconFrame) {
         if (!this.articleIconObj) {
-            this.articleIconObj = new Icon(this.articleIconFrame, this.articleHeaderLabelFrame, { iconFile: iconName, label: '', iconBg: bgRed, iconFg: fgBlack });
+            var headerAttr = this.paletteAttr('READ_HEADER');
+            this.articleIconObj = new Icon(this.articleIconFrame, this.articleHeaderLabelFrame, { iconFile: iconName, label: '', iconBg: headerAttr.bg, iconFg: headerAttr.fg });
         }
         if (this.articleIconObj && typeof this.articleIconObj.render === 'function') {
             try { this.articleIconObj.render(); } catch (_erIco) { }

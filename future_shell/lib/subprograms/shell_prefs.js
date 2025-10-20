@@ -575,7 +575,12 @@ ShellPrefs.prototype.save = function () {
         this.preferences.updated = Date.now();
     }
     var ok = _spSaveUserPrefs(this._userKey, this.preferences);
-    if (ok) this._dirty = false;
+    if (ok) {
+        this._dirty = false;
+        if (this.shell && typeof this.shell.onShellPrefsSaved === 'function') {
+            try { this.shell.onShellPrefsSaved(this); } catch (_notifyErr) { }
+        }
+    }
     return ok;
 };
 
@@ -602,24 +607,33 @@ ShellPrefs.prototype.enter = function (done) {
 ShellPrefs.prototype._handleKey = function (key) {
     if (key === null || key === undefined) return false;
 
-    if ((typeof KEY_UP !== 'undefined' && key === KEY_UP) || key === "[A" || key === "OA" || key === 'KEY_UP' || key === "") {
+    var isUp = false;
+    var isDown = false;
+
+    if (typeof KEY_UP !== 'undefined' && key === KEY_UP) isUp = true;
+    if (typeof KEY_DOWN !== 'undefined' && key === KEY_DOWN) isDown = true;
+
+    if (key === '\x1B[A' || key === '\x1BOA' || key === 'KEY_UP' || key === '\x1E') isUp = true;
+    if (key === '\x1B[B' || key === '\x1BOB' || key === 'KEY_DOWN' || key === '\x1F' || key === '\n') isDown = true;
+
+    if (isUp) {
         this._moveSelection(-1);
         return true;
     }
 
-    if ((typeof KEY_DOWN !== 'undefined' && key === KEY_DOWN) || key === "[B" || key === "OB" || key === 'KEY_DOWN' || key === "") {
+    if (isDown) {
         this._moveSelection(1);
         return true;
     }
 
-    if ((typeof KEY_HOME !== 'undefined' && key === KEY_HOME) || key === "[H" || key === "OH" || key === 'KEY_HOME') {
+    if ((typeof KEY_HOME !== 'undefined' && key === KEY_HOME) || key === '\x1B[H' || key === '\x1BOH' || key === 'KEY_HOME') {
         this.selectedIndex = 0;
         this._renderList();
         this._updateStatus('Selected: ' + (this._currentRow() ? this._currentRow().label : ''));
         return true;
     }
 
-    if ((typeof KEY_END !== 'undefined' && key === KEY_END) || key === "[F" || key === "OF" || key === 'KEY_END') {
+    if ((typeof KEY_END !== 'undefined' && key === KEY_END) || key === '\x1B[F' || key === '\x1BOF' || key === 'KEY_END') {
         if (this._rows && this._rows.length) {
             this.selectedIndex = this._rows.length - 1;
             this._renderList();
@@ -628,7 +642,7 @@ ShellPrefs.prototype._handleKey = function (key) {
         return true;
     }
 
-    if ((typeof KEY_ENTER !== 'undefined' && key === KEY_ENTER) || key === '\r' || key === '\n' || key === ' ') {
+    if ((typeof KEY_ENTER !== 'undefined' && key === KEY_ENTER) || key === '\r' || key === ' ') {
         this._toggleSelection();
         return true;
     }
