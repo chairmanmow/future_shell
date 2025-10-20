@@ -1,5 +1,6 @@
 load("future_shell/lib/subprograms/chat_helpers.js");
 load("future_shell/lib/subprograms/subprogram.js"); // Base class
+load('future_shell/lib/subprograms/subprogram_hotspots.js');
 load('future_shell/lib/util/layout/button.js');
 load('future_shell/lib/util/layout/modal.js');
 if (typeof registerModuleExports !== 'function') {
@@ -14,6 +15,7 @@ function Chat(jsonchat, opts) {
         shell: opts.shell,
         timer: opts.timer
     });
+    this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'chat', layerName: 'chat-controls', priority: 70 });
     this.jsonchat = jsonchat; // persistent backend instance
     this.input = "";
     this.running = false;
@@ -521,10 +523,22 @@ Chat.prototype._cleanup = function () {
         try { this._activeRosterModal.close(); } catch (_) { }
     }
     this._activeRosterModal = null;
+    this._clearControlHotspots({ hard: true });
     this._disposeFrames();
 };
 
 Chat.prototype.cleanup = Chat.prototype._cleanup;
+
+Chat.prototype.restoreHotspots = function () {
+    try {
+        this._registerControlHotspots();
+        if (typeof this.draw === 'function') this.draw();
+    } catch (err) {
+        if (typeof log === 'function') {
+            try { log('[Chat] restoreHotspots error: ' + err); } catch (_) { }
+        }
+    }
+};
 
 
 Chat.prototype._destroyControlButtons = function () {
@@ -887,12 +901,13 @@ Chat.prototype._showRosterModal = function () {
     }
 };
 
-Chat.prototype._clearControlHotspots = function () {
+Chat.prototype._clearControlHotspots = function (opts) {
     if (typeof log === 'function') {
         try { log('[Chat] clearing control hotspots', 'chat'); } catch (_) { }
     }
-    if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
-        try { console.clear_hotspots(); } catch (_) { }
+    if (this.hotspots) {
+        if (opts && opts.hard) this.hotspots.clear();
+        else this.hotspots.deactivate();
     }
     this._hotspotActionMap = {};
     this._controlButtonHotkeyMap = {};
@@ -902,8 +917,8 @@ Chat.prototype._clearControlHotspots = function () {
 Chat.prototype._registerControlHotspots = function () {
     this._clearControlHotspots();
     if (!this._controlButtons || !this._controlButtons.length) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
     var registered = 0;
+    var defs = [];
     for (var i = 0; i < this._controlButtons.length; i++) {
         var entry = this._controlButtons[i];
         if (!entry || !entry.button || !entry.button.frame) continue;
@@ -917,7 +932,16 @@ Chat.prototype._registerControlHotspots = function () {
             var key = keys[k];
             this._controlButtonHotkeyMap[key] = entry.action;
             if (typeof key === 'string' && key.length === 1) {
-                try { console.add_hotspot(key, false, minX, maxX, minY, maxY); } catch (_) { }
+                defs.push({
+                    key: key,
+                    x: minX,
+                    y: minY,
+                    width: Math.max(1, maxX - minX + 1),
+                    height: Math.max(1, maxY - minY + 1),
+                    swallow: false,
+                    owner: 'chat:control',
+                    data: { action: entry.action }
+                });
                 registered += 1;
             }
         }
@@ -927,11 +951,21 @@ Chat.prototype._registerControlHotspots = function () {
             var rows = [];
             if (minY === maxY) rows.push(minY); else { rows.push(minY); rows.push(maxY); }
             for (var ry = 0; ry < rows.length; ry++) {
-                try { console.add_hotspot(entry.hotspotToken, false, minX, maxX, rows[ry]); } catch (_) { }
+                defs.push({
+                    key: entry.hotspotToken,
+                    x: minX,
+                    y: rows[ry],
+                    width: Math.max(1, maxX - minX + 1),
+                    height: 1,
+                    swallow: false,
+                    owner: 'chat:control-token',
+                    data: { action: entry.action }
+                });
             }
             registered += 1;
         }
     }
+    if (this.hotspots) this.hotspots.set(defs);
     if (typeof log === 'function') {
         try { log('[Chat] registered control hotspots => ' + registered, 'chat'); } catch (_) { }
     }

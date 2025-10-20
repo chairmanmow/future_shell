@@ -1,6 +1,7 @@
 load('future_shell/lib/subprograms/subprogram.js');
 // Use shared Icon renderer for consistency with main shell
 load('future_shell/lib/shell/icon.js');
+load('future_shell/lib/subprograms/subprogram_hotspots.js');
 if (typeof registerModuleExports !== 'function') {
 	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
@@ -72,9 +73,10 @@ if (typeof SCAN_NEW === 'undefined') var SCAN_NEW = (1 << 1);
    - If future automation needs scripted flows, supply params & remove interactive dependency.
    ------------------------------------------------------------------------- */
 function Mail(opts) {
-	opts = opts || {};
-	Subprogram.call(this, { name: 'mail', parentFrame: opts.parentFrame, shell: opts.shell });
-	this.shell = opts.shell || this.shell; // preserve any provided shell reference
+    opts = opts || {};
+    Subprogram.call(this, { name: 'mail', parentFrame: opts.parentFrame, shell: opts.shell });
+    this.shell = opts.shell || this.shell; // preserve any provided shell reference
+    this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'mail', layerName: 'mail', priority: 60 });
 	this.outputFrame = null;
 	this.footerFrame = null;
 	this.headerFrame = null;
@@ -475,8 +477,7 @@ Mail.prototype.draw = function () {
 	try { if (this.parentFrame && typeof this.parentFrame.top === 'function') this.parentFrame.top(); } catch (e) { }
 	var o = this.outputFrame; o.clear();
 	o.gotoxy(1, 1);
-	// Clear any prior hotspots (avoid shell leftovers triggering unexpected exits)
-	if (typeof console.clear_hotspots === 'function') try { console.clear_hotspots(); } catch (e) { }
+	if (this.hotspots) this.hotspots.clear();
 	var gridInfo = this.drawIconGrid(o) || { heightUsed: 3 };
 	this._iconGridHeight = gridInfo.heightUsed || 0;
 	// Register hotspots for each icon cell region (map to digit key 1..9 / A.. etc if >9 later)
@@ -780,20 +781,31 @@ Mail.prototype._drawMailLabel = function (frame, item, isSelected) {
 };
 
 Mail.prototype._addMouseHotspots = function () {
-	if (!this.iconCells || !this.iconCells.length) return;
-	if (typeof console.add_hotspot !== 'function') return;
+	if (!this.hotspots) return;
+	if (!this.iconCells || !this.iconCells.length) {
+		this.hotspots.clear();
+		return;
+	}
+	var defs = [];
 	for (var i = 0; i < this.iconCells.length && i < 9; i++) { // limit to 1-9 for now
 		var cell = this.iconCells[i];
-		var cmd = String(i + 1); // digit key triggers selection+invoke
+		if (!cell || !cell.icon) continue;
+		var cmd = String(i + 1);
 		var min_x = cell.icon.x;
 		var max_x = cell.icon.x + cell.icon.width - 1;
 		var min_y = cell.icon.y;
 		var max_y = cell.icon.y + cell.icon.height; // include label line below
-		for (var y = min_y; y <= max_y; y++) {
-			// swallow=false to prevent accidental propagation of clicks across gaps
-			try { console.add_hotspot(cmd, false, min_x, max_x, y); } catch (e) { }
-		}
+		defs.push({
+			key: cmd,
+			x: min_x,
+			y: min_y,
+			width: Math.max(1, max_x - min_x + 1),
+			height: Math.max(1, max_y - min_y + 1),
+			swallow: false,
+			owner: 'mail'
+		});
 	}
+	this.hotspots.set(defs);
 };
 
 Mail.prototype.ensureIconVisible = function () { };
@@ -817,9 +829,7 @@ Mail.prototype._cleanup = function () {
 	this._destroyPromptFrames();
 	this._destroyIconCells();
 	this._resetState();
-	try {
-		if (typeof console.clear_hotspots === 'function') console.clear_hotspots();
-	} catch (e) { }
+	if (this.hotspots) this.hotspots.clear();
 	if (this.outputFrame) {
 		try { this.outputFrame.clear(); } catch (_e) { }
 		try { this.outputFrame.close(); } catch (_e2) { }
@@ -853,20 +863,18 @@ Mail.prototype._resetState = function () {
 };
 
 Mail.prototype.exit = function () {
-	log('exiting mail');
-	if (typeof console.clear_hotspots === 'function') {
-		try { console.clear_hotspots(); } catch (e) { }
-	}
-	var shell = this.shell;
-	Subprogram.prototype.exit.call(this);
+    log('exiting mail');
+    if (this.hotspots) this.hotspots.clear();
+    var shell = this.shell;
+    Subprogram.prototype.exit.call(this);
 	if (shell) {
 		if (shell._pendingSubLaunch && shell._pendingSubLaunch.instance === this) {
 			shell._pendingSubLaunch = null;
 		}
-		if (shell.activeSubprogram === this) {
-			shell.exitSubprogram();
-		}
-	}
+        if (shell.activeSubprogram === this) {
+            shell.exitSubprogram();
+        }
+    }
 };
 
 // Export constructor globally

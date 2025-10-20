@@ -10,6 +10,7 @@
 
 load('future_shell/lib/subprograms/subprogram.js');
 load('future_shell/lib/shell/icon.js');
+load('future_shell/lib/subprograms/subprogram_hotspots.js');
 load('sbbsdefs.js');
 load('file_size.js');
 
@@ -18,6 +19,7 @@ load('file_size.js');
 function FileArea(opts) {
     opts = opts || {};
     Subprogram.call(this, { name: 'file-area', parentFrame: opts.parentFrame, shell: opts.shell });
+    this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'file-area', layerName: 'file-area', priority: 55 });
 
     // Frames (single surface like NewsReader)
     this.headerFrame = null;
@@ -345,20 +347,18 @@ FileArea.prototype._ensureHotspotChars = function () {
 };
 
 FileArea.prototype._releaseHotspots = function () {
-    if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
-        try { console.clear_hotspots(); } catch (_e) { }
-    }
+    if (this.hotspots) this.hotspots.clear();
     this._hotspotMap = {};
 };
 
 FileArea.prototype._registerGridHotspots = function (cells) {
     this._releaseHotspots();
     if (!cells || !cells.length) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
     var chars = this._ensureHotspotChars();
     var baseX = this.listFrame ? this.listFrame.x : 1;
     var baseY = this.listFrame ? this.listFrame.y : 1;
     var max = Math.min(chars.length, cells.length);
+    var defs = [];
     for (var i = 0; i < max; i++) {
         var cell = cells[i]; if (!cell || !cell.icon) continue;
         var cmd = chars[i];
@@ -372,27 +372,43 @@ FileArea.prototype._registerGridHotspots = function (cells) {
             if (ly < minY) minY = ly;
             if (ly2 > maxY) maxY = ly2;
         }
-        for (var y = minY; y <= maxY; y++) {
-            try { console.add_hotspot(cmd, false, minX, maxX, y); } catch (_e) { }
-        }
+        defs.push({
+            key: cmd,
+            x: minX,
+            y: minY,
+            width: Math.max(1, maxX - minX + 1),
+            height: Math.max(1, maxY - minY + 1),
+            swallow: false,
+            owner: 'file-area:grid'
+        });
         this._hotspotMap[cmd] = cell.index;
     }
+    if (this.hotspots) this.hotspots.set(defs);
 };
 
 FileArea.prototype._registerListHotspots = function (rows) {
     this._releaseHotspots();
     if (!rows || !rows.length || !this.listFrame) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
     var chars = this._ensureHotspotChars();
     var baseX = this.listFrame.x, baseY = this.listFrame.y, width = this.listFrame.width;
     var max = Math.min(chars.length, rows.length);
+    var defs = [];
     for (var i = 0; i < max; i++) {
         var row = rows[i]; if (!row || typeof row.index !== 'number') continue;
         var cmd = chars[i];
         var absY = baseY + row.y - 1;
-        try { console.add_hotspot(cmd, false, baseX, baseX + width - 1, absY); } catch (_e) { }
+        defs.push({
+            key: cmd,
+            x: baseX,
+            y: absY,
+            width: Math.max(1, width),
+            height: 1,
+            swallow: false,
+            owner: 'file-area:list'
+        });
         this._hotspotMap[cmd] = row.index;
     }
+    if (this.hotspots) this.hotspots.set(defs);
 };
 
 // ---------- Grid renderers (LIBS / DIRS) ----------

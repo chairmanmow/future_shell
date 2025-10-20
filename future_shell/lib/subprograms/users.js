@@ -1,3 +1,5 @@
+load('future_shell/lib/subprograms/subprogram.js');
+load('future_shell/lib/subprograms/subprogram_hotspots.js');
 if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
@@ -5,7 +7,9 @@ try { load('future_shell/lib/shell/icon.js'); } catch (_) { }
 
 function Users(opts) {
     opts = opts || {};
-    Subprogram.call(this, { name: 'user-list', parentFrame: opts.parentFrame });
+    Subprogram.call(this, { name: 'user-list', parentFrame: opts.parentFrame, shell: opts.shell });
+    this.shell = opts.shell || this.shell;
+    this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'users', layerName: 'users', priority: 65 });
     // Robust avatar library resolution (paths can shift due to shell/module loader changes)
     this._avatarLib = (function () {
         var tried = [];
@@ -268,21 +272,23 @@ Users.prototype.draw = function () {
     this._destroyTileIcons();
     var users = this._visibleUsers();
     this._hotspotMap = {};
-    if (typeof console.clear_hotspots === 'function') try { console.clear_hotspots(); } catch (e) { }
+    if (this.hotspots) this.hotspots.clear();
     var tiles = this._buildTiles(users);
     var meta = this._tileMeta || { slots: tiles.length };
     var maxTiles = meta.slots || tiles.length;
     this._currentTiles = tiles.slice(0, maxTiles);
     if (this.selectedIndex >= this._currentTiles.length) this.selectedIndex = Math.max(this._currentTiles.length - 1, 0);
     if (this.selectedIndex < 0) this.selectedIndex = 0;
+    var hotspotDefs = [];
     for (var i = 0; i < this._currentTiles.length && i < maxTiles; i++) {
-        this._drawTile(i, this._currentTiles[i]);
+        this._drawTile(i, this._currentTiles[i], hotspotDefs);
     }
+    if (this.hotspots) this.hotspots.set(hotspotDefs);
     this._drawStatus();
     try { lf.cycle(); } catch (e) { }
 };
 
-Users.prototype._drawTile = function (index, tile) {
+Users.prototype._drawTile = function (index, tile, hotspotDefs) {
     if (!tile) return;
     var meta = this._tileMeta; if (!meta) return;
     var lf = this.listFrame; if (!lf) return;
@@ -368,15 +374,20 @@ Users.prototype._drawTile = function (index, tile) {
         if (record) record.iconFrames = [iconFrame, labelFrame];
 
         // Hotspots for back tile
-        if (typeof console.add_hotspot === 'function') {
-            var backCommands = ['0', 'B', 'b'];
-            for (var bc = 0; bc < backCommands.length; bc++) {
-                var cmdB = backCommands[bc];
-                for (var by = 0; by < iconHeight + 1; by++) {
-                    try { console.add_hotspot(cmdB, false, iconX, iconX + iconWidth - 1, iconY + by); } catch (e) { }
-                }
-                this._hotspotMap[cmdB] = index;
-            }
+        if (!hotspotDefs) hotspotDefs = [];
+        var backCommands = ['0', 'B', 'b'];
+        for (var bc = 0; bc < backCommands.length; bc++) {
+            var cmdB = backCommands[bc];
+            hotspotDefs.push({
+                key: cmdB,
+                x: iconX,
+                y: iconY,
+                width: iconWidth,
+                height: iconHeight + 1,
+                swallow: false,
+                owner: 'users:back'
+            });
+            this._hotspotMap[cmdB] = index;
         }
         return;
     }
@@ -503,11 +514,19 @@ Users.prototype._drawTile = function (index, tile) {
         try { lf.gotoxy(x, footerY); lf.putmsg((selected ? '\x01h' : '') + footer + '\x01n'); } catch (e) { }
     }
 
-    if (typeof console.add_hotspot === 'function' && index < 36) {
+    if (index < 36) {
         var cmd = (index < 10) ? String(index) : String.fromCharCode('A'.charCodeAt(0) + (index - 10));
-        for (var yy2 = 0; yy2 < contentHeight; yy2++) {
-            try { console.add_hotspot(cmd, false, x + lf.x - 1, x + lf.x + tileW - 2, yBase + lf.y + yy2 - 1); } catch (e) { }
-        }
+        if (!hotspotDefs) hotspotDefs = [];
+        hotspotDefs.push({
+            key: cmd,
+            x: x + lf.x - 1,
+            y: yBase + lf.y - 1,
+            width: Math.max(1, tileW),
+            height: Math.max(1, contentHeight),
+            swallow: false,
+            owner: 'users:tile',
+            data: { index: index }
+        });
         this._hotspotMap[cmd] = index;
     }
 };
@@ -896,7 +915,7 @@ Users.prototype._handleMainKey = function (k) {
 };
 
 Users.prototype.cleanup = function () {
-    if (typeof console.clear_hotspots === 'function') { try { console.clear_hotspots(); } catch (e) { } }
+    if (this.hotspots) this.hotspots.clear();
     this._destroyTileIcons();
     try { if (this.listFrame) this.listFrame.close(); } catch (e) { }
     try { if (this.statusFrame) this.statusFrame.close(); } catch (e) { }

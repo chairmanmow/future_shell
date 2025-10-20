@@ -1515,6 +1515,9 @@ IconShell.prototype._ensureToastHotspotExclusivity = function () {
     try {
         this.hotspotManager.stashHotSpots();
         this._toastHotspotStashActive = true;
+        if (this.activeSubprogram && typeof this.activeSubprogram.refresh === 'function') {
+            try { this.activeSubprogram.refresh(); } catch (_) { }
+        }
     } catch (stashErr) {
         try { log('[toast] hotspot stash error: ' + stashErr); } catch (_) { }
     }
@@ -1535,6 +1538,7 @@ IconShell.prototype._refreshToastHotspotLayer = function () {
     if (!this.hotspotManager || !this._toastHotspotLayerId) return;
     var defs = [];
     var toastRects = [];
+    var metaList = [];
     for (var key in this._toastHotspots) {
         if (!this._toastHotspots.hasOwnProperty(key)) continue;
         var toast = this._toastHotspots[key];
@@ -1549,6 +1553,7 @@ IconShell.prototype._refreshToastHotspotLayer = function () {
             width: frame.width,
             height: toastHeight
         };
+    metaList.push(meta);
         defs.push({
             key: key,
             x: frame.x,
@@ -1562,6 +1567,7 @@ IconShell.prototype._refreshToastHotspotLayer = function () {
         toastRects.push(meta.rect);
     }
     if (defs.length) {
+        this._styleToastFrames(metaList);
         if (this._toastDismissCmd) {
             var dismissRegions = this._computeToastDismissRegions(toastRects);
             for (var i = 0; i < dismissRegions.length; i++) {
@@ -1585,6 +1591,18 @@ IconShell.prototype._refreshToastHotspotLayer = function () {
         this.hotspotManager.deactivateLayer(this._toastHotspotLayerId);
     }
 };
+IconShell.prototype._styleToastFrames = function (metaList) {
+    if (!metaList || !metaList.length) return;
+    for (var i = 0; i < metaList.length; i++) {
+        var meta = metaList[i];
+        if (!meta) continue;
+        var toast = meta.toast;
+        if (!toast || typeof toast.refreshTheme !== 'function') continue;
+        try { toast.refreshTheme(); } catch (err) {
+            try { log('[toast] refreshTheme error: ' + err); } catch (_) { }
+        }
+    }
+};
 IconShell.prototype._registerToastHotspot = function (toast) {
     if (!toast || !toast.toastFrame) return;
     if (!this._toastHotspots) this._toastHotspots = {};
@@ -1600,6 +1618,7 @@ IconShell.prototype._registerToastHotspot = function (toast) {
         this._reservedHotspotCommands[token] = true;
         toast.__shellMeta.command = token;
     }
+    toast.__shellMeta.toast = toast;
     var cmd = toast.__shellMeta.command;
     if (!cmd) return;
     if (this.hotspotManager && this._toastHotspotLayerId && !this._toastHotspotStashActive) {

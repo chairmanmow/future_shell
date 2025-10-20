@@ -106,6 +106,7 @@ function Toast(options) {
         if (this.avatarData) hasAvatar = true;
     }
     var hasProgramIcon = !!programIconName && !hasAvatar;
+    this._programIconName = hasProgramIcon ? programIconName : null;
     var rawMessage = options.message;
     if (rawMessage === undefined || rawMessage === null) rawMessage = '';
     rawMessage = String(rawMessage);
@@ -193,6 +194,7 @@ function Toast(options) {
     this._wrapWidth = messageWrapWidth;
     this._rawMessage = rawMessage;
     this._cleanMessage = cleanMessage;
+    this._messageBorderAttr = (typeof BG_BLUE !== 'undefined') ? BG_BLUE : 0;
 
     this.dismiss = function (parentFrame) {
         if (self._dismissed) return;
@@ -237,6 +239,78 @@ Toast.prototype.cycle = function () {
     if (this._dismissed) return;
     if (this._timeout > 0 && (time() - this._startTime) * 1000 >= this._timeout) {
         this.dismiss();
+    }
+};
+
+Toast.prototype.refreshTheme = function () {
+    var frameAttr;
+    if (typeof ICSH_ATTR === 'function') frameAttr = ICSH_ATTR('TOAST_FRAME');
+    else if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS && ICSH_VALS.TOAST_FRAME && typeof ICSH_VALS.TOAST_FRAME.BG === 'number' && typeof ICSH_VALS.TOAST_FRAME.FG === 'number') {
+        frameAttr = ICSH_VALS.TOAST_FRAME.BG | ICSH_VALS.TOAST_FRAME.FG;
+    } else {
+        frameAttr = ((typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0) | ((typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : 7);
+    }
+    var msgAttr;
+    if (typeof ICSH_ATTR === 'function') msgAttr = ICSH_ATTR('TOAST_MSG');
+    else if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS && ICSH_VALS.TOAST_MSG) {
+        var msgVal = ICSH_VALS.TOAST_MSG;
+        if (typeof msgVal === 'number') msgAttr = msgVal;
+        else msgAttr = (msgVal.BG || 0) | (msgVal.FG || 0);
+    } else {
+        msgAttr = ((typeof BG_MAGENTA !== 'undefined') ? BG_MAGENTA : 0) | ((typeof WHITE !== 'undefined') ? WHITE : 7);
+    }
+    var avatarAttr;
+    if (typeof ICSH_ATTR === 'function') avatarAttr = ICSH_ATTR('TOAST_AVATAR');
+    else if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS && ICSH_VALS.TOAST_AVATAR) {
+        var avVal = ICSH_VALS.TOAST_AVATAR;
+        if (typeof avVal === 'number') avatarAttr = avVal;
+        else avatarAttr = (avVal.BG || 0) | (avVal.FG || 0);
+    } else {
+        avatarAttr = msgAttr;
+    }
+    if (this.toastFrame) {
+        this.toastFrame.attr = frameAttr;
+        this.toastFrame.transparent = true;
+        try { if (typeof this.toastFrame.top === 'function') this.toastFrame.top(); } catch (_) { }
+        try { if (typeof this.toastFrame.cycle === 'function') this.toastFrame.cycle(); } catch (_) { }
+    }
+    var borderAttr = (this._messageBorderAttr !== undefined && this._messageBorderAttr !== null) ? this._messageBorderAttr : ((typeof BG_BLUE !== 'undefined') ? BG_BLUE : (frameAttr & 0xF0));
+    var titleAttr = (typeof WHITE !== 'undefined' && typeof BG_GREEN !== 'undefined') ? (WHITE | BG_GREEN) : msgAttr;
+    if (this.msgContainer) {
+        this.msgContainer.attr = msgAttr;
+        try { this.msgContainer.clear(msgAttr); } catch (_) { }
+        if (typeof this.msgContainer.drawBorder === 'function') {
+            var titleInfo = this.title ? { x: 1, y: 1, attr: titleAttr, text: String(this.title) } : null;
+            try { this.msgContainer.drawBorder(borderAttr, titleInfo); } catch (_) { }
+        }
+        try { if (typeof this.msgContainer.cycle === 'function') this.msgContainer.cycle(); } catch (_) { }
+    }
+    if (this.msgFrame) {
+        this.msgFrame.attr = msgAttr;
+        try { this.msgFrame.clear(msgAttr); } catch (_) { }
+        this.msgFrame.home();
+        var lines = this._wrappedLines || [];
+        for (var i = 0; i < lines.length && i < this.msgFrame.height; i++) {
+            var line = lines[i];
+            if (line.length > this.msgFrame.width) line = line.substr(0, this.msgFrame.width);
+            try {
+                this.msgFrame.gotoxy(1, i + 1);
+                this.msgFrame.putmsg(line);
+            } catch (_) { }
+        }
+        try { if (typeof this.msgFrame.cycle === 'function') this.msgFrame.cycle(); } catch (_) { }
+    }
+    if (this.avatarFrame) {
+        this.avatarFrame.attr = avatarAttr;
+        try { this.avatarFrame.clear(avatarAttr); } catch (_) { }
+        if (this.avatarData) this.insertAvatarData();
+        try { if (typeof this.avatarFrame.cycle === 'function') this.avatarFrame.cycle(); } catch (_) { }
+    }
+    if (this.programIconFrame) {
+        this.programIconFrame.attr = avatarAttr;
+        try { this.programIconFrame.clear(avatarAttr); } catch (_) { }
+        if (this._programIconName) this._renderProgramIcon(this._programIconName);
+        try { if (typeof this.programIconFrame.cycle === 'function') this.programIconFrame.cycle(); } catch (_) { }
     }
 };
 
