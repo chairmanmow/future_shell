@@ -254,7 +254,7 @@ Users.prototype._visibleUsers = function () {
 
 Users.prototype._buildTiles = function (users) {
     var tiles = [];
-    tiles.push({ type: 'back' });
+    if (this.page === 0) tiles.push({ type: 'back' });
     for (var i = 0; i < users.length; i++) tiles.push({ type: 'user', user: users[i] });
     return tiles;
 };
@@ -837,6 +837,43 @@ Users.prototype.handleKey = function (k) {
 // Main (non-modal) key dispatch extracted so modal override above can delegate
 Users.prototype._handleMainKey = function (k) {
     if (!k) return;
+    if (typeof k === 'string') {
+        if (k.length === 1) {
+            switch (k.charCodeAt(0)) {
+                case 10: // LF (Doorway down arrow)
+                    k = KEY_DOWN; break;
+                case 6:  // ^F (Doorway right arrow)
+                    k = KEY_RIGHT; break;
+                case 30: // RS (Doorway up arrow in CP437 clients)
+                    k = KEY_UP; break;
+                case 29: // GS (Doorway left)
+                    k = KEY_LEFT; break;
+                case 31: // US (Doorway up)
+                    k = KEY_UP; break;
+                case 1:  // ^A (Doorway Home)
+                    k = KEY_HOME; break;
+                case 5:  // ^E (Doorway End)
+                    k = KEY_END; break;
+            }
+        } else if (k.length >= 2 && k.charAt(0) === '\x1b') {
+            // ANSI escape sequences (ESC [ A/B/C/D)
+            var seq = k.substr(1);
+            if (seq === '[A') k = KEY_UP;
+            else if (seq === '[B') k = KEY_DOWN;
+            else if (seq === '[C') k = KEY_RIGHT;
+            else if (seq === '[D') k = KEY_LEFT;
+            else if (seq === '[5~') k = KEY_PGUP;
+            else if (seq === '[6~') k = KEY_PGDN;
+            else if (seq === '[H') k = KEY_HOME;
+            else if (seq === '[F') k = KEY_END;
+            else if (seq === 'OA') k = KEY_UP;
+            else if (seq === 'OB') k = KEY_DOWN;
+            else if (seq === 'OC') k = KEY_RIGHT;
+            else if (seq === 'OD') k = KEY_LEFT;
+            else if (seq === 'OP') k = KEY_HOME;
+            else if (seq === 'OQ') k = KEY_END;
+        }
+    }
     if (this._hotspotMap && this._hotspotMap[k] !== undefined) {
         var tilesHot = this._currentTiles || [];
         var mapped = this._hotspotMap[k];
@@ -857,61 +894,122 @@ Users.prototype._handleMainKey = function (k) {
         case 'O': case 'o': this._toggleWhichUsers(); this.page = 0; this.selectedIndex = 0; this.draw(); return;
         case 'N': case 'n': this.sortMode = 'N'; this.page = 0; this.selectedIndex = 0; this.draw(); return;
         case 'L': case 'l': this.sortMode = 'L'; this.page = 0; this.selectedIndex = 0; this.draw(); return;
-        case KEY_LEFT: {
+        case KEY_LEFT:
             if (!tileCount) return;
-            if (this.selectedIndex > 0) {
-                var prevLeft = this.selectedIndex;
-                var nextLeft = prevLeft - 1;
-                this.selectedIndex = nextLeft;
-                if (!this._applySelectionChange(prevLeft, nextLeft)) this.draw();
-            }
+            if (this._shiftSelectionLocal(-1)) return;
+            this._switchPage(-1, meta, (meta && meta.cols) ? meta.cols - 1 : 0, true);
             return;
-        }
-        case KEY_RIGHT: {
+        case KEY_RIGHT:
             if (!tileCount) return;
-            if (this.selectedIndex < tileCount - 1) {
-                var prevRight = this.selectedIndex;
-                var nextRight = prevRight + 1;
-                this.selectedIndex = nextRight;
-                if (!this._applySelectionChange(prevRight, nextRight)) this.draw();
-            }
+            if (this._shiftSelectionLocal(1)) return;
+            this._switchPage(1, meta, 0, false);
             return;
-        }
-        case KEY_UP: {
+        case KEY_UP:
             if (!meta || !meta.cols) return;
             if (!tileCount) return;
-            var targetUp = this.selectedIndex - meta.cols;
-            if (targetUp >= 0 && targetUp < tileCount) {
-                var prevUp = this.selectedIndex;
-                this.selectedIndex = targetUp;
-                if (!this._applySelectionChange(prevUp, targetUp)) this.draw();
-            }
+            if (this._shiftSelectionLocal(-(meta.cols || 1))) return;
+            this._switchPage(-1, meta, this._localColumn(meta), true);
             return;
-        }
-        case KEY_DOWN: {
+        case KEY_DOWN:
             if (!meta || !meta.cols) return;
             if (!tileCount) return;
-            var targetDown = this.selectedIndex + meta.cols;
-            if (targetDown < tileCount) {
-                var prevDown = this.selectedIndex;
-                this.selectedIndex = targetDown;
-                if (!this._applySelectionChange(prevDown, targetDown)) this.draw();
-            }
+            if (this._shiftSelectionLocal(meta.cols || 1)) return;
+            this._switchPage(1, meta, this._localColumn(meta), false);
             return;
-        }
         case KEY_PGUP:
-            if (!this.pageSize) return;
-            if (this.page > 0) { this.page--; this.selectedIndex = 0; this.draw(); }
+            if (!meta || !meta.cols) return;
+            this._switchPage(-1, meta, this._localColumn(meta), false);
             return;
-        case KEY_PGDN: {
-            if (!this.pageSize) return;
-            var total = this._sortedFiltered ? this._sortedFiltered.length : this._filterUsers().length;
-            var maxPage = total ? Math.floor((total - 1) / this.pageSize) : 0;
-            if (this.page < maxPage) { this.page++; this.selectedIndex = 0; this.draw(); }
+        case KEY_PGDN:
+            if (!meta || !meta.cols) return;
+            this._switchPage(1, meta, this._localColumn(meta), false);
             return;
-        }
         case '\r': case '\n': this._openModalForSelected(); return;
     }
+};
+
+Users.prototype._currentUserList = function () {
+    if (this._sortedFiltered && this._sortedFiltered.length) return this._sortedFiltered;
+    var list = this._filterUsers();
+    if (this.sortMode === 'L') list.sort(function (a, b) { return b.laston - a.laston; });
+    else if (this.sortMode === 'N') list.sort(function (a, b) {
+        var A = a.alias.toLowerCase(), B = b.alias.toLowerCase();
+        if (A > B) return 1;
+        if (A < B) return -1;
+        return 0;
+    });
+    this._sortedFiltered = list;
+    return list;
+};
+
+Users.prototype._firstUserIndex = function () {
+    return this.page === 0 ? 1 : 0;
+};
+
+Users.prototype._localColumn = function (meta) {
+    var cols = (meta && meta.cols) || 1;
+    var start = this._firstUserIndex();
+    var local = this.selectedIndex - start;
+    if (local < 0) local = 0;
+    return local % cols;
+};
+
+Users.prototype._shiftSelectionLocal = function (offset) {
+    var tiles = this._currentTiles || [];
+    if (!tiles.length) return false;
+    var first = this._firstUserIndex();
+    var last = tiles.length - 1;
+    if (last < first) return false;
+    var target = this.selectedIndex + offset;
+    if (target < first || target > last) return false;
+    var prev = this.selectedIndex;
+    this.selectedIndex = target;
+    if (!this._applySelectionChange(prev, target)) this.draw();
+    return true;
+};
+
+Users.prototype._indexForColumnOnPage = function (meta, column, preferBottom) {
+    var tiles = this._currentTiles || [];
+    if (!tiles.length) return 0;
+    var cols = (meta && meta.cols) || 1;
+    var start = this._firstUserIndex();
+    var count = Math.max(0, tiles.length - start);
+    if (!count) return start;
+    var rows = Math.max(1, Math.ceil(count / cols));
+    var targetRow = preferBottom ? rows - 1 : 0;
+    var entriesInRow = (targetRow === rows - 1) ? (count % cols || cols) : cols;
+    var col = Math.max(0, Math.min(typeof column === 'number' ? column : 0, entriesInRow - 1));
+    var idx = start + targetRow * cols + col;
+    if (idx >= start + count) idx = start + count - 1;
+    return idx;
+};
+
+Users.prototype._switchPage = function (deltaPage, meta, column, preferBottom) {
+    var list = this._currentUserList();
+    if (!list.length) return false;
+    var perPage = Math.max(1, this.pageSize || 1);
+    var newPage = this.page + deltaPage;
+    if (newPage < 0) {
+        if (this.page === 0 && this._firstUserIndex() === 1) {
+            if (this.selectedIndex !== 0) {
+                var prev = this.selectedIndex;
+                this.selectedIndex = 0;
+                if (!this._applySelectionChange(prev, 0)) this.draw();
+                return true;
+            }
+        }
+        return false;
+    }
+    var maxPage = Math.max(0, Math.ceil(list.length / perPage) - 1);
+    if (newPage > maxPage) return false;
+    var prevSelected = this.selectedIndex;
+    this.page = newPage;
+    this.selectedIndex = 0;
+    this.draw();
+    var idx = this._indexForColumnOnPage(meta, column, preferBottom);
+    this.selectedIndex = idx;
+    if (!this._applySelectionChange(prevSelected, idx)) this.draw();
+    return true;
 };
 
 Users.prototype.cleanup = function () {

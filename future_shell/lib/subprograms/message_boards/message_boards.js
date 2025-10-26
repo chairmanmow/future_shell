@@ -3505,7 +3505,8 @@ MessageBoard.prototype._promptSearch = function (preferredCode, returnView) {
     this._writeStatus('SEARCH: Unable to open inline prompt for ' + subName);
 };
 
-MessageBoard.prototype._scanMessagesAddressedToUser = function () {
+MessageBoard.prototype._scanMessagesAddressedToUser = function (opts) {
+    opts = opts || {};
     var now = 0;
     if (typeof Date !== 'undefined' && Date.now) now = Date.now();
     else if (typeof time === 'function') now = time() * 1000;
@@ -3527,13 +3528,22 @@ MessageBoard.prototype._scanMessagesAddressedToUser = function () {
     if (typeof SCAN_UNREAD !== 'undefined') mode |= SCAN_UNREAD;
     if (!mode && typeof SCAN_NEW !== 'undefined') mode |= SCAN_NEW;
     try {
+        if (typeof console !== 'undefined' && typeof console.clear === 'function') console.clear();
         if (mode) bbs.scan_subs(mode, true);
         else bbs.scan_subs(undefined, true);
+        console.pause();
     } catch (e) {
         this._writeStatus('SCAN: Unable to start scan');
     } finally {
         this._scanInProgress = false;
         if (now) this._lastScanTimestamp = now;
+        try { this._writeStatus('Scan complete'); } catch (_) { }
+        if (opts.refreshView !== false) {
+            try {
+                if (typeof this._renderCurrentView === 'function') this._renderCurrentView(this.view || 'group');
+                else if (typeof this.draw === 'function') this.draw();
+            } catch (_) { }
+        }
     }
 };
 

@@ -5,12 +5,104 @@ if (typeof utf8_cp437 === 'undefined') {
     try { load('utf8_cp437.js'); } catch (_encErr) { }
 }
 load("future_shell/lib/subprograms/subprogram.js");
+load('future_shell/lib/subprograms/subprogram_hotspots.js');
 if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 load('future_shell/lib/shell/icon.js');
 load('future_shell/lib/util/gif2ans/img_loader.js')
 load('future_shell/lib/util/layout/button.js');
+
+function newsreaderEnsureTrailingSlash(path) {
+    if (!path) return '';
+    var last = path.charAt(path.length - 1);
+    if (last === '/' || last === '\\') return path;
+    return path + '/';
+}
+
+function newsreaderEnsureDirectory(path) {
+    if (!path) return false;
+    var normalized = path;
+    while (normalized.length && (normalized.charAt(normalized.length - 1) === '/' || normalized.charAt(normalized.length - 1) === '\\')) {
+        normalized = normalized.substring(0, normalized.length - 1);
+    }
+    if (!normalized.length) return false;
+    if (normalized.length === 2 && normalized.charAt(1) === ':') return true;
+    if (file_isdir(normalized)) return true;
+    var idx = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+    if (idx > 0) {
+        var parent = normalized.substring(0, idx);
+        if (parent && parent !== normalized) newsreaderEnsureDirectory(parent);
+    }
+    try { mkdir(normalized); } catch (_mkdirErr) { }
+    return file_isdir(normalized);
+}
+
+function newsreaderResolveDataBaseDir() {
+    var base = '';
+    if (typeof system !== 'undefined' && system && system.mods_dir) base = system.mods_dir;
+    else if (typeof js !== 'undefined' && js && js.exec_dir) base = js.exec_dir;
+    if (!base) return '';
+    base = newsreaderEnsureTrailingSlash(base) + 'future_shell/data';
+    if (!newsreaderEnsureDirectory(base)) return '';
+    return newsreaderEnsureTrailingSlash(base);
+}
+
+function newsreaderResolveFavoritesDirectory() {
+    var base = newsreaderResolveDataBaseDir();
+    if (!base) return '';
+    var dir = base + 'newsreader';
+    if (!newsreaderEnsureDirectory(dir)) return '';
+    return newsreaderEnsureTrailingSlash(dir);
+}
+
+function newsreaderResolveUserKey() {
+    if (typeof user === 'object' && user) {
+        if (typeof user.number === 'number' && user.number > 0) return 'user' + user.number;
+        if (user.alias) return 'alias_' + newsreaderSlugify(user.alias);
+    }
+    return 'guest';
+}
+
+function newsreaderResolveFavoritesFile(userKey) {
+    var dir = newsreaderResolveFavoritesDirectory();
+    if (!dir) return null;
+    var key = userKey || newsreaderResolveUserKey();
+    return dir + 'favorites_' + key + '.json';
+}
+
+function newsreaderReadFavoritesFile(path) {
+    if (!path) return [];
+    var file = new File(path);
+    if (!file.exists) return [];
+    if (!file.open('r')) return [];
+    var text = '';
+    try { text = file.readAll().join('\n'); }
+    catch (_favReadErr) { text = ''; }
+    file.close();
+    if (!text) return [];
+    try {
+        var parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && Array.isArray(parsed.feeds)) return parsed.feeds;
+    } catch (_favParseErr) { }
+    return [];
+}
+
+function newsreaderWriteFavoritesFile(path, list) {
+    if (!path) return false;
+    var file = new File(path);
+    if (!file.open('w')) return false;
+    try {
+        var payload = JSON.stringify({ feeds: list || [] });
+        file.write(payload);
+    } catch (_favWriteErr) {
+        try { file.close(); } catch (_closeErr) { }
+        return false;
+    }
+    file.close();
+    return true;
+}
 
 function resolveAttr(key, fallback) {
     if (typeof fallback === 'undefined') fallback = 0;
@@ -634,6 +726,12 @@ function NewsReader(opts) {
     this._categoryOverrides = {};
     this._categoryTree = null;
     this.categoryStack = [];
+    this._pendingHotspotDefs = [];
+    try {
+        this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'newsreader', layerName: 'newsreader', priority: 62 });
+    } catch (_) {
+        this.hotspots = null;
+    }
     this._resetState();
     this.id = 'newsreader';
     this.registerColors({
@@ -682,6 +780,7 @@ NewsReader.prototype._resetState = function () {
     this._destroyCategoryIcons();
     this._destroyFeedIcons();
     this._releaseHotspots();
+    this._pendingHotspotDefs = [];
     this._destroyLoadingOverlay();
     this.categoryIconCells = [];
     this.feedIconCells = [];
@@ -698,6 +797,13 @@ NewsReader.prototype._resetState = function () {
     this._categoryOverrides = feedConfig.categories || {};
     this._categoryTree = feedConfig.categoryTree || null;
     this.categoryStack = [];
+    this._favoriteUserKey = newsreaderResolveUserKey();
+    this._favoriteStoragePath = newsreaderResolveFavoritesFile(this._favoriteUserKey);
+    this._favoriteFeedUrls = newsreaderReadFavoritesFile(this._favoriteStoragePath);
+    this._favoriteFeedMap = {};
+    this._favoriteFeeds = [];
+    this._favoritesCategoryNode = null;
+    this._syncFavoritesCategory();
     if (this._categoryTree) {
         this.categoryStack.push(this._categoryTree);
         this.categories = this._visibleChildren(this._categoryTree);
@@ -765,12 +871,16 @@ NewsReader.prototype._nodeHasVisibleContent = function (node) {
 
 NewsReader.prototype._visibleChildren = function (node) {
     var out = [];
-    if (!node || !node.children || !node.children.length) return out;
-    for (var i = 0; i < node.children.length; i++) {
-        var child = node.children[i];
-        if (!child || child.hidden) continue;
-        if (!this._nodeHasVisibleContent(child)) continue;
-        out.push(child);
+    if (node && node.children && node.children.length) {
+        for (var i = 0; i < node.children.length; i++) {
+            var child = node.children[i];
+            if (!child || child.hidden) continue;
+            if (!this._nodeHasVisibleContent(child)) continue;
+            out.push(child);
+        }
+    }
+    if (this._favoritesCategoryNode && node && (!node.slug || node.slug === 'root' || node === this._categoryTree)) {
+        out.unshift(this._favoritesCategoryNode);
     }
     return out;
 };
@@ -871,7 +981,168 @@ NewsReader.prototype._buildCategories = function () {
         var B = (b.name || '').toLowerCase();
         return A > B ? 1 : (A < B ? -1 : 0);
     });
+    if (this._favoritesCategoryNode) categories.unshift(this._favoritesCategoryNode);
     return categories;
+};
+
+NewsReader.prototype._resolveFavoriteStoragePath = function () {
+    if (!this._favoriteStoragePath) {
+        this._favoriteUserKey = this._favoriteUserKey || newsreaderResolveUserKey();
+        this._favoriteStoragePath = newsreaderResolveFavoritesFile(this._favoriteUserKey);
+    }
+    return this._favoriteStoragePath;
+};
+
+NewsReader.prototype._saveFavoriteFeeds = function () {
+    var path = this._resolveFavoriteStoragePath();
+    return newsreaderWriteFavoritesFile(path, this._favoriteFeedUrls || []);
+};
+
+NewsReader.prototype._syncFavoritesCategory = function () {
+    var urls = Array.isArray(this._favoriteFeedUrls) ? this._favoriteFeedUrls.slice(0) : [];
+    var map = {};
+    var unique = [];
+    for (var i = 0; i < urls.length; i++) {
+        var url = urls[i];
+        if (!url || map[url]) continue;
+        map[url] = true;
+        unique.push(url);
+    }
+    this._favoriteFeedUrls = unique;
+    this._favoriteFeedMap = map;
+    var clones = [];
+    if (unique.length && this._allFeeds && this._allFeeds.length) {
+        var lookup = {};
+        for (var f = 0; f < this._allFeeds.length; f++) {
+            var feed = this._allFeeds[f];
+            if (!feed || !feed.url) continue;
+            if (!lookup[feed.url]) lookup[feed.url] = feed;
+        }
+        for (var u = 0; u < unique.length; u++) {
+            var target = lookup[unique[u]];
+            if (target) clones.push(newsreaderCloneFeed(target));
+        }
+    }
+    if (clones.length) {
+        if (!this._favoritesCategoryNode) {
+            this._favoritesCategoryNode = {
+                slug: '__favorites__',
+                name: 'Favorite Feeds',
+                icon: 'news_favorite',
+                feeds: [],
+                children: [],
+                meta: { isFavorites: true }
+            };
+        }
+        this._favoritesCategoryNode.feeds = clones;
+        this._favoritesCategoryNode.hidden = false;
+        this._favoriteFeeds = clones;
+    } else {
+        this._favoritesCategoryNode = null;
+        this._favoriteFeeds = [];
+    }
+};
+
+NewsReader.prototype._isFavoritesCategory = function (category) {
+    return !!(category && category.meta && category.meta.isFavorites);
+};
+
+NewsReader.prototype._isFeedFavorite = function (feed) {
+    if (!feed || !feed.url) return false;
+    return !!(this._favoriteFeedMap && this._favoriteFeedMap[feed.url]);
+};
+
+NewsReader.prototype._setFavoriteState = function (feed, shouldFavorite) {
+    if (!feed || !feed.url) return false;
+    var url = feed.url;
+    var map = this._favoriteFeedMap || {};
+    var list = this._favoriteFeedUrls || [];
+    var changed = false;
+    if (shouldFavorite) {
+        if (!map[url]) {
+            map[url] = true;
+            list.push(url);
+            changed = true;
+        }
+    } else {
+        if (map[url]) {
+            delete map[url];
+            for (var i = list.length - 1; i >= 0; i--) {
+                if (list[i] === url) list.splice(i, 1);
+            }
+            changed = true;
+        }
+    }
+    if (changed) {
+        this._favoriteFeedMap = map;
+        this._favoriteFeedUrls = list;
+        this._saveFavoriteFeeds();
+        this._syncFavoritesCategory();
+    }
+    return changed;
+};
+
+NewsReader.prototype._handleFavoriteViewRefresh = function () {
+    if (this.state === 'categories') {
+        var node = this._currentCategoryNode();
+        if (node) this.categories = this._visibleChildren(node);
+        else this.categories = this._buildCategories();
+    }
+    if (this.state === 'feeds' && this._isFavoritesCategory(this.currentCategory)) {
+        if (this._favoritesCategoryNode) {
+            this.currentCategory = this._favoritesCategoryNode;
+            this.currentFeeds = this._feedsForCategory(this.currentCategory);
+            var feedCount = this.currentFeeds ? this.currentFeeds.length : 0;
+            var maxIndex = Math.max(0, feedCount);
+            if (this.selectedIndex > maxIndex) this.selectedIndex = maxIndex;
+            if (this.selectedIndex < 0) this.selectedIndex = 0;
+        } else {
+            this._destroyFeedIcons();
+            this.state = 'categories';
+            this.currentCategory = null;
+            this.currentFeeds = [];
+            this.currentFeed = null;
+            this.selectedIndex = this._canPopCategory() ? 1 : 0;
+            this.scrollOffset = 0;
+        }
+    }
+};
+
+NewsReader.prototype._toggleFavoriteForSelection = function (items) {
+    if (!items || !items.length) return false;
+    if (this.selectedIndex < 0 || this.selectedIndex >= items.length) return false;
+    var entry = items[this.selectedIndex];
+    if (!entry || entry._type === 'back') {
+        this._setStatus('Select a feed to toggle favorite.');
+        return true;
+    }
+    if (!entry.url) {
+        this._setStatus('Feed is missing a URL.');
+        return true;
+    }
+    var makeFavorite = !this._isFeedFavorite(entry);
+    var changed = this._setFavoriteState(entry, makeFavorite);
+    if (changed) {
+        if (makeFavorite) this._setStatus('Added "' + (entry.label || entry.name || 'Feed') + '" to favorites.');
+        else this._setStatus('Removed "' + (entry.label || entry.name || 'Feed') + '" from favorites.');
+        this._handleFavoriteViewRefresh();
+        this.draw();
+    } else {
+        this._setStatus('No favorite changes.');
+    }
+    return true;
+};
+
+NewsReader.prototype._deleteFrame = function (frame) {
+    if (!frame) return;
+    try {
+        if (typeof frame.delete === 'function') frame.delete();
+        else if (typeof frame.close === 'function') frame.close();
+    } catch (_eDel) { }
+    if (this._myFrames) {
+        var idx = this._myFrames.indexOf(frame);
+        if (idx !== -1) this._myFrames.splice(idx, 1);
+    }
 };
 
 NewsReader.prototype._destroyArticleIcon = function () {
@@ -888,11 +1159,7 @@ NewsReader.prototype._destroyArticleIcon = function () {
         var key = frames[i];
         var frame = this[key];
         if (!frame) continue;
-        try { frame.close(); } catch (_eClose) { }
-        if (this._myFrames) {
-            var idx = this._myFrames.indexOf(frame);
-            if (idx !== -1) this._myFrames.splice(idx, 1);
-        }
+        this._deleteFrame(frame);
         this[key] = null;
     }
     this.articleIconObj = null;
@@ -915,11 +1182,7 @@ NewsReader.prototype._destroyArticleIcon = function () {
 
 NewsReader.prototype._destroyArticlePreviewFrame = function () {
     if (this.articleImagePreviewFrame) {
-        try { this.articleImagePreviewFrame.close(); } catch (_ePrev) { }
-        if (this._myFrames) {
-            var idx = this._myFrames.indexOf(this.articleImagePreviewFrame);
-            if (idx !== -1) this._myFrames.splice(idx, 1);
-        }
+        this._deleteFrame(this.articleImagePreviewFrame);
         this.articleImagePreviewFrame = null;
     }
     try { if (typeof js !== 'undefined' && js && typeof js.gc === 'function') js.gc(true); } catch (_eGc) { }
@@ -931,11 +1194,7 @@ NewsReader.prototype._destroyArticleLinkButton = function () {
     }
     this.articleLinkButton = null;
     if (this.articleLinkButtonFrame) {
-        try { this.articleLinkButtonFrame.close(); } catch (_eBtnFrame) { }
-        if (this._myFrames) {
-            var idx = this._myFrames.indexOf(this.articleLinkButtonFrame);
-            if (idx !== -1) this._myFrames.splice(idx, 1);
-        }
+        this._deleteFrame(this.articleLinkButtonFrame);
     }
     this.articleLinkButtonFrame = null;
     if (this.articleHeaderFrame) {
@@ -1056,20 +1315,8 @@ NewsReader.prototype._destroyIconCells = function (cells) {
     for (var i = 0; i < cells.length; i++) {
         var cell = cells[i];
         if (!cell) continue;
-        if (cell.icon) {
-            try { cell.icon.close(); } catch (_eA) { }
-            if (this._myFrames) {
-                var idxA = this._myFrames.indexOf(cell.icon);
-                if (idxA !== -1) this._myFrames.splice(idxA, 1);
-            }
-        }
-        if (cell.label) {
-            try { cell.label.close(); } catch (_eB) { }
-            if (this._myFrames) {
-                var idxB = this._myFrames.indexOf(cell.label);
-                if (idxB !== -1) this._myFrames.splice(idxB, 1);
-            }
-        }
+        if (cell.icon) this._deleteFrame(cell.icon);
+        if (cell.label) this._deleteFrame(cell.label);
     }
     cells.length = 0;
 };
@@ -1405,10 +1652,102 @@ NewsReader.prototype._renderAnsiPreview = function (frame, payload, opts) {
 };
 
 NewsReader.prototype._releaseHotspots = function () {
-    if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
+    this._hotspotMap = {};
+    this._pendingHotspotDefs = [];
+    if (this.hotspots && typeof this.hotspots.clear === 'function') this.hotspots.clear();
+    else if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
         try { console.clear_hotspots(); } catch (_e) { }
     }
-    this._hotspotMap = {};
+};
+
+NewsReader.prototype._isImageNavigationKey = function (key) {
+    switch (key) {
+        case KEY_LEFT:
+        case 'KEY_LEFT':
+        case 'LEFT':
+        case '\u001d':
+        case '\x1B[D':
+        case KEY_RIGHT:
+        case 'KEY_RIGHT':
+        case 'RIGHT':
+        case '\u0006':
+        case '\x1B[C':
+        case KEY_UP:
+        case 'KEY_UP':
+        case 'UP':
+        case '\u001e':
+        case '\x1B[A':
+        case KEY_DOWN:
+        case 'KEY_DOWN':
+        case 'DOWN':
+        case '\u000a':
+        case '\x1B[B':
+        case KEY_PGUP:
+        case 'KEY_PGUP':
+        case KEY_PGDN:
+        case 'KEY_PGDN':
+        case KEY_HOME:
+        case 'KEY_HOME':
+        case KEY_END:
+        case 'KEY_END':
+        case KEY_ENTER:
+        case 'KEY_ENTER':
+        case 'I':
+        case 'i':
+        case '\x1B':
+        case '\b':
+        case '\x08':
+        case '\x7F':
+        case 'wheel_up':
+        case 'wheel_down':
+            return true;
+        default:
+            return false;
+    }
+};
+
+NewsReader.prototype._addHotspotArea = function (key, swallow, minX, maxX, startY, endY, opts) {
+    if (key === undefined || key === null) return;
+    if (typeof minX !== 'number' || typeof maxX !== 'number' || typeof startY !== 'number') return;
+    if (typeof endY !== 'number') endY = startY;
+    if (maxX < minX) {
+        var tmpX = minX; minX = maxX; maxX = tmpX;
+    }
+    if (endY < startY) {
+        var tmpY = startY; startY = endY; endY = tmpY;
+    }
+    if (!this._pendingHotspotDefs) this._pendingHotspotDefs = [];
+    this._pendingHotspotDefs.push({
+        key: key,
+        x: minX,
+        y: startY,
+        width: Math.max(1, Math.floor(maxX - minX + 1)),
+        height: Math.max(1, Math.floor(endY - startY + 1)),
+        swallow: !!swallow,
+        owner: (opts && opts.owner) || 'newsreader',
+        data: opts && opts.data || null
+    });
+};
+
+NewsReader.prototype._applyPendingHotspots = function () {
+    if (!this._pendingHotspotDefs) this._pendingHotspotDefs = [];
+    if (this.hotspots && typeof this.hotspots.set === 'function') {
+        this.hotspots.set(this._pendingHotspotDefs);
+    } else if (typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
+        for (var i = 0; i < this._pendingHotspotDefs.length; i++) {
+            var def = this._pendingHotspotDefs[i];
+            if (!def) continue;
+            var key = def.key;
+            var swallow = !!def.swallow;
+            var startX = def.x;
+            var startY = def.y;
+            var endX = startX + Math.max(1, def.width || 1) - 1;
+            var endY = startY + Math.max(1, def.height || 1) - 1;
+            for (var y = startY; y <= endY; y++) {
+                try { console.add_hotspot(key, swallow, startX, endX, y); } catch (_) { }
+            }
+        }
+    }
 };
 
 NewsReader.prototype._ensureHotspotChars = function () {
@@ -1432,7 +1771,6 @@ NewsReader.prototype._ensureHotspotChars = function () {
 NewsReader.prototype._registerGridHotspots = function (cells) {
     this._releaseHotspots();
     if (!cells || !cells.length) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
     var chars = this._ensureHotspotChars();
     var max = Math.min(cells.length, chars.length);
     var baseX = this.listFrame ? this.listFrame.x : 1;
@@ -1454,18 +1792,16 @@ NewsReader.prototype._registerGridHotspots = function (cells) {
             if (labelMaxY > maxY) maxY = labelMaxY;
         }
         if (minX > maxX || minY > maxY) continue;
-        for (var y = minY; y <= maxY; y++) {
-            try { console.add_hotspot(cmd, false, minX, maxX, y); } catch (_e) { }
-        }
+        this._addHotspotArea(cmd, false, minX, maxX, minY, maxY);
         this._hotspotMap[cmd] = cell.index;
     }
+    this._applyPendingHotspots();
 };
 
 NewsReader.prototype._registerListHotspots = function (rows) {
     this._releaseHotspots();
     if (!this.listFrame) return;
     if (!rows || !rows.length) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
 
     var chars = this._ensureHotspotChars();
     var baseX = this.listFrame.x;
@@ -1480,16 +1816,16 @@ NewsReader.prototype._registerListHotspots = function (rows) {
         var absY = baseY + row.y - 2;
         var minX = baseX;
         var maxX = baseX + width - 1;
-        try { console.add_hotspot(cmd, false, minX, maxX, absY); } catch (_e) { }
+        this._addHotspotArea(cmd, false, minX, maxX, absY);
         this._hotspotMap[cmd] = row.index;
     }
+    this._applyPendingHotspots();
 };
 
 NewsReader.prototype._registerImageHotspots = function (sections, listStart, visibleThumbRows) {
     this._releaseHotspots();
     if (!this.listFrame) return;
     if (!sections || !sections.length) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
 
     var chars = this._ensureHotspotChars();
     var baseX = this.listFrame.x;
@@ -1506,22 +1842,22 @@ NewsReader.prototype._registerImageHotspots = function (sections, listStart, vis
             for (var ry = 0; ry < rows && charIdx < chars.length; ry++) {
                 var cmdImage = chars[charIdx++];
                 var y = baseY + (section.y - 1) + ry;
-                try { console.add_hotspot(cmdImage, false, baseX, baseX + width - 1, y); } catch (_eImg) { }
+                this._addHotspotArea(cmdImage, false, baseX, baseX + width - 1, y);
                 this._hotspotMap[cmdImage] = { type: 'imageArea' };
             }
         } else if (section.type === 'thumb' && typeof section.index === 'number') {
             var cmdThumb = chars[charIdx++];
             var thumbY = baseY + section.y - 1;
-            try { console.add_hotspot(cmdThumb, false, baseX, baseX + width - 1, thumbY); } catch (_eT) { }
+            this._addHotspotArea(cmdThumb, false, baseX, baseX + width - 1, thumbY);
             this._hotspotMap[cmdThumb] = { type: 'thumb', index: section.index };
         }
     }
     this._registerArticleHeaderHotspot();
+    this._applyPendingHotspots();
 };
 
 NewsReader.prototype._registerArticleHeaderHotspot = function () {
     if (!this.articleHeaderFrame) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
     if (!this.listFrame) return;
 
     var chars = this._ensureHotspotChars();
@@ -1558,9 +1894,7 @@ NewsReader.prototype._registerArticleHeaderHotspot = function () {
         var minY = baseY + frame.y - 1;
         var maxY = minY + frame.height - 1;
         this._hotspotMap[cmd] = { type: entry.type };
-        for (var y = minY; y <= maxY; y++) {
-            try { console.add_hotspot(cmd, false, minX, maxX, y); } catch (_eHot) { }
-        }
+        this._addHotspotArea(cmd, false, minX, maxX, minY, maxY);
     }
 };
 
@@ -1816,6 +2150,7 @@ NewsReader.prototype._renderFeedIcons = function () {
             }
 
             var labelText = item && item._type === 'back' ? 'Back' : (item && item.label ? item.label : 'Feed');
+            if (item && item._type !== 'back' && this._isFeedFavorite(item)) labelText += ' *';
             this._renderIconLabel(labelFrame, labelText, index === this.selectedIndex);
             cells.push({ icon: iconFrame, label: labelFrame, index: index, labelText: labelText, iconObj: iconObj });
         }
@@ -1833,6 +2168,59 @@ NewsReader.prototype._renderFeedIcons = function () {
     };
     if (cells.length) this._registerGridHotspots(cells);
     else this._releaseHotspots();
+};
+
+NewsReader.prototype._gridCellsForLayout = function () {
+    if (!this._gridLayout) return null;
+    if (this._gridLayout.type === 'categories') return this.categoryIconCells || [];
+    if (this._gridLayout.type === 'feeds') return this.feedIconCells || [];
+    return null;
+};
+
+NewsReader.prototype._refreshGridSelectionHighlight = function (previousIndex, nextIndex) {
+    var cells = this._gridCellsForLayout();
+    if (!cells || !cells.length) return false;
+    var updated = false;
+
+    function repaintCell(index, isSelected) {
+        if (index === undefined || index === null) return;
+        for (var i = 0; i < cells.length; i++) {
+            var cell = cells[i];
+            if (cell && cell.index === index && cell.label) {
+                this._renderIconLabel(cell.label, cell.labelText, !!isSelected);
+                if (typeof cell.label.cycle === 'function') {
+                    try { cell.label.cycle(); } catch (_cycleErr) { }
+                }
+                updated = true;
+                return;
+            }
+        }
+    }
+    repaintCell = repaintCell.bind(this);
+
+    if (typeof previousIndex === 'number' && previousIndex !== nextIndex) repaintCell(previousIndex, false);
+    if (typeof nextIndex === 'number') repaintCell(nextIndex, true);
+    if (updated && this.listFrame && typeof this.listFrame.cycle === 'function') {
+        try { this.listFrame.cycle(); } catch (_listCycleErr) { }
+    }
+    return updated;
+};
+
+NewsReader.prototype._finalizeGridSelectionChange = function (previousIndex, previousScrollOffset, length) {
+    var grid = this._gridLayout;
+    if (!grid) {
+        this.draw();
+        return;
+    }
+    this._adjustGridScroll(grid, length);
+    if (this.scrollOffset !== previousScrollOffset) {
+        this.draw();
+        return;
+    }
+    if (previousIndex === this.selectedIndex) return;
+    if (!this._refreshGridSelectionHighlight(previousIndex, this.selectedIndex)) {
+        this.draw();
+    }
 };
 
 NewsReader.prototype._toDisplayText = function (text) {
@@ -1918,7 +2306,12 @@ NewsReader.prototype._drawFeeds = function () {
     if (name) breadcrumb = breadcrumb ? (breadcrumb + ' > ' + name) : name;
     this._setHeader(breadcrumb || '');
     this._renderFeedIcons();
-    var hotkeys = [{ val: 'ENTER', action: 'open feed' }, { val: 'BACKSPACE', action: 'Categories' }, { val: 'ESC', action: 'back' }];
+    var hotkeys = [
+        { val: 'ENTER', action: 'open feed' },
+        { val: 'F', action: 'toggle favorite' },
+        { val: 'BACKSPACE', action: 'Categories' },
+        { val: 'ESC', action: 'back' }
+    ];
     var hint = this._generateHotkeyLine(hotkeys);
     var statusTitle = breadcrumb || name || 'Feeds';
     this._setStatus(statusTitle + '  |  ' + hint);
@@ -2127,6 +2520,7 @@ NewsReader.prototype._drawArticle = function () {
     }
     this._setStatus(this._composeArticleStatus(article));
     this._registerArticleHeaderHotspot();
+    this._applyPendingHotspots();
 };
 
 NewsReader.prototype._composeArticleStatus = function (article) {
@@ -2276,7 +2670,7 @@ NewsReader.prototype._clearArticleHeaderButtonArea = function (startX, startY, w
 };
 
 NewsReader.prototype._registerArticleLinkButtonHotspot = function () {
-    if (!this.articleLinkButtonFrame || typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    if (!this.articleLinkButtonFrame) return;
     this._hotspotMap = this._hotspotMap || {};
     if (this._articleButtonHotkey && this._hotspotMap[this._articleButtonHotkey]) {
         delete this._hotspotMap[this._articleButtonHotkey];
@@ -2296,11 +2690,10 @@ NewsReader.prototype._registerArticleLinkButtonHotspot = function () {
     var maxX = minX + frame.width - 1;
     var minY = baseY + frame.y - 1;
     var maxY = minY + frame.height - 1;
-    for (var y = minY; y <= maxY; y++) {
-        try { console.add_hotspot(cmd, false, minX, maxX, y); } catch (_eHotBtn) { }
-    }
+    this._addHotspotArea(cmd, false, minX, maxX, minY, maxY);
     this._hotspotMap[cmd] = { type: 'articleLinkButton' };
     this._articleButtonHotkey = cmd;
+    this._applyPendingHotspots();
 };
 
 NewsReader.prototype._reserveHotspotChar = function () {
@@ -2539,13 +2932,7 @@ NewsReader.prototype._cleanup = function () {
     for (var i = 0; i < frames.length; i++) {
         var key = frames[i];
         var frame = this[key];
-        if (frame && typeof frame.close === 'function') {
-            try { frame.close(); } catch (_e) { }
-        }
-        if (this._myFrames && frame) {
-            var idx = this._myFrames.indexOf(frame);
-            if (idx !== -1) this._myFrames.splice(idx, 1);
-        }
+        this._deleteFrame(frame);
         this[key] = null;
     }
     this._releaseHotspots();
@@ -2754,6 +3141,7 @@ NewsReader.prototype._replaceUnicodePunctuation = function (text) {
 };
 
 NewsReader.prototype.handleKey = function (key) {
+    log('NewsReader handleKey: ' + key);
     if (!key) return;
 
     switch (this.state) {
@@ -2834,6 +3222,10 @@ NewsReader.prototype.handleKey = function (key) {
                 }
                 this._openFeed(item);
             }.bind(this);
+            if (key === 'F' || key === 'f') {
+                this._toggleFavoriteForSelection(feedItems);
+                break;
+            }
             if (this._hotspotMap && this._hotspotMap[key] !== undefined) {
                 this.selectedIndex = this._hotspotMap[key];
                 this._adjustGridScroll(this._gridLayout, feedLength);
@@ -2878,6 +3270,10 @@ NewsReader.prototype.handleKey = function (key) {
             }.bind(this));
             break;
         case 'article_images':
+            if (this._isImageNavigationKey(key)) {
+                this._handleImageNavigation(key);
+                break;
+            }
             if (this._hotspotMap && this._hotspotMap[key] !== undefined) {
                 var mapping = this._hotspotMap[key];
                 if (mapping && mapping.type === 'articleHeaderBack') {
@@ -2963,15 +3359,19 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
     }
     var pageSize = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
     if (grid) pageSize = Math.max(1, grid.cols * grid.visibleRows);
+    log("news reader key: " + key);
     switch (key) {
         case KEY_UP:
+        case 'KEY_UP':
+        case 'UP':
         case "\u001e":
             if (length === 0) break;
             if (grid) {
+                var prevIndex = this.selectedIndex;
+                var prevScroll = this.scrollOffset;
                 if (this.selectedIndex >= grid.cols) this.selectedIndex -= grid.cols;
                 else this.selectedIndex = this.selectedIndex % grid.cols;
-                this._adjustGridScroll(grid, length);
-                this.draw();
+                this._finalizeGridSelectionChange(prevIndex, prevScroll, length);
                 break;
             }
             if (this.selectedIndex > 0) {
@@ -2981,14 +3381,17 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             }
             break;
         case KEY_DOWN:
+        case 'KEY_DOWN':
+        case 'DOWN':
         case '\u000a':
             if (length === 0) break;
             if (grid) {
                 var nextDown = this.selectedIndex + grid.cols;
+                var prevIdx = this.selectedIndex;
+                var prevScr = this.scrollOffset;
                 if (nextDown < length) this.selectedIndex = nextDown;
                 else this.selectedIndex = length - 1;
-                this._adjustGridScroll(grid, length);
-                this.draw();
+                this._finalizeGridSelectionChange(prevIdx, prevScr, length);
                 break;
             }
             if (this.selectedIndex < length - 1) {
@@ -3000,14 +3403,17 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             }
             break;
         case KEY_LEFT:
+        case 'KEY_LEFT':
+        case 'LEFT':
         case '\u001d':
-        case '\x1B[D':
+            // case '\x1B[D':
             if (length === 0) break;
             if (grid) {
                 if (this.selectedIndex > 0) {
+                    var prevIdxLeft = this.selectedIndex;
+                    var prevScrollLeft = this.scrollOffset;
                     this.selectedIndex--;
-                    this._adjustGridScroll(grid, length);
-                    this.draw();
+                    this._finalizeGridSelectionChange(prevIdxLeft, prevScrollLeft, length);
                 }
                 break;
             }
@@ -3018,14 +3424,17 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             }
             break;
         case KEY_RIGHT:
-        case '\x1B[C':
+        case 'KEY_RIGHT':
+        case 'RIGHT':
+        // case '\x1B[C':
         case '\u0006':
             if (length === 0) break;
             if (grid) {
                 if (this.selectedIndex < length - 1) {
+                    var prevIdxRight = this.selectedIndex;
+                    var prevScrollRight = this.scrollOffset;
                     this.selectedIndex++;
-                    this._adjustGridScroll(grid, length);
-                    this.draw();
+                    this._finalizeGridSelectionChange(prevIdxRight, prevScrollRight, length);
                 }
                 break;
             }
@@ -3038,11 +3447,13 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             }
             break;
         case KEY_PGUP:
+        case 'KEY_PGUP':
             if (length === 0) break;
             if (grid) {
+                var prevIdxPgUp = this.selectedIndex;
+                var prevScrollPgUp = this.scrollOffset;
                 this.selectedIndex = Math.max(0, this.selectedIndex - pageSize);
-                this._adjustGridScroll(grid, length);
-                this.draw();
+                this._finalizeGridSelectionChange(prevIdxPgUp, prevScrollPgUp, length);
                 break;
             }
             this.selectedIndex = Math.max(0, this.selectedIndex - pageSize);
@@ -3050,11 +3461,13 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             this.draw();
             break;
         case KEY_PGDN:
+        case 'KEY_PGDN':
             if (length === 0) break;
             if (grid) {
+                var prevIdxPgDn = this.selectedIndex;
+                var prevScrollPgDn = this.scrollOffset;
                 this.selectedIndex = Math.min(length - 1, this.selectedIndex + pageSize);
-                this._adjustGridScroll(grid, length);
-                this.draw();
+                this._finalizeGridSelectionChange(prevIdxPgDn, prevScrollPgDn, length);
                 break;
             }
             this.selectedIndex = Math.min(length - 1, this.selectedIndex + pageSize);
@@ -3064,27 +3477,38 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             this.draw();
             break;
         case KEY_HOME:
+        case 'KEY_HOME':
             if (length === 0) break;
-            this.selectedIndex = 0;
             if (grid) {
-                this._adjustGridScroll(grid, length);
-            } else {
-                this.scrollOffset = 0;
+                var prevIdxHome = this.selectedIndex;
+                var prevScrollHome = this.scrollOffset;
+                this.selectedIndex = 0;
+                this._finalizeGridSelectionChange(prevIdxHome, prevScrollHome, length);
+                break;
             }
+            this.selectedIndex = 0;
+            this.scrollOffset = 0;
             this.draw();
             break;
         case KEY_END:
+        case 'KEY_END':
             if (length === 0) break;
-            this.selectedIndex = length - 1;
             if (grid) {
-                this._adjustGridScroll(grid, length);
-            } else if (this.listFrame) {
+                var prevIdxEnd = this.selectedIndex;
+                var prevScrollEnd = this.scrollOffset;
+                this.selectedIndex = length - 1;
+                this._finalizeGridSelectionChange(prevIdxEnd, prevScrollEnd, length);
+                break;
+            }
+            this.selectedIndex = length - 1;
+            if (this.listFrame) {
                 var visible = Math.max(1, this.listFrame.height);
                 this.scrollOffset = Math.max(0, length - visible);
             }
             this.draw();
             break;
         case KEY_ENTER:
+        case 'KEY_ENTER':
             if (typeof onEnter === 'function') onEnter();
             break;
         case '\x1B':
@@ -3100,9 +3524,10 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
             if (length === 0) break;
             if (grid) {
                 if (this.selectedIndex > 0) {
+                    var prevIdxWheelUp = this.selectedIndex;
+                    var prevScrollWheelUp = this.scrollOffset;
                     this.selectedIndex = Math.max(0, this.selectedIndex - grid.cols);
-                    this._adjustGridScroll(grid, length);
-                    this.draw();
+                    this._finalizeGridSelectionChange(prevIdxWheelUp, prevScrollWheelUp, length);
                 }
                 break;
             }
@@ -3118,9 +3543,10 @@ NewsReader.prototype._handleListNavigation = function (key, length, onEnter, onB
                 if (this.selectedIndex < length - 1) {
                     var nextIdx = this.selectedIndex + grid.cols;
                     if (nextIdx >= length) nextIdx = length - 1;
+                    var prevIdxWheelDown = this.selectedIndex;
+                    var prevScrollWheelDown = this.scrollOffset;
                     this.selectedIndex = nextIdx;
-                    this._adjustGridScroll(grid, length);
-                    this.draw();
+                    this._finalizeGridSelectionChange(prevIdxWheelDown, prevScrollWheelDown, length);
                 }
                 break;
             }
@@ -3144,7 +3570,9 @@ NewsReader.prototype._handleImageNavigation = function (key) {
     var pageSize = this.listFrame ? Math.max(1, this.listFrame.height) : 1;
     switch (key) {
         case KEY_UP:
-        case "\u001e":
+        case 'KEY_UP':
+        case 'UP':
+        case '\u001e':
         case '\x1B[A': {
             var prevScrollUp = this.imagePreviewScroll;
             this.imagePreviewScroll = Math.max(0, prevScrollUp - 1);
@@ -3152,6 +3580,8 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             break;
         }
         case KEY_DOWN:
+        case 'KEY_DOWN':
+        case 'DOWN':
         case "\u000a":
         case '\x1B[B': {
             var prevScrollDown = this.imagePreviewScroll;
@@ -3178,6 +3608,8 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             break;
         }
         case KEY_LEFT:
+        case 'KEY_LEFT':
+        case 'LEFT':
         case '\u001d':
         case '\x1B[D':
             if (this.imageSelection > 0) {
@@ -3187,6 +3619,8 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             }
             break;
         case KEY_RIGHT:
+        case 'KEY_RIGHT':
+        case 'RIGHT':
         case '\u0006':
         case '\x1B[C':
             if (this.imageSelection < length - 1) {
@@ -3198,11 +3632,13 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             }
             break;
         case KEY_PGUP:
+        case 'KEY_PGUP':
             this.imageSelection = Math.max(0, this.imageSelection - pageSize);
             this.imageScrollOffset = Math.max(0, this.imageScrollOffset - pageSize);
             this.draw();
             break;
         case KEY_PGDN:
+        case 'KEY_PGDN':
             this.imageSelection = Math.min(length - 1, this.imageSelection + pageSize);
             if (this.imageSelection >= this.imageScrollOffset + pageSize) {
                 this.imageScrollOffset = Math.min(Math.max(0, length - pageSize), this.imageScrollOffset + pageSize);
@@ -3210,11 +3646,13 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             this.draw();
             break;
         case KEY_HOME:
+        case 'KEY_HOME':
             this.imageSelection = 0;
             this.imageScrollOffset = 0;
             this.draw();
             break;
         case KEY_END:
+        case 'KEY_END':
             this.imageSelection = length - 1;
             if (this.listFrame) {
                 var visible = Math.max(1, this.listFrame.height);
@@ -3223,6 +3661,7 @@ NewsReader.prototype._handleImageNavigation = function (key) {
             this.draw();
             break;
         case KEY_ENTER:
+        case 'KEY_ENTER':
             this._enterArticleContent();
             break;
         case 'I':
@@ -3467,6 +3906,7 @@ NewsReader.prototype._ensureArticleIcon = function (options) {
     this._articleHeaderAttr = containerAttr;
 
     this._registerArticleHeaderHotspot();
+    this._applyPendingHotspots();
 };
 NewsReader.prototype._handleArticleNavigation = function (key) {
     var totalLines = this.articleLines.length;

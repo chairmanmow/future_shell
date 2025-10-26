@@ -11,6 +11,7 @@ require('sbbsdefs.js',
 
 try { if (typeof Icon !== 'function') load('future_shell/lib/shell/icon.js'); } catch (e) { }
 try { if (typeof Button !== 'function') load('future_shell/lib/util/layout/button.js'); } catch (e) { }
+try { if (typeof SubprogramHotspotHelper !== 'function') load('future_shell/lib/subprograms/subprogram_hotspots.js'); } catch (e) { }
 
 if (typeof KEY_UP === 'undefined') var KEY_UP = 0x4800;
 if (typeof KEY_DOWN === 'undefined') var KEY_DOWN = 0x5000;
@@ -29,6 +30,10 @@ function UsageViewer(opts) {
     opts = opts || {};
     Subprogram.call(this, { name: 'usage-viewer', parentFrame: opts.parentFrame, shell: opts.shell, timer: opts.timer });
     this.id = 'usage-viewer';
+    this.hotspots = (typeof SubprogramHotspotHelper === 'function')
+        ? new SubprogramHotspotHelper({ shell: this.shell, owner: 'usage-viewer', layerName: 'usage-viewer', priority: 67 })
+        : null;
+    this._programHotspotDefs = [];
     this.themeNamespace = this.id;
     this.registerColors({
         ICON: { BG: BG_BLACK, FG: LIGHTGRAY },
@@ -511,14 +516,21 @@ UsageViewer.prototype.draw = function () {
         if (this._lookupIconBase(progs[fip].id)) filteredIcon.push(progs[fip]);
     }
     progs = filteredIcon;
+    // Clear previous program blocks and hotspots before rendering new state
+    this._clearProgramResources();
+    var hotspots = {};
+    var hotspotDefs = [];
     // Clamp selection indices and handle empty list
     if (!progs.length) {
         this.programIndex = 0;
         this.programTop = 0;
+        this._programHotspots = {};
+        this._programHotspotDefs = hotspotDefs.slice();
         // Show a simple message when nothing is available
         var msgX = Math.min(headerStartX, lf.width);
         try { lf.gotoxy(msgX, startRow); lf.putmsg(this.colorizeShared('WARNING', '(No accessible icon programs)')); } catch (_m) { }
-        this._registerBackButtonHotspot();
+        this._registerBackButtonHotspot(hotspotDefs);
+        if (this.hotspots) this.hotspots.set(hotspotDefs);
         try { lf.cycle(); } catch (_mc) { }
         return;
     }
@@ -537,10 +549,7 @@ UsageViewer.prototype.draw = function () {
     // Adjust scroll window to keep selection visible
     if (this.programIndex < this.programTop) this.programTop = this.programIndex;
     while (this.programIndex >= this.programTop + maxVisible) this.programTop++;
-    // Clear existing program frames
-    this._clearProgramResources();
     // Draw visible blocks
-    var hotspots = {};
     for (var vis = 0; vis < maxVisible; vis++) {
         var idx = this.programTop + vis;
         if (idx >= progs.length) break;
@@ -551,9 +560,10 @@ UsageViewer.prototype.draw = function () {
         if (blockHeightAdjusted <= 0) break;
         // Temporarily map month.programs to filtered list entry for block renderer
         var prog = progs[idx];
-        this._drawProgramBlock(lf, y, blockHeightAdjusted, prog, idx, hotspots, vis);
+        this._drawProgramBlock(lf, y, blockHeightAdjusted, prog, idx, hotspots, hotspotDefs, vis);
     }
     this._programHotspots = hotspots;
+    this._programHotspotDefs = hotspotDefs.slice();
     if (this._backButton && this._backButton.frame) {
         if (typeof this._backButton.frame.top === 'function') {
             try { this._backButton.frame.top(); } catch (_eBtnTop) { }
@@ -562,8 +572,9 @@ UsageViewer.prototype.draw = function () {
             try { this._backButton.frame.cycle(); } catch (_eBtnCycle) { }
         }
     }
+    this._registerBackButtonHotspot(hotspotDefs);
+    if (this.hotspots) this.hotspots.set(hotspotDefs);
     this._drawDetail();
-    this._registerBackButtonHotspot();
     try { lf.cycle(); } catch (_c) { }
 
 };
@@ -806,6 +817,9 @@ UsageViewer.prototype.cleanup = function () {
     if (this.footerFrame) { try { this.footerFrame.close(); } catch (e) { } }
     this.listFrame = this.headerFrame = this.footerFrame = null;
     this._destroyBackButton();
+    if (this.hotspots && typeof this.hotspots.dispose === 'function') {
+        try { this.hotspots.dispose(); } catch (_) { }
+    }
     Subprogram.prototype.cleanup.call(this);
 };
 
@@ -952,16 +966,31 @@ UsageViewer.prototype._resolveAbsoluteRect = function (frame) {
     return { x: x, y: y, w: frame.width || 0, h: frame.height || 0 };
 };
 
-UsageViewer.prototype._registerBackButtonHotspot = function () {
+UsageViewer.prototype._registerBackButtonHotspot = function (defs) {
     if (!this._backButton || !this._backButton.frame) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
     var rect = this._resolveAbsoluteRect(this._backButton.frame);
     if (!rect) return;
     var key = this._backButtonHotkey || '\x1B';
     var startY = Math.max(1, rect.y - 2);
-    var endY = startY + rect.h - 1;
+    var height = Math.max(1, rect.h || 0);
+    var endY = startY + height - 1;
+    var minX = rect.x;
+    var maxX = rect.x + Math.max(0, (rect.w || 1) - 1);
+    if (this.hotspots && Array.isArray(defs)) {
+        defs.push({
+            key: key,
+            x1: minX,
+            x2: maxX,
+            y1: startY,
+            y2: endY,
+            swallow: false,
+            owner: 'usage-viewer:back'
+        });
+        return;
+    }
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
     for (var row = startY; row <= endY; row++) {
-        try { console.add_hotspot(key, false, rect.x, rect.x + rect.w - 1, row); } catch (e) { }
+        try { console.add_hotspot(key, false, minX, maxX, row); } catch (e) { }
     }
 };
 
@@ -973,7 +1002,10 @@ UsageViewer.prototype._clearProgramResources = function () {
     }
     this._programFrames = [];
     this._programHotspots = {};
-    if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
+    this._programHotspotDefs = [];
+    if (this.hotspots && typeof this.hotspots.clear === 'function') {
+        this.hotspots.clear();
+    } else if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
         try { console.clear_hotspots(); } catch (e) { }
     }
 };
@@ -1278,7 +1310,7 @@ UsageViewer.prototype._drawProgramBlocks = function (df, month) {
     return;
 };
 
-UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, index, hotspots, vis) {
+UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, index, hotspots, hotspotDefs, vis) {
     var isSelected = (this.focus === 'program' && index === this.programIndex);
     var baseAttr = BG_BLACK | LIGHTGRAY;
     var width = df.width;
@@ -1353,21 +1385,36 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     }
     try { blockFrame.cycle(); } catch (cycleErr) { }
 
-    if (vis < 9 && typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
-        if (iconFrame && iconFrame.width > 0 && iconFrame.height > 0) {
-            function absRect(f) {
-                var x = f.x, y = f.y, p = f.parent;
-                while (p) { x += (p.x - 1); y += (p.y - 1); p = p.parent; }
-                return { x: x, y: y, w: f.width, h: f.height };
-            }
-            var hotKey = String.fromCharCode(49 + vis); // '1'..'9'
-            hotspots[hotKey] = index;
-            var r = absRect(iconFrame);
+    if (vis < 9 && iconFrame && iconFrame.width > 0 && iconFrame.height > 0) {
+        function absRect(f) {
+            if (!f) return null;
+            var x = f.x, y = f.y, p = f.parent;
+            while (p) { x += (p.x - 1); y += (p.y - 1); p = p.parent; }
+            return { x: x, y: y, w: f.width, h: f.height };
+        }
+        var hotKey = String.fromCharCode(49 + vis); // '1'..'9'
+        hotspots[hotKey] = index;
+        var r = absRect(iconFrame);
+        if (r && r.w > 0 && r.h > 0) {
             var minX = r.x;
             var maxX = r.x + r.w - 1;
-            var startY = r.y - 1; // shift up one row per request
-            for (var y = 0; y < r.h; y++) {
-                try { console.add_hotspot(hotKey, false, minX, maxX, startY + y); } catch (e2) { }
+            var startY = r.y - 1; // legacy offset to include row above icon
+            var endY = startY + r.h - 1;
+            if (this.hotspots && Array.isArray(hotspotDefs)) {
+                hotspotDefs.push({
+                    key: hotKey,
+                    x1: minX,
+                    x2: maxX,
+                    y1: startY,
+                    y2: endY,
+                    swallow: false,
+                    owner: 'usage-viewer:item',
+                    data: { index: index }
+                });
+            } else if (typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
+                for (var row = startY; row <= endY; row++) {
+                    try { console.add_hotspot(hotKey, false, minX, maxX, row); } catch (e2) { }
+                }
             }
         }
     }

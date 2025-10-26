@@ -715,6 +715,32 @@ var ICSH_SETTINGS = (function () {
 	function _sanitiseName(name) {
 		return String(name || '').trim().toLowerCase().replace(/[^a-z0-9_\-]+/g, '').replace(/-/g, '_');
 	}
+	function _normalizeAnimationName(name) {
+		var normalized = _sanitiseName(name);
+		if (!normalized) return '';
+		var aliases = {
+			sinewave: 'sine_wave',
+			sine: 'sine_wave'
+		};
+		if (aliases[normalized]) normalized = aliases[normalized];
+		return normalized;
+	}
+	function _parseList(val) {
+		if (val === undefined || val === null) return [];
+		var raw = String(val).split(',');
+		var outList = [];
+		for (var i = 0; i < raw.length; i++) {
+			var entry = raw[i];
+			if (entry === undefined || entry === null) continue;
+			var trimmed = String(entry).trim();
+			if (!trimmed.length) continue;
+			var lowered = trimmed.toLowerCase();
+			if (lowered === 'none' || lowered === 'false' || lowered === 'off' || lowered === '0') continue;
+			var norm = _normalizeAnimationName(trimmed);
+			if (norm && outList.indexOf(norm) === -1) outList.push(norm);
+		}
+		return outList;
+	}
 	try {
 		var iniRaw = readConfigIni('guishell.ini');
 		if (iniRaw) {
@@ -764,6 +790,13 @@ var ICSH_SETTINGS = (function () {
 					var cos = _parseBool(ss.clear_on_switch);
 					if (cos !== undefined) cfg.clear_on_switch = cos;
 				}
+				var disabledList = [];
+				if (ss.disabled !== undefined) {
+					disabledList = _parseList(ss.disabled);
+				} else if (ss.disabled_animations !== undefined) {
+					disabledList = _parseList(ss.disabled_animations);
+				}
+				cfg.disabled = disabledList;
 				// animation-specific overrides using dot notation e.g. life.density=0.25
 				var animOpts = {};
 				for (var key in ss) {
@@ -788,6 +821,8 @@ var ICSH_SETTINGS = (function () {
 			}
 		}
 	} catch (e) { _icsh_warn('Error loading ICSH_SETTINGS: ' + e); }
+	if (!out.screensaver) out.screensaver = {};
+	if (!Array.isArray(out.screensaver.disabled)) out.screensaver.disabled = [];
 	return out;
 })();
 

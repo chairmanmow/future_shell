@@ -204,7 +204,10 @@ if (typeof lazyLoadModule !== 'function') {
             iconFile: board._resolveBoardIcon('mailbox', 'scan'),
             iconBg: BG_CYAN,
             iconFg: BLACK,
-            action: function () { board._scanMessagesAddressedToUser(); }
+            action: function () {
+                if (!board || typeof board._scanMessagesAddressedToUser !== 'function') return;
+                board._scanMessagesAddressedToUser({ refreshView: true });
+            }
         });
         items.push({
             type: 'search',

@@ -73,10 +73,10 @@ if (typeof SCAN_NEW === 'undefined') var SCAN_NEW = (1 << 1);
    - If future automation needs scripted flows, supply params & remove interactive dependency.
    ------------------------------------------------------------------------- */
 function Mail(opts) {
-    opts = opts || {};
-    Subprogram.call(this, { name: 'mail', parentFrame: opts.parentFrame, shell: opts.shell });
-    this.shell = opts.shell || this.shell; // preserve any provided shell reference
-    this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'mail', layerName: 'mail', priority: 60 });
+	opts = opts || {};
+	Subprogram.call(this, { name: 'mail', parentFrame: opts.parentFrame, shell: opts.shell });
+	this.shell = opts.shell || this.shell; // preserve any provided shell reference
+	this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'mail', layerName: 'mail', priority: 60 });
 	this.outputFrame = null;
 	this.footerFrame = null;
 	this.headerFrame = null;
@@ -94,42 +94,39 @@ function Mail(opts) {
 		var programId = opts.programId || (msg ? ('mail:' + msg.replace(/\s+/g, '_').toLowerCase()) : 'mail');
 		return function () {
 			var sh = self.shell;
-			if (animate && sh && typeof sh.runExternal === 'function') {
-				var animateOpts = { programId: programId };
-				if (opts.trackUsage === false) animateOpts.trackUsage = false;
-				sh.runExternal(function () {
-					try { fn(); } catch (ex) {
-						log("run external error", ex)
-					}
-				}, animateOpts);
-			} else if (sh && typeof sh.runExternal === 'function') {
-				sh.runExternal(function () {
-					try { fn(); } catch (ex) {
-						log("run external error", ex)
-					}
-				}, { programId: programId, trackUsage: opts.trackUsage });
-			} else {
+			var runAndRefresh = function () {
 				try { fn(); } catch (ex) {
-					log("exec fn() error", ex)
+					try { log('mail action error', ex); } catch (_) { }
 				}
+				self._destroyIconCells();
+				self._destroyPromptFrames();
+				self.updateUnreadCount();
+				self.draw();
+			};
+			var useWrapper = (opts.useShellWrapper !== false) && sh && typeof sh.runExternal === 'function';
+			if (useWrapper) {
+				var runOpts = { programId: programId };
+				if (opts.trackUsage !== undefined) runOpts.trackUsage = opts.trackUsage;
+				if (!animate) runOpts.animation = 'none';
+				sh.runExternal(runAndRefresh, runOpts);
+			} else {
+				runAndRefresh();
 			}
-			self.updateUnreadCount();
-			self.draw();
 		};
 	}
 	this.unreadCount = 0;
 	this.totalMailCount = 0;
 	this.menuOptions = [
 		{ baseLabel: 'Exit', iconFile: 'back', action: function () { self.exit(); } },
-		{ baseLabel: 'Inbox', iconFile: 'messages', dynamic: true, action: makeAction(function () { bbs.read_mail(); }, 'Reading mail...', { programId: 'mail:inbox' }) },
+		{ baseLabel: 'Inbox', iconFile: 'messages', dynamic: true, action: makeAction(function () { bbs.read_mail(); }, 'Reading mail...', { programId: 'mail:inbox', useShellWrapper: false }) },
 		// Native interactive compose (custom pre-screen, no confirmation desired)
 		{ baseLabel: 'Compose Email', iconFile: 'compose', confirm: false, action: function () { self.composeInteractiveEmail(); } },
-		{ baseLabel: 'Scan For You', iconFile: 'mailbox', action: makeAction(function () { self._scanMessagesAddressedToUser(); }, 'Scanning for messages to you...', { programId: 'mail:scan_for_you' }) },
-		{
-			baseLabel: 'Netmail Queue', iconFile: 'clock', action: makeAction(function () {
-				self._renderNetmailList({ mode: 'queue', title: 'Fido Netmail Queue' });
-			}, 'Viewing netmail queue...', { programId: 'mail:netmail_queue' })
-		},
+		{ baseLabel: 'Scan For You', iconFile: 'mailbox', action: makeAction(function () { self._scanMessagesAddressedToUser(); console.pause(); }, 'Scanning for messages to you...', { programId: 'mail:scan_for_you', useShellWrapper: false }) },
+		// {
+		// 	baseLabel: 'Netmail Queue', iconFile: 'clock', action: makeAction(function () {
+		// 		self._renderNetmailList({ mode: 'queue', title: 'Fido Netmail Queue' });
+		// 	}, 'Viewing netmail queue...', { programId: 'mail:netmail_queue' })
+		// },
 		{
 			baseLabel: 'Sent Mail', iconFile: 'redman', action: makeAction(function () {
 				if (typeof bbs === 'undefined' || typeof bbs.read_mail !== 'function') return;
@@ -156,7 +153,7 @@ function Mail(opts) {
 				} catch (e) {
 					log('Sent Mail read_mail crashed', e);
 				}
-			}, 'Opening sent mail...', { programId: 'mail:sent' })
+			}, 'Opening sent mail...', { programId: 'mail:sent', useShellWrapper: false })
 		},
 	];
 	this.updateUnreadCount();
@@ -452,21 +449,35 @@ Mail.prototype._toastSent = function (dest) {
 Mail.prototype._ensureFrames = function () {
 	var host = this.hostFrame || this.parentFrame;
 	if (!host) return;
-	if (!this.headerFrame) {
+	var expectedOutputHeight = Math.max(1, host.height - 2);
+	if (!this.headerFrame || this.headerFrame.width !== host.width || this.headerFrame.height !== 1) {
+		if (this.headerFrame) { try { this.headerFrame.close(); } catch (_) { } }
 		this.headerFrame = new Frame(host.x, host.y, host.width, 1, this.paletteAttr('HEADER_FRAME'), host);
 		this.headerFrame.open();
+	} else if (this.headerFrame.is_open === false) {
+		try { this.headerFrame.open(); } catch (e) { }
 	}
-	if (!this.outputFrame) {
-		var h = Math.max(1, host.height - 2);
-		this.outputFrame = new Frame(host.x, host.y + 1, host.width, h, this.paletteAttr('MAIN_FRAME'), host);
+	if (!this.outputFrame || this.outputFrame.width !== host.width || this.outputFrame.height !== expectedOutputHeight) {
+		if (this.outputFrame) {
+			try { this.outputFrame.close(); } catch (_) { }
+		}
+		this.outputFrame = new Frame(host.x, host.y + 1, host.width, expectedOutputHeight, this.paletteAttr('MAIN_FRAME'), host);
 		this.outputFrame.open();
 		this.setBackgroundFrame(this.outputFrame);
+	} else if (this.outputFrame.is_open === false) {
+		try { this.outputFrame.open(); } catch (e2) { }
+		this.setBackgroundFrame(this.outputFrame);
 	}
-	if (!this.footerFrame) {
-		var inputY = host.height;
-		var parentForInput = host.parent || host;
-		this.footerFrame = new Frame(host.x, inputY, host.width, 1, this.paletteAttr('FOOTER_FRAME'), parentForInput);
+	var footerParent = host.parent || host;
+	if (!this.footerFrame || this.footerFrame.width !== host.width) {
+		if (this.footerFrame) { try { this.footerFrame.close(); } catch (_) { } }
+		this.footerFrame = new Frame(host.x, host.height, host.width, 1, this.paletteAttr('FOOTER_FRAME'), footerParent);
 		this.footerFrame.open();
+	} else if (this.footerFrame.is_open === false) {
+		try { this.footerFrame.open(); } catch (e3) { }
+	}
+	if (this.parentFrame && this.parentFrame.is_open === false) {
+		try { this.parentFrame.open(); } catch (_) { }
 	}
 };
 
@@ -677,15 +688,25 @@ Mail.prototype.drawIconGrid = function (o) {
 	this.updateUnreadCount();
 	var cellW = ICON_W + 2; // padding similar to main shell
 	var cellH = ICON_H + labelH + 1; // top/bottom padding
-    var topPadding = 1; // leave an extra blank row above the icon grid
-    var cols = Math.max(1, Math.floor((o.width - 2) / cellW));
-    var availableHeight = Math.max(0, o.height - (topPadding + 2));
-    var usableRows = Math.max(1, Math.floor(availableHeight / cellH));
-    var maxIcons = cols * usableRows;
+	var topPadding = 1; // leave an extra blank row above the icon grid
+	var cols = Math.max(1, Math.floor((o.width - 2) / cellW));
+	var availableHeight = Math.max(0, o.height - (topPadding + 2));
+	var usableRows = Math.max(1, Math.floor(availableHeight / cellH));
+	var maxIcons = cols * usableRows;
 	var needRebuild = false;
 	if (!this.iconCells || this.iconCells.length === 0) needRebuild = true;
 	// Rebuild if column count changed or menu length changed
 	if (this._iconCols !== cols || (this.iconCells && this.iconCells.length !== this.menuOptions.length)) needRebuild = true;
+	if (!needRebuild && this.iconCells) {
+		for (var c = 0; c < this.iconCells.length; c++) {
+			var existing = this.iconCells[c];
+			if (!existing) { needRebuild = true; break; }
+			if ((existing.icon && existing.icon.is_open === false) || (existing.label && existing.label.is_open === false)) {
+				needRebuild = true;
+				break;
+			}
+		}
+	}
 	if (needRebuild) {
 		// close old frames
 		this._destroyIconCells();
@@ -863,18 +884,18 @@ Mail.prototype._resetState = function () {
 };
 
 Mail.prototype.exit = function () {
-    log('exiting mail');
-    if (this.hotspots) this.hotspots.clear();
-    var shell = this.shell;
-    Subprogram.prototype.exit.call(this);
+	log('exiting mail');
+	if (this.hotspots) this.hotspots.clear();
+	var shell = this.shell;
+	Subprogram.prototype.exit.call(this);
 	if (shell) {
 		if (shell._pendingSubLaunch && shell._pendingSubLaunch.instance === this) {
 			shell._pendingSubLaunch = null;
 		}
-        if (shell.activeSubprogram === this) {
-            shell.exitSubprogram();
-        }
-    }
+		if (shell.activeSubprogram === this) {
+			shell.exitSubprogram();
+		}
+	}
 };
 
 // Export constructor globally

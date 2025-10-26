@@ -318,6 +318,7 @@ IconShell.prototype.init = function () {
         });
         if (this.timer) this._screenSaver.attachTimer(this.timer);
         this._refreshScreenSaverFrame();
+        this._applyScreensaverPreferences();
     }
     // Enable mouse mode for hotspots
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
@@ -453,6 +454,7 @@ IconShell.prototype.main = function () {
             var keys = [];
             var key;
             while ((key = console.inkey(K_NOECHO | K_NOSPIN, 0))) {
+                log('received key: ' + JSON.stringify(key));
                 keys.push(key);
             }
             if (keys.length) {
@@ -500,8 +502,9 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         if (this.toasts && this.toasts.length) {
             log('[toast] dismiss via outside hotspot');
             this._dismissAllToasts();
+            return true;
         }
-        return true;
+        // No active toast to dismiss; treat as a normal keystroke
     }
     if (typeof ch === 'string' && ch.length && this.toasts && this.toasts.length) {
         var toastNowTs = Date.now();
@@ -840,9 +843,12 @@ IconShell.prototype._normalizeKey = function (key) {
         this._lastWasCR = true;
         return key;
     }
-    if (this._lastWasCR && key === '\n') {
-        this._lastWasCR = false;
-        return '';
+    if (key === '\n') {
+        if (this._lastWasCR) {
+            this._lastWasCR = false;
+            return '';
+        }
+        return key;
     }
     this._lastWasCR = false;
     return key;
@@ -896,6 +902,7 @@ IconShell.prototype._decodeEscapeSequence = function (key, queue) {
 };
 
 IconShell.prototype._processKeyQueue = function (keys, nowTs) {
+    log('processing key queue: ' + JSON.stringify(keys));
     if (!keys || !keys.length) return;
     var perf = global.__ICSH_PERF__ || null;
     if (!nowTs) nowTs = Date.now();
@@ -912,7 +919,9 @@ IconShell.prototype._processKeyQueue = function (keys, nowTs) {
         var key = keys.shift();
         if (key === undefined || key === null) continue;
         key = this._normalizeKey(key);
+        log("normalized key: " + JSON.stringify(key));
         key = this._decodeEscapeSequence(key, keys);
+        log("decoded key: " + JSON.stringify(key));
         if (!key) continue;
         if (typeof key === 'string' && key.length > 0) {
             if (key === CTRL_D && perf) {
@@ -1018,7 +1027,6 @@ IconShell.prototype._pollLaunchQueue = function () {
     try { events = LaunchQueue.listSince(this._lastLaunchEventId || 0); }
     catch (e) { try { log('launch_queue: listSince failed (' + e + ')'); } catch (_) { } return; }
     if (!events || !events.length) {
-        try { log('launch_queue: no new events (lastId=' + (this._lastLaunchEventId || 0) + ')'); } catch (_) { }
         return;
     }
     var currentNode = (typeof bbs !== 'undefined' && typeof bbs.node_num === 'number') ? bbs.node_num : null;
@@ -1146,7 +1154,11 @@ IconShell.prototype._handleNavigationKey = function (ch) {
         case KEY_LEFT: this.moveSelection(-1, 0); return true;
         case KEY_RIGHT: this.moveSelection(1, 0); return true;
         case KEY_UP: this.moveSelection(0, -1); return true;
-        case KEY_DOWN: this.moveSelection(0, 1); return true;
+        case KEY_DOWN:
+        case "\u000a":
+            log('key down detected as navigation');
+            this.moveSelection(0, 1);
+            return true;
         case '\r': // ENTER
             this.openSelection();
             return true;
@@ -1332,8 +1344,47 @@ IconShell.prototype.reloadShellPrefs = function () {
     return prefs;
 };
 
-IconShell.prototype.onShellPrefsSaved = function () {
-    this.reloadShellPrefs();
+IconShell.prototype._applyScreensaverPreferences = function (prefs) {
+    if (!prefs) prefs = this._shellPrefsInstance || this._getShellPrefs();
+    if (!prefs || typeof prefs.getScreensaverConfig !== 'function') return;
+    var cfg = prefs.getScreensaverConfig();
+    if (cfg) {
+        if (cfg.timeoutSeconds === -1) this.inactivityThresholdMs = -1;
+        else this.inactivityThresholdMs = Math.max(0, cfg.timeoutSeconds | 0) * 1000;
+        if (this.inactivityThresholdMs !== -1) this._lastActivityTs = Date.now();
+        if (this._screenSaver && typeof this._screenSaver.configure === 'function') {
+            var enabled = [];
+            if (Array.isArray(cfg.order)) {
+                for (var i = 0; i < cfg.order.length; i++) {
+                    var name = cfg.order[i];
+                    if (!name) continue;
+                    if (cfg.enabled && cfg.enabled[name] === false) continue;
+                    if (enabled.indexOf(name) === -1) enabled.push(name);
+                }
+            }
+            if (this._screenSaver.registry) {
+                var filtered = [];
+                for (var e = 0; e < enabled.length; e++) {
+                    if (this._screenSaver.registry[enabled[e]]) filtered.push(enabled[e]);
+                }
+                enabled = filtered;
+            }
+            if (!enabled.length) enabled.push('matrix_rain');
+            var switchSeconds = (typeof cfg.switchIntervalSeconds === 'number') ? cfg.switchIntervalSeconds : 90;
+            if (switchSeconds > 0 && switchSeconds < 5) switchSeconds = 5;
+            this._screenSaver.configure({
+                animations: enabled,
+                random: !!cfg.randomOrder,
+                switch_interval: switchSeconds
+            });
+        }
+    }
+};
+
+IconShell.prototype.onShellPrefsSaved = function (prefs) {
+    var instance = this.reloadShellPrefs();
+    if (!instance) instance = prefs;
+    this._applyScreensaverPreferences(instance);
 };
 
 IconShell.prototype.showToast = function (params) {
@@ -1553,7 +1604,7 @@ IconShell.prototype._refreshToastHotspotLayer = function () {
             width: frame.width,
             height: toastHeight
         };
-    metaList.push(meta);
+        metaList.push(meta);
         defs.push({
             key: key,
             x: frame.x,
