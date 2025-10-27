@@ -700,7 +700,7 @@ MessageBoard.prototype.enter = function (done) {
     }
 };
 
-MessageBoard.prototype._beginInlineSearchPrompt = function (code, returnView) {
+MessageBoard.prototype._beginInlineSearchPrompt = function (code, returnView, searchScope) {
     if (!this.inputFrame) {
         this._ensureFrames();
         if (!this.inputFrame) return false;
@@ -708,6 +708,7 @@ MessageBoard.prototype._beginInlineSearchPrompt = function (code, returnView) {
     this._navSearchActive = true;
     this._navSearchBuffer = '';
     this._navSearchCode = code;
+    this._navSearchScope = searchScope || null;
     this._navSearchReturnView = returnView || this.view;
     this._searchReturnView = this._navSearchReturnView;
     this._navSearchPlaceholder = '[type to search, ENTER=run, ESC=cancel]';
@@ -726,7 +727,19 @@ MessageBoard.prototype._beginInlineSearchPrompt = function (code, returnView) {
 MessageBoard.prototype._paintInlineSearchPrompt = function (message) {
     if (!this.inputFrame) return;
     var code = this._navSearchCode;
-    var targetName = this._getSubNameByCode(code) || code || '';
+    var scope = this._navSearchScope;
+    var targetName = '';
+
+    // Determine search target display based on scope
+    if (scope === 'all') {
+        targetName = 'All Groups';
+    } else if (scope === 'group') {
+        var grpName = (msg_area && msg_area.grp_list && typeof this.curgrp === 'number' && msg_area.grp_list[this.curgrp]) ? msg_area.grp_list[this.curgrp].name : 'Current Group';
+        targetName = grpName;
+    } else {
+        targetName = this._getSubNameByCode(code) || code || '';
+    }
+
     var prompt = 'Search ' + (targetName ? targetName : '') + ': ';
     var buffer = (typeof message === 'string') ? message : this._navSearchBuffer;
     var isPlaceholder = false;
@@ -749,6 +762,7 @@ MessageBoard.prototype._endInlineSearchPrompt = function (statusMsg) {
     this._navSearchActive = false;
     this._navSearchBuffer = '';
     this._navSearchCode = null;
+    this._navSearchScope = null;
     this._navSearchReturnView = null;
     this._navSearchPlaceholder = '';
     this._activeSearchModal = null;
@@ -780,11 +794,12 @@ MessageBoard.prototype._handleInlineSearchKey = function (key) {
             return false;
         }
         var code = this._navSearchCode;
+        var scope = this._navSearchScope;
         var retView = this._navSearchReturnView || this.view;
         this._endInlineSearchPrompt();
         this._searchReturnView = retView;
         this._writeStatus('SEARCH: searching...');
-        this._executeSearch(code, term);
+        this._executeSearch(code, term, scope);
         return false;
     }
     if (key === KEY_BACKSPACE || key === KEY_DEL || key === '\b' || key === '\x7f') {
@@ -1097,7 +1112,10 @@ MessageBoard.prototype._handleKey = function (key) {
                 } else if (this.view === 'sub') {
                     var it2 = this.items[this.selection];
                     if (it2) {
-                        if (it2.type === 'search') { this._searchReturnView = 'sub'; this._promptSearch(this._lastActiveSubCode || null, 'sub'); return false; }
+                        if (it2.action && typeof it2.action === 'function') {
+                            it2.action();
+                            return false;
+                        }
                         if (it2.subCode) {
                             var hasUnread = this._subHasUnread ? this._subHasUnread(it2.subCode, it2._messageCount) : ((it2._unreadCount || 0) > 0);
                             if (hasUnread) this._openSubReader(it2.subCode);
@@ -1398,6 +1416,7 @@ MessageBoard.prototype._init = function (reentry) {
     this._navSearchActive = false;
     this._navSearchBuffer = '';
     this._navSearchCode = null;
+    this._navSearchScope = null;
     this._navSearchReturnView = null;
     this._navSearchPlaceholder = '';
     this._readReturnView = null;
@@ -1732,7 +1751,7 @@ MessageBoard.prototype._renderReadBodyContent = function (text) {
         try { this._readBodyFrame.clear(this._readBodyFrame.attr); } catch (_bodyClearErr) { }
     }
     var bodyText = (typeof text === 'string') ? text : '';
-    var renderText = bodyText;
+    var renderText = this._preprocessMessageForReadability(bodyText);
     var metadata = this._readMessageMetadata || null;
     if (metadata) {
         var metaLines = [];
@@ -1960,6 +1979,139 @@ MessageBoard.prototype._readMessageBody = function (msgbase, header) {
     return body || '';
 };
 
+/**
+ * Get quote color for initials using simple hash-based selection
+ */
+function getQuoteColorForInitials(initials) {
+    // Simple hash function to get consistent color per initials
+    var hash = 0;
+    for (var i = 0; i < initials.length; i++) {
+        hash = ((hash << 5) - hash + initials.charCodeAt(i)) & 0xFFFFFFFF;
+    }
+
+    // Select from available colors (avoid black/white for readability)
+    var colors = [
+        '\x01c',  // CYAN
+        '\x01g',  // GREEN  
+        '\x01y',  // YELLOW
+        '\x01r',  // RED
+        '\x01m',  // MAGENTA
+        '\x01b'   // BLUE
+    ];
+
+    return colors[Math.abs(hash) % colors.length];
+}
+
+MessageBoard.prototype._preprocessMessageForReadability = function (text) {
+    if (!text || typeof text !== 'string') return text || '';
+
+    var lines = text.split(/\r\n|\n|\r/);
+    var processedLines = [];
+    var inMetadata = false;
+
+    // (1) Add blank line at start for padding between header
+    processedLines.push('');
+
+    // Check if we have existing color codes to respect them
+    var hasExistingColors = /\x1b\[[0-9;]*m|\x01[0-9a-fA-FghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ]/.test(text);
+
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var originalLine = line;
+
+        // Check for metadata section
+        if (line.indexOf('-- Metadata --') !== -1) {
+            inMetadata = true;
+        }
+
+        // Skip if line already has color codes - respect existing colors (5)
+        if (hasExistingColors && (/\x1b\[[0-9;]*m|\x01[0-9a-fA-FghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ]/.test(line))) {
+            processedLines.push(line);
+            continue;
+        }
+
+        // If in metadata section, use dark gray
+        if (inMetadata) {
+            processedLines.push('\x01k' + line + '\x01n'); // Dark gray
+            continue;
+        }
+
+        // (2) Style "Re: ..." and "By: ..." lines at beginning with LIGHTBLUE/LIGHTCYAN pattern
+        if (i === 0 || i === 1) {
+            var trimmed = line.trim();
+            if (trimmed.match(/^Re:\s/i)) {
+                // LIGHTBLUE for "Re: " prefix, LIGHTCYAN for rest
+                line = '\x01h\x01b' + 'Re: ' + '\x01h\x01c' + trimmed.substring(4) + '\x01n';
+                processedLines.push(line);
+                continue;
+            } else if (trimmed.match(/^By:\s/i)) {
+                // Parse "By: user to other_user on date" pattern
+                line = formatByLine(trimmed);
+                processedLines.push(line);
+                continue;
+            }
+        }
+
+        // Check if line is a quote and colorize appropriately
+        var isQuote = false;
+        var trimmedLine = line.trim();
+
+        // Simple quote check - starts with ">"
+        if (trimmedLine.charAt(0) === '>') {
+            isQuote = true;
+            // Simple quotes stay normal gray
+            processedLines.push('\x01n' + line + '\x01n');
+        }
+        // Complex quote check - matches "Ab>" pattern  
+        else if (/^\s*([A-Za-z]{2})>\s/.test(line)) {
+            isQuote = true;
+            // Extract initials for colorization
+            var match = line.match(/^(\s*)([A-Za-z]{2})(>\s?)(.*)/);
+            if (match) {
+                var leading = match[1];
+                var initials = match[2];
+                var caret = match[3];
+                var rest = match[4];
+
+                // Get color for initials - use simple hash-based color selection
+                var color = getQuoteColorForInitials(initials);
+                processedLines.push(leading + color + initials + caret + '\x01n' + rest + '\x01n');
+            } else {
+                // Fallback
+                processedLines.push('\x01n' + line + '\x01n');
+            }
+        }
+
+        if (!isQuote) {
+            // (4) Make non-quoted text bright WHITE - just use \x01h (high intensity)
+            processedLines.push('\x01h' + line + '\x01n');
+        }
+    }
+
+    return processedLines.join('\r\n');
+};
+
+function formatByLine(line) {
+    // Parse patterns like "By: user to other_user on date"
+    // LIGHTBLUE for keywords, LIGHTCYAN for values
+    var result = line;
+
+    // Handle "By: user" part - capture until " to " or " on " or end of string
+    result = result.replace(/^(By:\s+)([^]+?)(\s+(?:to|on)\s|$)/, function (match, prefix, name, suffix) {
+        return '\x01h\x01b' + prefix + '\x01h\x01c' + name + '\x01n' + suffix;
+    });
+
+    // Handle " to user" part if present - capture until " on " or end
+    result = result.replace(/(\s+to\s+)([^]+?)(\s+on\s|$)/, function (match, prefix, name, suffix) {
+        return '\x01h\x01b' + prefix + '\x01h\x01c' + name + '\x01n' + suffix;
+    });
+
+    // Handle " on date" part if present - capture rest of line
+    result = result.replace(/(\s+on\s+)(.+)$/, '\x01h\x01b$1\x01h\x01c$2\x01n');
+
+    return result;
+}
+
 MessageBoard.prototype._sanitizeFtnBody = function (text) {
     var metadata = {
         kludges: [],
@@ -2108,6 +2260,11 @@ MessageBoard.prototype._formatReadStatus = function (dispStart, dispEnd, totalLi
         if (idx !== -1) status += ' | THREAD ' + (idx + 1) + '/' + total;
         else status += ' | THREAD ' + total + ' messages';
     }
+    // Add J command hint for flat/ordered reading mode
+    var readMode = (typeof this._getReadMode === 'function') ? this._getReadMode() : null;
+    if (readMode === 'flat' && totalLines > 0) {
+        status += '  [J]=Jump to #';
+    }
     return status;
 };
 
@@ -2145,6 +2302,111 @@ MessageBoard.prototype._handleReadKey = function (key) {
         // replyCurrentMessage returns true if it performed the reply. We return false (consumed) when it succeeds.
         var did = this.replyCurrentMessage && this.replyCurrentMessage();
         return did ? false : true; // if we could not reply, allow other handlers (return true = not consumed)
+    }
+    if (key === KEY_ESC || key === '\x1b') {
+        // ESC: Go back to the return view (typically 'sub' or 'threads')
+        var returnView = this._readReturnView || 'sub';
+        this._readReturnView = null;
+        if (returnView === 'threads') {
+            if (typeof this._renderThreadsView === 'function') this._renderThreadsView(this.cursub);
+            else this._renderSubView(this.curgrp);
+        } else if (returnView === 'flat') {
+            this._renderFlatView();
+        } else {
+            // Default to sub view
+            this._renderSubView(this.curgrp);
+        }
+        return false; // consumed
+    }
+    if (key === 'J' || key === 'j') {
+        // J: Jump to message number in flat/ordered mode
+        var readMode = this._getReadMode ? this._getReadMode() : 'thread';
+        if (readMode === 'flat') {
+            if (this._ensureFlatHeaders) {
+                var headers = this._ensureFlatHeaders();
+                if (headers && headers.length > 0) {
+                    var self = this;
+                    // Try to use Modal if available
+                    if (typeof Modal === 'undefined') {
+                        try { load('future_shell/lib/util/layout/modal.js'); } catch (_modalLoadErr) { }
+                    }
+                    var parent = this.parentFrame || this.hostFrame || this.inputFrame || this.outputFrame;
+                    if (this.view === 'read' && this._readBodyFrame) {
+                        parent = this._readBodyFrame;
+                    }
+                    if (typeof Modal === 'function' && parent) {
+                        // Use Modal for a nice prompt
+                        var modal = new Modal({
+                            parentFrame: parent,
+                            overlay: false,
+                            type: 'prompt',
+                            title: 'Jump to Message',
+                            message: 'Enter message number (1-' + headers.length + ')',
+                            okLabel: 'Jump',
+                            cancelLabel: 'Cancel',
+                            defaultValue: '',
+                            onSubmit: function (value) {
+                                var input = (value || '').trim();
+                                if (!input.length) {
+                                    self._writeStatus('JUMP: Enter a message number');
+                                    return;
+                                }
+                                var msgNum = parseInt(input, 10);
+                                if (isNaN(msgNum) || msgNum < 1 || msgNum > 65535) {
+                                    self._writeStatus('JUMP: Invalid message number');
+                                    return;
+                                }
+                                // First, look for exact match
+                                var idx = -1;
+                                for (var i = 0; i < headers.length; i++) {
+                                    if (headers[i] && headers[i].number === msgNum) {
+                                        idx = i;
+                                        break;
+                                    }
+                                }
+                                // If not found, search forward for next available message
+                                if (idx === -1) {
+                                    for (var i = 0; i < headers.length; i++) {
+                                        if (headers[i] && headers[i].number > msgNum) {
+                                            idx = i;
+                                            msgNum = headers[i].number; // update to show which one we're jumping to
+                                            break;
+                                        }
+                                    }
+                                }
+                                // If still not found, search backward for previous available message
+                                if (idx === -1) {
+                                    for (var i = headers.length - 1; i >= 0; i--) {
+                                        if (headers[i] && headers[i].number < msgNum) {
+                                            idx = i;
+                                            msgNum = headers[i].number; // update to show which one we're jumping to
+                                            break;
+                                        }
+                                    }
+                                }
+                                // Still nothing found
+                                if (idx === -1) {
+                                    self._writeStatus('JUMP: No messages near number ' + input);
+                                    return;
+                                }
+                                self.flatSelection = idx;
+                                if (self.flatSelection < self.flatScrollOffset) self.flatScrollOffset = self.flatSelection;
+                                var usable = self._threadContentFrame ? Math.max(1, self._threadContentFrame.height - 2) : headers.length;
+                                if (self.flatSelection >= self.flatScrollOffset + usable) self.flatScrollOffset = Math.max(0, self.flatSelection - usable + 1);
+                                if (headers[idx]) {
+                                    self._renderReadView(headers[idx]);
+                                }
+                            },
+                            onCancel: function () {
+                                self._writeStatus('JUMP cancelled');
+                            }
+                        });
+                        return false; // consumed
+                    }
+                }
+            }
+        }
+        return true; // not consumed if not in flat mode or no headers
     }
     if (controller && typeof controller.handleKey === 'function') {
         var handled = controller.handleKey.call(controller, key);
@@ -3446,14 +3708,16 @@ MessageBoard.prototype._resolveBoardIcon = function (name, type) {
     return fallback;
 };
 
-MessageBoard.prototype._promptSearch = function (preferredCode, returnView) {
+MessageBoard.prototype._promptSearch = function (preferredCode, returnView, searchScope) {
     this._ensureFrames();
-    var code = preferredCode || this.cursub || this._lastActiveSubCode || bbs.cursub_code || null;
-    if (!code) {
+    // For multi-scope searches, we don't need a specific code upfront
+    var code = preferredCode || (searchScope !== 'all' && searchScope !== 'group' ? (this.cursub || this._lastActiveSubCode || bbs.cursub_code) : null) || null;
+    var needsCode = (searchScope !== 'all' && searchScope !== 'group');
+    if (needsCode && !code) {
         this._writeStatus('SEARCH: Select a sub first');
         return;
     }
-    this._lastActiveSubCode = code;
+    if (code) this._lastActiveSubCode = code;
     if (typeof Modal === 'undefined') {
         try { load('future_shell/lib/util/layout/modal.js'); } catch (_modalLoadErr) { }
     }
@@ -3466,16 +3730,27 @@ MessageBoard.prototype._promptSearch = function (preferredCode, returnView) {
             try { this._activeSearchModal.close(); } catch (_eCloseExisting) { }
         }
         var self = this;
-        var subName = this._getSubNameByCode(code) || code || '';
+        var searchLabel = '';
+        log('[SEARCH DEBUG] searchScope=' + JSON.stringify(searchScope) + ' code=' + JSON.stringify(code) + ' curgrp=' + JSON.stringify(this.curgrp));
+        if (searchScope === 'all') {
+            searchLabel = 'All Groups';
+        } else if (searchScope === 'group') {
+            var grpName = (msg_area && msg_area.grp_list && typeof this.curgrp === 'number' && msg_area.grp_list[this.curgrp]) ? msg_area.grp_list[this.curgrp].name : 'Current Group';
+            searchLabel = grpName;
+            log('[SEARCH DEBUG] group search: grpName=' + JSON.stringify(grpName));
+        } else {
+            searchLabel = this._getSubNameByCode(code) || code || '';
+            log('[SEARCH DEBUG] single sub search: searchLabel=' + JSON.stringify(searchLabel));
+        }
         var modal = new Modal({
             parentFrame: parent,
             overlay: false,
             type: 'prompt',
             title: 'Search Messages',
-            message: subName ? ('Search ' + subName) : 'Search',
+            message: searchLabel ? ('Search ' + searchLabel) : 'Search',
             okLabel: 'Search',
             cancelLabel: 'Cancel',
-            defaultValue: (this._searchQuery && this._lastActiveSubCode === code) ? this._searchQuery : '',
+            defaultValue: (this._searchQuery && (!code || this._lastActiveSubCode === code)) ? this._searchQuery : '',
             onSubmit: function (value) {
                 var term = (value || '').trim();
                 if (!term.length) {
@@ -3485,7 +3760,7 @@ MessageBoard.prototype._promptSearch = function (preferredCode, returnView) {
                 self._searchReturnView = returnView || self.view;
                 self._writeStatus('SEARCH: searching...');
                 try { modal.close(); } catch (_eModalClose) { }
-                self._executeSearch(code, term);
+                self._executeSearch(code, term, searchScope);
             },
             onCancel: function () {
                 self._searchReturnView = null;
@@ -3500,7 +3775,7 @@ MessageBoard.prototype._promptSearch = function (preferredCode, returnView) {
         this._activeSearchModal = modal;
         return;
     }
-    if (this._beginInlineSearchPrompt(code, returnView)) return;
+    if (this._beginInlineSearchPrompt(code, returnView, searchScope)) return;
     var subName = this._getSubNameByCode(code) || code;
     this._writeStatus('SEARCH: Unable to open inline prompt for ' + subName);
 };
@@ -3548,59 +3823,93 @@ MessageBoard.prototype._scanMessagesAddressedToUser = function (opts) {
 };
 
 
-MessageBoard.prototype._executeSearch = function (code, query) {
+MessageBoard.prototype._executeSearch = function (code, query, searchScope) {
+    // searchScope: undefined/null (single sub), 'group' (all subs in current group), 'all' (all groups/subs)
     var results = [];
-    if (code) this._lastActiveSubCode = code;
-    var mb = new MsgBase(code);
-    if (!mb.open()) {
-        this._writeStatus('SEARCH: Unable to open ' + code);
-        return;
-    }
-    try {
-        var total = mb.total_msgs || 0;
-        for (var n = 1; n <= total; n++) {
-            var hdr = mb.get_msg_header(false, n, true);
-            if (!hdr) continue;
-            var matched = false;
-            var fields = [hdr.subject, hdr.from, hdr.to, hdr.from_net, hdr.to_net, hdr.id, hdr.reply_id];
-            var lowered = query.toLowerCase();
-            for (var i = 0; i < fields.length && !matched; i++) {
-                var val = fields[i];
-                if (val && String(val).toLowerCase().indexOf(lowered) !== -1) matched = true;
-            }
-            var body = null;
-            if (!matched) {
-                try { body = this._readMessageBody(mb, hdr); } catch (e) { body = null; }
-                if (body && body.toLowerCase().indexOf(lowered) !== -1) matched = true;
-            }
-            if (!matched) continue;
-            if (body === null) {
-                try { body = this._readMessageBody(mb, hdr); } catch (e) { body = ''; }
-            }
-            var snippet = '';
-            if (body) {
-                var clean = body.replace(/\r?\n/g, ' ');
-                var idx = clean.toLowerCase().indexOf(lowered);
-                if (idx !== -1) {
-                    var start = Math.max(0, idx - 30);
-                    var end = Math.min(clean.length, idx + query.length + 30);
-                    snippet = clean.substring(start, end).replace(/\s+/g, ' ');
-                    if (start > 0) snippet = '...' + snippet;
-                    if (end < clean.length) snippet += '...';
+    var codes = [];
+    var self = this;
+
+    // Determine which sub codes to search
+    if (searchScope === 'all' && msg_area && msg_area.grp_list) {
+        // Search all groups and subs
+        for (var gi = 0; gi < msg_area.grp_list.length; gi++) {
+            var grp = msg_area.grp_list[gi];
+            if (grp && grp.sub_list) {
+                for (var si = 0; si < grp.sub_list.length; si++) {
+                    var sub = grp.sub_list[si];
+                    if (sub && sub.code) codes.push(sub.code);
                 }
             }
-            if (!snippet && hdr.subject) snippet = hdr.subject;
-            results.push({
-                code: code,
-                header: hdr,
-                number: hdr.number,
-                subject: hdr.subject || '(no subject)',
-                from: hdr.from || hdr.from_net || 'unknown',
-                snippet: snippet
-            });
         }
-    } finally {
-        try { mb.close(); } catch (e) { }
+    } else if (searchScope === 'group' && msg_area && msg_area.grp_list && typeof this.curgrp === 'number') {
+        // Search all subs in the current group
+        var grp = msg_area.grp_list[this.curgrp];
+        if (grp && grp.sub_list) {
+            for (var si = 0; si < grp.sub_list.length; si++) {
+                var sub = grp.sub_list[si];
+                if (sub && sub.code) codes.push(sub.code);
+            }
+        }
+    } else {
+        // Search single sub
+        if (code) codes.push(code);
+    }
+
+    // Search all applicable codes
+    for (var ci = 0; ci < codes.length; ci++) {
+        var searchCode = codes[ci];
+        if (!searchCode) continue;
+        if (ci === 0) this._lastActiveSubCode = searchCode;
+
+        var mb = new MsgBase(searchCode);
+        if (!mb.open()) continue;
+
+        try {
+            var total = mb.total_msgs || 0;
+            for (var n = 1; n <= total; n++) {
+                var hdr = mb.get_msg_header(false, n, true);
+                if (!hdr) continue;
+                var matched = false;
+                var fields = [hdr.subject, hdr.from, hdr.to, hdr.from_net, hdr.to_net, hdr.id, hdr.reply_id];
+                var lowered = query.toLowerCase();
+                for (var i = 0; i < fields.length && !matched; i++) {
+                    var val = fields[i];
+                    if (val && String(val).toLowerCase().indexOf(lowered) !== -1) matched = true;
+                }
+                var body = null;
+                if (!matched) {
+                    try { body = this._readMessageBody(mb, hdr); } catch (e) { body = null; }
+                    if (body && body.toLowerCase().indexOf(lowered) !== -1) matched = true;
+                }
+                if (!matched) continue;
+                if (body === null) {
+                    try { body = this._readMessageBody(mb, hdr); } catch (e) { body = ''; }
+                }
+                var snippet = '';
+                if (body) {
+                    var clean = body.replace(/\r?\n/g, ' ');
+                    var idx = clean.toLowerCase().indexOf(lowered);
+                    if (idx !== -1) {
+                        var start = Math.max(0, idx - 30);
+                        var end = Math.min(clean.length, idx + query.length + 30);
+                        snippet = clean.substring(start, end).replace(/\s+/g, ' ');
+                        if (start > 0) snippet = '...' + snippet;
+                        if (end < clean.length) snippet += '...';
+                    }
+                }
+                if (!snippet && hdr.subject) snippet = hdr.subject;
+                results.push({
+                    code: searchCode,
+                    header: hdr,
+                    number: hdr.number,
+                    subject: hdr.subject || '(no subject)',
+                    from: hdr.from || hdr.from_net || 'unknown',
+                    snippet: snippet
+                });
+            }
+        } finally {
+            try { mb.close(); } catch (e) { }
+        }
     }
     if (!results.length) {
         this._writeStatus('SEARCH: No matches for "' + query + '"');
@@ -3652,7 +3961,19 @@ MessageBoard.prototype._exitSearchResults = function () {
 MessageBoard.prototype._paintSearchResults = function () {
     var f = this.outputFrame; if (!f) return;
     try { f.clear(); } catch (e) { }
-    var header = '\x01h\x01cSearch \x01h\x01y"' + this._searchQuery + '"\x01h\x01c in \x01h\x01y' + (this._getCurrentSubName() || '') + '\x01h\x01c (' + this._searchResults.length + ' results)\x01n';
+    // Check if results span multiple subs
+    var multiSub = false;
+    var resultCodes = {};
+    if (this._searchResults && this._searchResults.length > 0) {
+        for (var j = 0; j < this._searchResults.length; j++) {
+            if (this._searchResults[j] && this._searchResults[j].code) {
+                resultCodes[this._searchResults[j].code] = true;
+            }
+        }
+        multiSub = Object.keys(resultCodes).length > 1;
+    }
+    var headerScope = multiSub ? 'multiple subs' : (this._getCurrentSubName() || '');
+    var header = '\x01h\x01cSearch \x01h\x01y"' + this._searchQuery + '"\x01h\x01c in \x01h\x01y' + headerScope + '\x01h\x01c (' + this._searchResults.length + ' results)\x01n';
     if (header.length > f.width) header = header.substr(0, f.width);
     try { f.gotoxy(1, 1); f.putmsg(header); } catch (e) { }
     var usable = Math.max(1, f.height - 2);
@@ -3667,7 +3988,12 @@ MessageBoard.prototype._paintSearchResults = function () {
         var res = this._searchResults[i];
         var lineY = 2 + (i - this._searchScrollOffset);
         if (lineY > f.height) break;
+        // Include sub code in display if results span multiple subs
         var line = this._padLeft('' + res.number, 5, ' ') + ' ' + this._padRight((res.from || '').substr(0, 12), 12, ' ') + ' ' + (res.subject || '');
+        if (multiSub && res.code) {
+            var subName = this._getSubNameByCode(res.code) || res.code;
+            line = this._padRight(subName, 10, ' ') + ' ' + line;
+        }
         if (res.snippet) line += ' - ' + res.snippet.replace(/\s+/g, ' ');
         if (line.length > f.width) line = line.substr(0, f.width - 3) + '...';
         var selected = (i === this._searchSelection);
@@ -3949,6 +4275,7 @@ MessageBoard.prototype._ensureFlatHeaders = function () {
     if (this._flatHeadersSub !== code) {
         this._flatHeadersSort = null;
         this.flatHeaders = [];
+        this.threadHeaders = [];
     }
     if (!this.threadHeaders || !this.threadHeaders.length) {
         if (typeof this._loadThreadHeaders === 'function') this._loadThreadHeaders();
@@ -5199,6 +5526,25 @@ MessageBoard.prototype.resumeForReason = function (reason) {
     if (reason === 'screensaver_off') {
         if (this.__bg_frame && typeof this.__bg_frame.bottom === 'function') {
             try { this.__bg_frame.bottom(); this.__bg_frame.clear(); this.__bg_frame.cycle(); } catch (e) { }
+        }
+        // Restore hotspots after screensaver ends by repainting the current view
+        try {
+            // Clear and rebuild hotspots
+            if (typeof this._releaseHotspots === 'function') this._releaseHotspots();
+            // Repaint current view which will rebuild hotspots
+            if (typeof this._renderCurrentView === 'function') {
+                var currentView = this.view || 'group';
+                if (currentView === 'read' && this.lastReadMsg) {
+                    // For read view, need to pass the message to re-enter properly
+                    this._renderCurrentView(currentView, this.lastReadMsg);
+                } else {
+                    this._renderCurrentView(currentView);
+                }
+            }
+            // Also call draw to ensure everything is cycled
+            if (typeof this.draw === 'function') this.draw();
+        } catch (hsErr) {
+            log('[Message Board] Error restoring hotspots after screensaver: ' + hsErr);
         }
     }
 };

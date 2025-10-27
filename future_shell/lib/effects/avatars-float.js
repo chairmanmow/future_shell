@@ -44,11 +44,18 @@ var AVATAR_LIB = (function () {
 	"use strict";
 
 	function rand(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
-
+	function getMaxEntities() {
+		var minimumEntities = 4;
+		var squeeze = 6;
+		var size = console.screen_rows * console.screen_columns;
+		var avatarSize = 10 * 6; // width * height
+		var maxEntities = parseInt(Math.floor(size / avatarSize) / squeeze);
+		return maxEntities > minimumEntities ? maxEntities : minimumEntities;
+	}
 	function AvatarsFloat() {
 		log("AvatarsFloat:ctor:start");
 		this.f = null; this.entities = []; this.tickCount = 0; this.lastGreetingTick = 0;
-		this.maxEntities = 4; this.speed = 1; this.greetingDuration = 20; // frames (shorter)
+		this.maxEntities = getMaxEntities(); this.speed = 1; this.greetingDuration = 20; // frames (shorter)
 		this._avatarLib = AVATAR_LIB; this._opts = {}; this._debug = true; // forced on for now
 		this._loadAttempted = false; // ensure we only try after opts available
 		this._initLogged = false; this._firstTickLogged = false;

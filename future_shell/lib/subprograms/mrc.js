@@ -272,7 +272,7 @@ MRCService.prototype._initializeSession = function () {
         this._sendStartupMetadata();
     } catch (err) {
         this.connected = false;
-        this._handleServerText('Unable to connect to MRC: ' + err);
+        this._handleServerText(this.colorize('STATE_ERROR', 'Unable to connect to MRC: ') + this.colorize('MESSAGE_ERROR', err));
     }
 };
 
@@ -311,7 +311,7 @@ MRCService.prototype._bindSessionEvents = function () {
     this.session.on('sent_privmsg', function (target, body) { self._handlePrivateEcho(target, body); });
     this.session.on('ctcp-msg', function (msg) { self._handleServerText(msg); });
     this.session.on('disconnect', function () { self._handleDisconnect(); });
-    this.session.on('error', function (err) { self._handleServerText(String(err || 'Unknown error')); });
+    this.session.on('error', function (err) { self._handleServerText(self.colorize('MESSAGE_ERROR', String(err || 'Unknown error'))); });
 };
 
 MRCService.prototype._handlePrivateEcho = function (target, msg) {
@@ -334,7 +334,7 @@ MRCService.prototype._handlePrivateEcho = function (target, msg) {
 
 MRCService.prototype._handleDisconnect = function () {
     this.connected = false;
-    this._handleServerText('Disconnected from MRC.');
+    this._handleServerText(this.colorize('STATE_DISCONNECTED', 'Disconnected from MRC.'));
     this._notify('onServiceDisconnect', {});
 };
 
@@ -601,7 +601,7 @@ MRCService.prototype.ensureActiveRoom = function (roomHint) {
             this.session.join(cleanTarget);
             this.flush();
         } catch (joinErr) {
-            try { this._handleServerText('Attempt to join #' + cleanTarget + ' failed: ' + joinErr); } catch (_) { }
+            try { this._handleServerText(this.colorize('STATE_ERROR', 'Attempt to join ') + this.colorize('HEADER_ROOM', '#' + cleanTarget) + this.colorize('STATE_ERROR', ' failed: ') + this.colorize('MESSAGE_ERROR', joinErr)); } catch (_) { }
             return false;
         }
     }
@@ -742,7 +742,9 @@ MRCService.prototype.executeCommand = function (cmdLine) {
     var rest = parts.join(' ');
     if (command === 'toggle_toast') {
         this.setToastEnabled(!this.toastEnabled);
-        this._handleServerText('Toast notifications ' + (this.toastEnabled ? 'enabled' : 'disabled') + '.');
+        var status = this.toastEnabled ? 'enabled' : 'disabled';
+        var statusColor = this.toastEnabled ? 'TOAST_ENABLED' : 'TOAST_DISABLED';
+        this._handleServerText(this.colorize('MESSAGE_SYSTEM', 'Toast notifications ') + this.colorize(statusColor, status) + this.colorize('MESSAGE_SYSTEM', '.'));
         return;
     }
     if (command === 'toggle_nicks') {
@@ -788,7 +790,7 @@ MRCService.prototype.disconnect = function () {
         try { this._ownTimer.dispose(); } catch (_) { }
         this._ownTimer = null;
     }
-    this._handleServerText('Disconnected.');
+    this._handleServerText(this.colorize('STATE_DISCONNECTED', 'Disconnected.'));
 };
 
 function MRC(opts) {
@@ -801,13 +803,61 @@ function MRC(opts) {
     this._lastKeyTs = 0;
     if (typeof this.registerColors === 'function') {
         this.registerColors({
+            // Frame backgrounds and structures
             CHAT_HEADER: { BG: BG_BLUE, FG: WHITE },
             CHAT_OUTPUT: { BG: BG_BLACK, FG: LIGHTGRAY },
             CHAT_CONTROLS: { BG: BG_BLACK, FG: LIGHTGRAY },
             CHAT_INPUT: { BG: BG_BLUE, FG: WHITE },
             CHAT_ROSTER: { BG: BG_BLACK, FG: CYAN },
+
+            // Buttons and interactive elements
             CHAT_BUTTON: { BG: BG_CYAN, FG: WHITE },
-            CHAT_BUTTON_FOCUS: { BG: BG_BLUE, FG: WHITE }
+            CHAT_BUTTON_FOCUS: { BG: BG_BLUE, FG: WHITE },
+
+            // Header content - room name, topic, etc.
+            HEADER_TITLE: { BG: BG_BLUE, FG: WHITE },
+            HEADER_ROOM: { BG: BG_BLUE, FG: YELLOW },
+            HEADER_TOPIC: { BG: BG_BLUE, FG: LIGHTCYAN },
+
+            // Footer status display
+            STATUS_LATENCY: { BG: BG_BLUE, FG: LIGHTGREEN },
+            STATUS_BBS_COUNT: { BG: BG_BLUE, FG: LIGHTCYAN },
+            STATUS_ROOM_COUNT: { BG: BG_BLUE, FG: YELLOW },
+            STATUS_USER_COUNT: { BG: BG_BLUE, FG: LIGHTMAGENTA },
+            STATUS_FLAGS: { BG: BG_BLUE, FG: WHITE },
+
+            // Input area
+            INPUT_PROMPT: { BG: BG_BLUE, FG: LIGHTGREEN },
+            INPUT_TEXT: { BG: BG_BLUE, FG: WHITE },
+
+            // Message display
+            MESSAGE_TEXT: { BG: BG_BLACK, FG: LIGHTGRAY },
+            MESSAGE_TIMESTAMP: { BG: BG_BLACK, FG: DARKGRAY },
+            MESSAGE_NICK: { BG: BG_BLACK, FG: CYAN },
+            MESSAGE_MENTION: { BG: BG_BLACK, FG: YELLOW },
+            MESSAGE_SYSTEM: { BG: BG_BLACK, FG: LIGHTGREEN },
+            MESSAGE_ERROR: { BG: BG_BLACK, FG: LIGHTRED },
+
+            // Nickname list
+            NICK_NORMAL: { BG: BG_BLACK, FG: CYAN },
+            NICK_SELF: { BG: BG_BLACK, FG: YELLOW },
+            NICK_OPERATOR: { BG: BG_BLACK, FG: LIGHTGREEN },
+
+            // Controls panel info
+            CONTROLS_HELP: { BG: BG_BLACK, FG: LIGHTGRAY },
+            CONTROLS_KEYHELP: { BG: BG_BLACK, FG: WHITE },
+
+            // Connection states  
+            STATE_CONNECTING: { BG: BG_BLACK, FG: YELLOW },
+            STATE_CONNECTED: { BG: BG_BLACK, FG: LIGHTGREEN },
+            STATE_DISCONNECTED: { BG: BG_BLACK, FG: LIGHTRED },
+            STATE_ERROR: { BG: BG_BLACK, FG: RED },
+
+            // Toast toggles and flags
+            TOAST_ENABLED: { BG: BG_BLUE, FG: LIGHTGREEN },
+            TOAST_DISABLED: { BG: BG_BLUE, FG: LIGHTRED },
+            NICKS_SHOWN: { BG: BG_BLUE, FG: LIGHTGREEN },
+            NICKS_HIDDEN: { BG: BG_BLUE, FG: LIGHTRED }
         }, 'mrc');
     }
     this.rendered = false;
@@ -1299,11 +1349,21 @@ MRC.prototype._renderHeader = function () {
     var attr = this.headerFrame.attr || this.paletteAttr('CHAT_HEADER', BG_BLUE | WHITE);
     this.headerFrame.attr = attr;
     this.headerFrame.clear(attr);
-    var text = 'MRC';
-    if (this._room) text += ' #' + this._room;
-    if (this._topic) text += ' - ' + this._topic;
+
+    // Build colored header text with semantic colors
+    var parts = [];
+    parts.push(this.colorize('HEADER_TITLE', 'MRC'));
+    if (this._room) {
+        parts.push(' ');
+        parts.push(this.colorize('HEADER_ROOM', '#' + this._room));
+    }
+    if (this._topic) {
+        parts.push(this.colorize('HEADER_TOPIC', ' - ' + this._topic));
+    }
+
+    var text = parts.join('');
     this.headerFrame.gotoxy(1, 1);
-    this.headerFrame.putmsg(text.substr(0, this.headerFrame.width), attr);
+    this.headerFrame.putmsg(text.substr(0, this.headerFrame.width));
     this.headerFrame.cycle();
 };
 
@@ -1312,19 +1372,50 @@ MRC.prototype._renderFooter = function () {
     var attr = this.footerFrame.attr || this.paletteAttr('CHAT_INPUT', BG_BLUE | WHITE);
     this.footerFrame.attr = attr;
     this.footerFrame.clear(attr);
-    var status = convertStatus(this._stats, this._latency);
-    var flags = '[Toasts ' + (this._toastEnabled ? 'On' : 'Off') + '] [Nicks ' + (this._showNickList ? 'Shown' : 'Hidden') + ']';
+
+    // Build colorized status line
+    var statusParts = [];
+    if (this._latency !== undefined && this._latency !== null && this._latency !== '-' && this._latency !== '') {
+        statusParts.push(this.colorize('STATUS_LATENCY', 'Latency ' + this._latency + 'ms'));
+    }
+    if (Array.isArray(this._stats) && this._stats.length >= 3) {
+        statusParts.push('  ');
+        statusParts.push(this.colorize('STATUS_BBS_COUNT', 'BBS ' + this._stats[0]));
+        statusParts.push('  ');
+        statusParts.push(this.colorize('STATUS_ROOM_COUNT', 'Rooms ' + this._stats[1]));
+        statusParts.push('  ');
+        statusParts.push(this.colorize('STATUS_USER_COUNT', 'Users ' + this._stats[2]));
+    }
+
+    // Build colorized flags
+    var flagParts = [];
+    flagParts.push('[');
+    flagParts.push(this.colorize('STATUS_FLAGS', 'Toasts'));
+    flagParts.push(' ');
+    flagParts.push(this.colorize(this._toastEnabled ? 'TOAST_ENABLED' : 'TOAST_DISABLED', this._toastEnabled ? 'On' : 'Off'));
+    flagParts.push('] [');
+    flagParts.push(this.colorize('STATUS_FLAGS', 'Nicks'));
+    flagParts.push(' ');
+    flagParts.push(this.colorize(this._showNickList ? 'NICKS_SHOWN' : 'NICKS_HIDDEN', this._showNickList ? 'Shown' : 'Hidden'));
+    flagParts.push(']'); var statusText = statusParts.join('');
+    var flagsText = flagParts.join('');
+    var fullText = statusText + (statusText && flagsText ? ' ' : '') + flagsText;
+
     var width = this.footerFrame.width;
     this.footerFrame.gotoxy(1, 1);
-    this.footerFrame.putmsg((status + ' ' + flags).substr(0, width), attr);
-    var inputLine = '> ' + this._inputBuffer;
+    this.footerFrame.putmsg(fullText.substr(0, width));
+
+    // Colorized input prompt
+    var promptText = this.colorize('INPUT_PROMPT', '> ');
+    var inputText = this.colorize('INPUT_TEXT', this._inputBuffer);
+    var inputLine = promptText + inputText;
     var available = Math.max(1, width);
     var trimmed = inputLine;
     if (inputLine.length > available) {
         trimmed = inputLine.substr(inputLine.length - available);
     }
     this.footerFrame.gotoxy(1, Math.max(1, this.footerFrame.height));
-    this.footerFrame.putmsg(trimmed, attr);
+    this.footerFrame.putmsg(trimmed);
     this.footerFrame.cycle();
 };
 
@@ -1335,7 +1426,11 @@ MRC.prototype._refreshFooterInput = function () {
         this.footerFrame.attr = attr;
     }
     var width = this.footerFrame.width;
-    var inputLine = '> ' + this._inputBuffer;
+
+    // Colorized input prompt and text
+    var promptText = this.colorize('INPUT_PROMPT', '> ');
+    var inputText = this.colorize('INPUT_TEXT', this._inputBuffer);
+    var inputLine = promptText + inputText;
     var available = Math.max(1, width);
     var trimmed = inputLine;
     if (inputLine.length > available) {
@@ -1345,7 +1440,7 @@ MRC.prototype._refreshFooterInput = function () {
     if (trimmed.length < available) spaces = new Array(available - trimmed.length + 1).join(' ');
     try {
         this.footerFrame.gotoxy(1, Math.max(1, this.footerFrame.height));
-        this.footerFrame.putmsg(trimmed + spaces, attr);
+        this.footerFrame.putmsg(trimmed + spaces);
         this.footerFrame.cycle();
     } catch (_) { }
 };
@@ -1496,9 +1591,27 @@ MRC.prototype._renderButtons = function () {
     this.controlsFrame.attr = attr;
     this.controlsFrame.clear(attr);
     if (this.buttonsFrame) {
-        var info = '[Ctrl+Q Exit] [F1 Help] [PgUp/PgDn Scroll] [Ctrl+T Toast] [Ctrl+N Nicks]';
+        // Colorized help text
+        var helpParts = [];
+        helpParts.push('[');
+        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'Ctrl+Q'));
+        helpParts.push(this.colorize('CONTROLS_HELP', ' Exit'));
+        helpParts.push('] [');
+        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'F1'));
+        helpParts.push(this.colorize('CONTROLS_HELP', ' Help'));
+        helpParts.push('] [');
+        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'PgUp/PgDn'));
+        helpParts.push(this.colorize('CONTROLS_HELP', ' Scroll'));
+        helpParts.push('] [');
+        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'Ctrl+T'));
+        helpParts.push(this.colorize('CONTROLS_HELP', ' Toast'));
+        helpParts.push('] [');
+        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'Ctrl+N'));
+        helpParts.push(this.colorize('CONTROLS_HELP', ' Nicks'));
+        helpParts.push(']');
+        var info = helpParts.join('');
         this.controlsFrame.gotoxy(1, 1);
-        this.controlsFrame.putmsg(info.substr(0, this.controlsFrame.width), attr);
+        this.controlsFrame.putmsg(info.substr(0, this.controlsFrame.width));
     }
     this.controlsFrame.cycle();
     if (this.buttonsFrame) {

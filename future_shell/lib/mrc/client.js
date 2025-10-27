@@ -186,6 +186,10 @@ MrcClient.prototype._bindSessionEvents = function () {
         self._emit('ctcp', { msg: msg });
     });
 
+    this.session.on('local_help', function (helpText) {
+        self._emit('banner', { text: helpText });
+    });
+
     this.session.on('disconnect', function () {
         self.connected = false;
         self._emit('disconnect', {});

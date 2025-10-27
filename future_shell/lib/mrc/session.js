@@ -323,7 +323,18 @@ function MRC_Session(host, port, user, pass, alias) {
         help: {
             //help: 'Display this help message',
             callback: function (str) {
-                emit('local_help', str);
+                // Load help text from external file
+                var helpText = '';
+                try {
+                    var helpFile = new File(system.mods_dir + 'future_shell/lib/3rdp/mrc/mrc-help-main.msg');
+                    if (helpFile.open('r')) {
+                        helpText = helpFile.read();
+                        helpFile.close();
+                    }
+                } catch (e) {
+                    helpText = 'Help file not found. Available commands: /join, /msg, /info, /rooms, /users, /motd, /quit';
+                }
+                emit('local_help', helpText || 'No help available.');
             }
         },
         info: {

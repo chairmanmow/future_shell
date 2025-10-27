@@ -216,7 +216,7 @@ if (typeof lazyLoadModule !== 'function') {
             iconFile: board._resolveBoardIcon('search', 'search'),
             iconBg: BG_BLUE,
             iconFg: WHITE,
-            action: function () { board._promptSearch(board._lastActiveSubCode || board.cursub || null, 'group'); }
+            action: function () { board._promptSearch(null, 'group', 'all'); }
         });
         for (var gi = 0; gi < msg_area.grp_list.length; gi++) {
             var grp = msg_area.grp_list[gi];
@@ -250,7 +250,7 @@ if (typeof lazyLoadModule !== 'function') {
     }
 
     function promptGroupSearch(board) {
-        board._promptSearch(board._lastActiveSubCode || board.cursub || null, 'group');
+        board._promptSearch(null, 'group', 'all');
         return false;
     }
 
@@ -336,7 +336,8 @@ if (typeof lazyLoadModule !== 'function') {
                 hotkey: 'S',
                 iconFile: board._resolveBoardIcon('search', 'search'),
                 iconBg: BG_BLUE,
-                iconFg: WHITE
+                iconFg: WHITE,
+                action: function () { board._promptSearch(null, 'sub', 'group'); }
             }
         ];
         for (var si = 0; si < grp.sub_list.length; si++) {
@@ -368,6 +369,12 @@ if (typeof lazyLoadModule !== 'function') {
         var item = board.items[board.selection];
         if (!item) return false;
         if (item.type === 'groups') { board._renderGroupView(); return false; }
+        if (item.type === 'search') {
+            if (item.action && typeof item.action === 'function') {
+                item.action();
+            }
+            return false;
+        }
         if (item.type === 'sub') {
             var hasUnread = board._subHasUnread ? board._subHasUnread(item.subCode, item._messageCount) : ((item._unreadCount || 0) > 0);
             if (hasUnread) board._openSubReader(item.subCode);
@@ -379,7 +386,8 @@ if (typeof lazyLoadModule !== 'function') {
 
     function promptSubSearch(board) {
         board._searchReturnView = 'sub';
-        board._promptSearch(board._lastActiveSubCode || null, 'sub');
+        log('[SUBSEARCH] Calling _promptSearch with args: null, "sub", "group"');
+        board._promptSearch(null, 'sub', 'group');
         return false;
     }
 
@@ -856,7 +864,7 @@ if (typeof lazyLoadModule !== 'function') {
                 board._promptSearch(board.cursub || board._lastActiveSubCode || null, 'read');
                 return false;
             default:
-                return true;
+                return undefined; // Allow fallthrough to board._handleReadKey for other keys
         }
     };
 

@@ -907,7 +907,6 @@ IconShell.prototype._decodeEscapeSequence = function (key, queue) {
 };
 
 IconShell.prototype._processKeyQueue = function (keys, nowTs) {
-    log('processing key queue: ' + JSON.stringify(keys));
     if (!keys || !keys.length) return;
     var perf = global.__ICSH_PERF__ || null;
     if (!nowTs) nowTs = Date.now();
