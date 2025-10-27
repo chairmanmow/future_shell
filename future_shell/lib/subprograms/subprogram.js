@@ -344,17 +344,6 @@ Subprogram.prototype._ensureHostFrame = function () {
     if (this.hostFrame && this.hostFrame.is_open) return this.hostFrame;
     if (!this.parentFrame) return null;
     var pf = this.parentFrame;
-    try {
-        log((this.name || 'subprogram') + ' _ensureHostFrame parent', JSON.stringify({
-            open: !!pf.is_open,
-            x: pf.x,
-            y: pf.y,
-            width: pf.width,
-            height: pf.height,
-            consoleCols: (typeof console !== 'undefined' && console) ? console.screen_columns : null,
-            consoleRows: (typeof console !== 'undefined' && console) ? console.screen_rows : null
-        }));
-    } catch (_logErr) { }
     var width = Math.max(1, pf.width || console.screen_columns || 80);
     var height = Math.max(1, pf.height || console.screen_rows || 24);
     var attr;

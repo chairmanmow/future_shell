@@ -112,15 +112,23 @@ IconShell.prototype.runExternal = function (fn, opts) {
 };
 
 IconShell.prototype._notifyMrcExternalSuspend = function (info) {
-    return;
-    if (!this.mrcService || typeof this.mrcService.handleExternalSuspend !== 'function') return;
-    try { this.mrcService.handleExternalSuspend(info || {}); } catch (_) { }
+    if (!this.mrcController || typeof this.mrcController.handleExternalSuspend !== 'function') return;
+    // Check user preference for MRC presence notifications
+    var prefs = this._getShellPrefs ? this._getShellPrefs() : null;
+    if (prefs && typeof prefs.shouldDisplayNotification === 'function') {
+        if (!prefs.shouldDisplayNotification('mrc_presence')) return;
+    }
+    try { this.mrcController.handleExternalSuspend(info || {}); } catch (_) { }
 };
 
 IconShell.prototype._notifyMrcExternalResume = function (info) {
-    return;
-    if (!this.mrcService || typeof this.mrcService.handleExternalResume !== 'function') return;
-    try { this.mrcService.handleExternalResume(info || {}); } catch (_) { }
+    if (!this.mrcController || typeof this.mrcController.handleExternalResume !== 'function') return;
+    // Check user preference for MRC presence notifications
+    var prefs = this._getShellPrefs ? this._getShellPrefs() : null;
+    if (prefs && typeof prefs.shouldDisplayNotification === 'function') {
+        if (!prefs.shouldDisplayNotification('mrc_presence')) return;
+    }
+    try { this.mrcController.handleExternalResume(info || {}); } catch (_) { }
 };
 
 // Queue a subprogram launch so the triggering key (e.g. ENTER) is fully processed

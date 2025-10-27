@@ -5,7 +5,8 @@ load('future_shell/lib/util/layout/button.js');
 load('frame.js');
 load('scrollbar.js');
 load('future_shell/lib/effects/frame-ext.js');
-load('future_shell/lib/3rdp/mrc/mrc-session.js');
+load('future_shell/lib/mrc/session.js');
+load('future_shell/lib/mrc/factory.js');
 
 if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
@@ -142,24 +143,25 @@ function normalizeServer(value, fallback) {
     return value;
 }
 
+// DEPRECATED: Global singleton removed to prevent cross-user state bleed.
+// Each shell instance now gets its own MRCService via ensureMrcService().
 var _sharedMrcService = null;
 
 function ensureMrcService(opts) {
     opts = opts || {};
-    if (opts.shell && opts.shell.mrcService) return opts.shell.mrcService;
+    // Always create per-shell instance to avoid cross-user contamination
     if (opts.shell) {
-        var service = new MRCService(opts);
-        opts.shell.mrcService = service;
-        try { service.setToastEnabled(true); } catch (_) { }
-        return service;
+        if (!opts.shell.mrcService) {
+            opts.shell.mrcService = new MRCService(opts);
+            try { opts.shell.mrcService.setToastEnabled(true); } catch (_) { }
+        }
+        return opts.shell.mrcService;
     }
-    if (_sharedMrcService) {
-        try { _sharedMrcService.setToastEnabled(true); } catch (_) { }
-        return _sharedMrcService;
-    }
-    _sharedMrcService = new MRCService(opts);
-    try { _sharedMrcService.setToastEnabled(true); } catch (_) { }
-    return _sharedMrcService;
+    // Fallback: create standalone instance (no sharing)
+    // Note: This branch should rarely be hit; shells should always provide opts.shell
+    var service = new MRCService(opts);
+    try { service.setToastEnabled(true); } catch (_) { }
+    return service;
 }
 
 function MRCService(opts) {
@@ -613,14 +615,16 @@ MRCService.prototype.ensureActiveRoom = function (roomHint) {
 MRCService.prototype._updateNickList = function (room, nicks) {
     var sessionRoom = (this.session && typeof this.session.room === 'string') ? this.session.room : '';
     var incomingRoom = (typeof room === 'string') ? room : '';
-    var targetRoom = incomingRoom || sessionRoom;
-    if (targetRoom && sessionRoom && targetRoom.toLowerCase() !== sessionRoom.toLowerCase()) {
-        return;
+
+    // Strict room matching: only update if incoming room matches our session room
+    // Reject if: (1) both specified and different, OR (2) incoming specified but we have no room
+    if (incomingRoom) {
+        if (!sessionRoom) return; // Incoming room specified but we're not in any room
+        if (incomingRoom.toLowerCase() !== sessionRoom.toLowerCase()) return; // Different rooms
     }
+
     var list = Array.isArray(nicks) ? nicks.slice() : [];
     var self = this;
-    this.nickList = list.slice();
-    this.nickColors = {};
     this.nickList = list.slice();
     this.nickColors = {};
     this.nickList.forEach(function (nick, idx) {
@@ -632,11 +636,14 @@ MRCService.prototype._updateNickList = function (room, nicks) {
 MRCService.prototype._updateTopic = function (room, topic) {
     var sessionRoom = (this.session && typeof this.session.room === 'string') ? this.session.room : '';
     var incomingRoom = (typeof room === 'string') ? room : '';
-    var targetRoom = incomingRoom || sessionRoom || (typeof this.roomName === 'string' ? this.roomName : '');
-    if (targetRoom && sessionRoom && targetRoom.toLowerCase() !== sessionRoom.toLowerCase()) {
-        return;
+
+    // Strict room matching: only update if incoming room matches our session room
+    if (incomingRoom) {
+        if (!sessionRoom) return; // Incoming room specified but we're not in any room
+        if (incomingRoom.toLowerCase() !== sessionRoom.toLowerCase()) return; // Different rooms
     }
-    this.roomName = targetRoom || this.roomName || '';
+
+    this.roomName = sessionRoom || this.roomName || '';
     this.roomTopic = topic || '';
     this._notify('onServiceTopic', { room: this.roomName, topic: this.roomTopic });
 };
@@ -804,8 +811,14 @@ function MRC(opts) {
         }, 'mrc');
     }
     this.rendered = false;
-    this.service = ensureMrcService({ shell: opts.shell, timer: opts.timer || (opts.shell && opts.shell.timer) });
-    this.service.addListener(this);
+
+    // Use factory to get persistent per-node controller
+    this.controller = getMrcController();
+
+    // Create adapter to bridge old service API to new controller API
+    this.service = this._createServiceAdapter(this.controller);
+    this.controller.addListener(this._onControllerUpdate.bind(this));
+
     this.headerFrame = null;
     this.controlsFrame = null;
     this.buttonsFrame = null;
@@ -844,6 +857,110 @@ else {
     MRC.prototype = Object.create(Subprogram.prototype);
     MRC.prototype.constructor = MRC;
 }
+
+/**
+ * Create service adapter that wraps controller with old service API
+ */
+MRC.prototype._createServiceAdapter = function (controller) {
+    var self = this;
+    var snapshot = controller.getSnapshot();
+
+    return {
+        connected: snapshot.connection.connected,
+        roomName: snapshot.room.name,
+        messages: snapshot.messages,
+        showNickList: snapshot.prefs.showNickList,
+        toastEnabled: snapshot.prefs.toastEnabled,
+        settings: { startup: { room: snapshot.room.name } },
+
+        cycle: function () { controller.tick(); },
+        flush: function () { controller.tick(); },
+
+        disconnect: function () { controller.disconnect(); },
+
+        executeCommand: function (cmd) {
+            return controller.executeCommand(cmd);
+        },
+
+        sendLine: function (text) {
+            if (!text || !text.trim().length) return;
+            if (text.trim()[0] === '/') {
+                controller.executeCommand(text.trim().slice(1));
+            } else {
+                controller.sendMessage(text);
+            }
+        },
+
+        rotateMsgColor: function (dir) {
+            // Not implemented in new controller yet
+        },
+
+        pauseTypingFor: function (ms) {
+            // Not implemented in new controller yet
+        },
+
+        setToastEnabled: function (enabled) {
+            controller.toggleToast();
+            this.toastEnabled = enabled;
+        },
+
+        setNickListVisible: function (visible) {
+            controller.toggleNickList();
+            this.showNickList = visible;
+        },
+
+        handleExternalSuspend: function (info) {
+            return controller.handleExternalSuspend(info);
+        },
+
+        handleExternalResume: function (info) {
+            return controller.handleExternalResume(info);
+        },
+
+        removeListener: function (listener) {
+            controller.removeListener(listener._boundUpdate);
+        }
+    };
+};
+
+/**
+ * Handle controller updates
+ */
+MRC.prototype._onControllerUpdate = function (snapshot) {
+    if (!this.controller) return;
+
+    // Use provided snapshot or fetch new one
+    if (!snapshot) {
+        snapshot = this.controller.getSnapshot();
+    }
+
+    // Update adapter state
+    if (this.service) {
+        this.service.connected = snapshot.connection.connected;
+        this.service.roomName = snapshot.room.name;
+        this.service.messages = snapshot.messages;
+        this.service.showNickList = snapshot.prefs.showNickList;
+        this.service.toastEnabled = snapshot.prefs.toastEnabled;
+    }
+
+    // Update local view state
+    this._room = snapshot.room.name;
+    this._topic = snapshot.room.topic;
+    this._nickList = snapshot.room.users.map(function (u) { return u.nick; });
+    this._showNickList = snapshot.prefs.showNickList;
+    this._toastEnabled = snapshot.prefs.toastEnabled;
+    this._latency = snapshot.latency.ping > 0 ? String(snapshot.latency.ping) + 'ms' : '-';
+
+    // Update messages
+    this._messageLines = snapshot.messages.slice();
+    this._messageLines = truncateLines(this._messageLines, this._maxLines);
+    this._invalidateWrappedMessageLines();
+
+    this._needsRedraw = true;
+};
+
+// Store bound update for cleanup
+MRC.prototype._boundUpdate = MRC.prototype._onControllerUpdate;
 
 MRC.prototype.enter = function (done) {
     this._exiting = false;
@@ -1587,6 +1704,12 @@ MRC.prototype.cleanup = function () {
 
 MRC.prototype.cycle = function () {
     if (!this.running) return;
+
+    // Cycle the controller to process socket data
+    if (this.service && typeof this.service.cycle === 'function') {
+        try { this.service.cycle(); } catch (_) { }
+    }
+
     if (this._needsRedraw) this.draw();
 };
 

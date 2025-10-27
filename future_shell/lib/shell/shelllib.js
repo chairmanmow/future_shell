@@ -323,9 +323,16 @@ IconShell.prototype.init = function () {
     // Enable mouse mode for hotspots
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
 
-    if (typeof ensureMrcService === 'function') {
-        try { this.mrcService = ensureMrcService({ shell: this, timer: this.timer }); }
-        catch (e) { dbug('MRC background init failed: ' + e, 'mrc'); }
+    // Initialize MRC controller for background operation
+    this.mrcController = null;
+    try {
+        var getMrcController = load({}, 'future_shell/lib/mrc/factory.js');
+        if (typeof getMrcController === 'function') {
+            this.mrcController = getMrcController({ shell: this, timer: this.timer });
+            log(LOG_INFO, '[shell] MRC controller initialized for node ' + bbs.node_num);
+        }
+    } catch (e) {
+        try { log(LOG_ERR, '[shell] MRC controller init failed: ' + e); } catch (_) { }
     }
 };
 
@@ -454,7 +461,6 @@ IconShell.prototype.main = function () {
             var keys = [];
             var key;
             while ((key = console.inkey(K_NOECHO | K_NOSPIN, 0))) {
-                log('received key: ' + JSON.stringify(key));
                 keys.push(key);
             }
             if (keys.length) {
@@ -465,6 +471,12 @@ IconShell.prototype.main = function () {
                 this._processKeyQueue(keys, nowTs);
             }
             if (this._pendingSubLaunch) this._processPendingSubLaunch();
+
+            // Cycle background MRC controller if present
+            if (this.mrcController && typeof this.mrcController.tick === 'function') {
+                try { this.mrcController.tick(); } catch (_) { }
+            }
+
             if (this.timer) {
                 var elapsed = this._lastKeyTimestamp ? (Date.now() - this._lastKeyTimestamp) : Infinity;
                 if (elapsed >= this.keyStrokeTimeoutMs) this.timer.cycle();
@@ -500,7 +512,6 @@ IconShell.prototype.processKeyboardInput = function (ch) {
     }
     if (ch === this._toastDismissCmd) {
         if (this.toasts && this.toasts.length) {
-            log('[toast] dismiss via outside hotspot');
             this._dismissAllToasts();
             return true;
         }
@@ -529,18 +540,14 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         }
         if (matchedToken) {
             var selectedToastToken = this._toastHotspots[matchedToken];
-            log('[toast] hotspot token match=' + JSON.stringify(matchedToken));
             var launchedToken = false;
             if (selectedToastToken && selectedToastToken.__shellMeta && typeof selectedToastToken.__shellMeta.action === 'function') {
                 try { selectedToastToken.__shellMeta.action(); launchedToken = true; } catch (actionErr) { log('[toast] action handler error: ' + actionErr); }
             } else if (selectedToastToken && selectedToastToken.__shellMeta && selectedToastToken.__shellMeta.launch) {
-                log('[toast] hotspot launch=' + selectedToastToken.__shellMeta.launch);
                 launchedToken = this._launchToastTarget(selectedToastToken.__shellMeta.launch, selectedToastToken);
             }
             if (launchedToken) {
                 if (selectedToastToken && typeof selectedToastToken.dismiss === 'function') selectedToastToken.dismiss();
-            } else {
-                log('[toast] launch not handled; toast remains visible');
             }
             this._toastKeyBuffer = '';
             this._toastSequenceStartTs = 0;
@@ -560,12 +567,10 @@ IconShell.prototype.processKeyboardInput = function (ch) {
     }
     if (typeof ch === 'string' && this._toastHotspots && this._toastHotspots[ch]) {
         var selectedToast = this._toastHotspots[ch];
-        log('[toast] hotspot key trigger cmd=' + JSON.stringify(ch) + ' code=' + (ch && ch.charCodeAt ? ch.charCodeAt(0) : 'null'));
         var launched = false;
         if (selectedToast && selectedToast.__shellMeta && typeof selectedToast.__shellMeta.action === 'function') {
             try { selectedToast.__shellMeta.action(); launched = true; } catch (actionErr) { log('[toast] action handler error: ' + actionErr); }
         } else if (selectedToast && selectedToast.__shellMeta && selectedToast.__shellMeta.launch) {
-            log('[toast] hotspot launch=' + selectedToast.__shellMeta.launch);
             launched = this._launchToastTarget(selectedToast.__shellMeta.launch, selectedToast);
         }
         if (launched) {
@@ -919,9 +924,7 @@ IconShell.prototype._processKeyQueue = function (keys, nowTs) {
         var key = keys.shift();
         if (key === undefined || key === null) continue;
         key = this._normalizeKey(key);
-        log("normalized key: " + JSON.stringify(key));
         key = this._decodeEscapeSequence(key, keys);
-        log("decoded key: " + JSON.stringify(key));
         if (!key) continue;
         if (typeof key === 'string' && key.length > 0) {
             if (key === CTRL_D && perf) {

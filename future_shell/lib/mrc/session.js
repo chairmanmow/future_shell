@@ -3,10 +3,10 @@
 // Passes traffic between an mrc-connector.js server and a client application
 // See mrc-client.js for a bad example.
 function MRC_Session(host, port, user, pass, alias) {
-    
+
     const MRC_VER = "Multi Relay Chat JS v1.3.4 2025-05-20 [cf]";
     const CTCP_ROOM = "ctcp_echo_channel";
-    
+
     const handle = new Socket();
 
     const state = {
@@ -17,7 +17,7 @@ function MRC_Session(host, port, user, pass, alias) {
         last_ping: 0,
         last_send: 0,
         alias: alias || user,
-        stats: ['-','-','-','0'],
+        stats: ['-', '-', '-', '0'],
         mention_count: 0,
         latency: '-',
         msg_color: 7,
@@ -54,30 +54,30 @@ function MRC_Session(host, port, user, pass, alias) {
             send(to_user, '', to_room, state.alias + ' ' + format("|%02d", state.msg_color) + body);
         }
     }
-    
-    function send_ctcp(to, p, s) {       
+
+    function send_ctcp(to, p, s) {
         state.output_buffer.push({
             from_room: CTCP_ROOM,
             to_user: to,
             to_site: "",
             to_room: CTCP_ROOM,
             body: p + " " + user + " " + s
-        });        
+        });
         mswait(20);
     }
-    
+
     function ctcp_time(d) {
-        return format("%02d/%02d/%02d %02d:%02d", d.getMonth()+1, d.getDate(), d.getFullYear().toString().substr(-2), d.getHours(), d.getMinutes());        
+        return format("%02d/%02d/%02d %02d:%02d", d.getMonth() + 1, d.getDate(), d.getFullYear().toString().substr(-2), d.getHours(), d.getMinutes());
     }
-    
+
     function ctcp_reply(cmd) {
         // Future ctcp commands can be added easily by adding another
         // string to this array, and then adding the response logic 
         // to the switch/case structure below.
         const CTCP_CMDS = [
-            /* 0 */ "VERSION",    
-            /* 1 */ "TIME", 
-            /* 2 */ "PING", 
+            /* 0 */ "VERSION",
+            /* 1 */ "TIME",
+            /* 2 */ "PING",
             /* 3 */ "CLIENTINFO"
         ];
         var reply = "";
@@ -104,10 +104,10 @@ function MRC_Session(host, port, user, pass, alias) {
                 break;
             case 3:
                 reply = CTCP_CMDS.join(" ");
-                break;    
+                break;
             default:
                 reply = "Unsupported ctcp command";
-                break;                    
+                break;
         }
         return reply.trim();
     }
@@ -126,15 +126,15 @@ function MRC_Session(host, port, user, pass, alias) {
         if (msg.from_user == 'SERVER') {
 
             const cmd = msg.body.substr(0, msg.body.indexOf(':'));          // cmd is everything left of the first colon (:)
-            const params = msg.body.substr(msg.body.indexOf(':')+1).trim(); // params are everything right of the first colon (:), including any additional colons to follow
+            const params = msg.body.substr(msg.body.indexOf(':') + 1).trim(); // params are everything right of the first colon (:), including any additional colons to follow
 
             switch (cmd) {
                 case 'BANNER':
                     emit('banner', params.replace(/^\s+/, ''));
                     break;
-                case 'ROOMTOPIC':                    
+                case 'ROOMTOPIC':
                     const room = params.substr(0, params.indexOf(':'));        // room is everything left of the first colon (:)
-                    const topic = params.substr(params.indexOf(':')+1).trim(); // topic is everything right of the first colon (:), including any additional colons to follow                    
+                    const topic = params.substr(params.indexOf(':') + 1).trim(); // topic is everything right of the first colon (:), including any additional colons to follow                    
                     state.room_topic = topic;
                     emit('topic', room, topic);
                     break;
@@ -150,6 +150,7 @@ function MRC_Session(host, port, user, pass, alias) {
                             listStr = rest;
                         }
                     }
+
                     var nickList = listStr ? listStr.split(',') : [];
                     if (listRoom && state.room && listRoom.toLowerCase() === state.room.toLowerCase()) {
                         state.nicks = nickList.slice();
@@ -158,7 +159,7 @@ function MRC_Session(host, port, user, pass, alias) {
                     break;
                 case 'STATS':
                     state.stats = params.split(' ');
-                    emit('stats'); 
+                    emit('stats');
                     break;
                 case 'LATENCY':
                     state.latency = params;
@@ -179,13 +180,13 @@ function MRC_Session(host, port, user, pass, alias) {
                     state.nicks.splice(uidx, 1);
                     emit('nicks', state.nicks);
                 }
-            } 
+            }
         } else if (msg.to_user == '' || user.toLowerCase() == msg.to_user.toLowerCase()) {
-            
+
             if (user.toLowerCase() == msg.to_user.toLowerCase()) {
                 state.last_private_msg_from = msg.from_user;
             }
-            
+
             if (msg.to_room == '' || msg.to_room == state.room) {
                 emit('message', msg);
             }
@@ -205,33 +206,33 @@ function MRC_Session(host, port, user, pass, alias) {
             emit('message', msg);
         }
         if (msg.to_room === CTCP_ROOM) {
-                        
+
             const ctcp_data = msg.body.split(' ');
             if (ctcp_data[0] === "[CTCP]" && ctcp_data.length >= 4) {
-                
+
                 if (state.show_ctcp_req) {
                     emit('ctcp-msg', '* |14[CTCP-REQUEST] |15' + ctcp_data[3] + ' |07on |15' + ctcp_data[2] + ' |07from |10' + msg.from_user);
                 }
-                if (ctcp_data[2] === "*" || ctcp_data[2].toUpperCase()===user.toUpperCase() || ctcp_data[2].toUpperCase()==="#"+state.room.toUpperCase() ) {
-                    send_ctcp(ctcp_data[1], "[CTCP-REPLY]", ctcp_data[3].toUpperCase() + " " + ctcp_reply(ctcp_data[3].toUpperCase()) );
+                if (ctcp_data[2] === "*" || ctcp_data[2].toUpperCase() === user.toUpperCase() || ctcp_data[2].toUpperCase() === "#" + state.room.toUpperCase()) {
+                    send_ctcp(ctcp_data[1], "[CTCP-REPLY]", ctcp_data[3].toUpperCase() + " " + ctcp_reply(ctcp_data[3].toUpperCase()));
                 }
-                
+
             } else if (ctcp_data[0] === "[CTCP-REPLY]" && ctcp_data.length >= 3) {
-                if (msg.to_user.toUpperCase()===user.toUpperCase()) {
+                if (msg.to_user.toUpperCase() === user.toUpperCase()) {
                     emit('ctcp-msg', '* |14[CTCP-REPLY] |10' + ctcp_data[1] + ' |15' + ctcp_data.slice(2).join(' ').trim());
                 }
             }
-        }        
+        }
     }
 
     this.send_room_message = function (msg) {
         send_message('', state.room, msg);
     }
-    
+
     this.send_notme = function (msg) {
         send("NOTME", "", "", msg);
     }
-    
+
     this.send_action = function (msg) {
         send("", "", state.room, msg);
     }
@@ -261,7 +262,8 @@ function MRC_Session(host, port, user, pass, alias) {
         this.send_command('STATS', 'ALL');
     }
 
-    this.disconnect = function () {
+    // Expose state for controller to set initial room
+    this.state = state; this.disconnect = function () {
         handle.close();
     }
 
@@ -298,7 +300,7 @@ function MRC_Session(host, port, user, pass, alias) {
     }
 
     const commands = {
-        
+
         // This section has been cleaned up significantly.
         //         
         // Server commands no longer need to be strictly defined 
@@ -317,7 +319,7 @@ function MRC_Session(host, port, user, pass, alias) {
         // help is contained in external .msg file. They have been
         // left commended out to provide reference.
         // 
-        
+
         help: {
             //help: 'Display this help message',
             callback: function (str) {
@@ -330,10 +332,10 @@ function MRC_Session(host, port, user, pass, alias) {
                 this.send_command('INFO ' + str);
             }
         },
-        join: {            
+        join: {
             //help: 'Move to a new room: /join room_name',
             callback: function (str) { // validate valid room name?
-                str = str.replace(/^#/, '');                
+                str = str.replace(/^#/, '');
                 this.send_command(format('NEWROOM:%s:%s', state.room, str));
                 state.room = str;
                 state.nicks = [];
@@ -344,7 +346,7 @@ function MRC_Session(host, port, user, pass, alias) {
             // TODO: is there an easier way to duplicate command functionality?
             //help: 'Move to a new room: /join room_name',
             callback: function (str) { // validate valid room name?
-                str = str.replace(/^#/, '');                
+                str = str.replace(/^#/, '');
                 this.send_command(format('NEWROOM:%s:%s', state.room, str));
                 state.room = str;
                 state.nicks = [];
@@ -372,7 +374,7 @@ function MRC_Session(host, port, user, pass, alias) {
                     this.send_private_messsage(cmd[0], cmd.slice(1).join(' '));
                 }
             }
-            
+
         },
         r: {
             //help: 'Reply to last private message: /r message goes here',
@@ -381,7 +383,7 @@ function MRC_Session(host, port, user, pass, alias) {
                     this.send_private_messsage(state.last_private_msg_from, str);
                 }
             }
-        },        
+        },
         quote: {
             //help: 'Send a raw command to the server',
             callback: function (str) {
@@ -425,7 +427,7 @@ function MRC_Session(host, port, user, pass, alias) {
         },
         ctcp: {
             // outgoing ctcp request            
-            callback: function (str) {                
+            callback: function (str) {
                 const cmd = str.split(' ');
                 var u = cmd[0];
                 if (u) {
@@ -433,11 +435,11 @@ function MRC_Session(host, port, user, pass, alias) {
                         u = "";
                     }
                     send_ctcp(u, '[CTCP]', str.trim().toUpperCase());
-                } 
-            }     
+                }
+            }
         },
         toggle_ctcp: {
-            callback: function() {
+            callback: function () {
                 state.show_ctcp_req = !state.show_ctcp_req;
                 emit('ctcp-msg', '* |14Incoming CTCP requests are now ' + (state.show_ctcp_req ? "|15shown" : "|12hidden") + '.');
             }

@@ -10,7 +10,7 @@ try { if (typeof SubprogramHotspotHelper !== 'function') load('future_shell/lib/
 
 var SHELL_PREFS_VERSION = 2;
 var SHELL_PREFS_VALID_STATES = { on: 'on', off: 'off', snooze: 'snooze' };
-var SHELL_PREFS_DEFAULT_CATEGORIES = ['mrc', 'json-chat', 'email', 'launch_notice'];
+var SHELL_PREFS_DEFAULT_CATEGORIES = ['mrc', 'json-chat', 'email', 'launch_notice', 'mrc_presence'];
 var SHELL_PREFS_DB_FILE = 'shell_prefs.json';
 var SHELL_PREFS_DB_SCOPE = 'ICSH_SHELL_PREFS';
 var SHELL_PREFS_LOG_PREFIX = '[ShellPrefs] ';
