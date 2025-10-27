@@ -89,6 +89,14 @@ function UsageViewer(opts) {
     this._userFilterAlias = null; // cached alias
     this._backButton = null;
     this._backButtonHotkey = '\x1B';
+    this._sortButton = null;
+    this._sortButtonHotkey = 'S';
+    this._userFilterButton = null;
+    this._userFilterButtonHotkey = 'U';
+    this._monthPrevButton = null;
+    this._monthPrevButtonHotkey = 'P';
+    this._monthNextButton = null;
+    this._monthNextButtonHotkey = 'N';
 }
 extend(UsageViewer, Subprogram);
 UsageViewer.VERSION = USAGE_VIEWER_VERSION;
@@ -112,6 +120,15 @@ UsageViewer.prototype.setParentFrame = function (frame) {
     this.headerFrame = null;
     this.footerFrame = null;
     this._clearProgramResources();
+    // Clear button references on re-entry
+    if (this._sortButton) { try { this._sortButton.destroy(); } catch (e) { } }
+    this._sortButton = null;
+    if (this._userFilterButton) { try { this._userFilterButton.destroy(); } catch (e) { } }
+    this._userFilterButton = null;
+    if (this._monthPrevButton) { try { this._monthPrevButton.destroy(); } catch (e) { } }
+    this._monthPrevButton = null;
+    if (this._monthNextButton) { try { this._monthNextButton.destroy(); } catch (e) { } }
+    this._monthNextButton = null;
     this._registerBackButtonFrame();
     if (this._backButton) {
         try { this._backButton.render(); } catch (_eBtnRe) { }
@@ -307,26 +324,27 @@ UsageViewer.prototype.ensureFrames = function () {
         return;
     }
     if (height < 2) height = 2;
-    // New layout: list consumes full height minus 1 header row (or 2 rows). We'll use 2-line header.
-    var headerHeight = 1;  // doesn't look like we are using a frame for this.
-    var listHeight = Math.max(1, height - headerHeight);
+    // Frame layout: header at top, padding row, list below, footer at bottom
+    var headerHeight = 5; // Space for back button and header info (lines 1-5)
+    var paddingHeight = 1; // Visual breathing room between header and list
+    var footerHeight = 1; // Reserved for footer
+    var listHeight = Math.max(1, height - headerHeight - paddingHeight - footerHeight);
     // Ensure we never create a frame taller than the host, otherwise Synchronet frame.js throws
-    if (listHeight > height) listHeight = height;
+    if (listHeight < 1) listHeight = 1;
     var detailHeight = 0; // deprecated (still keep frame for compatibility)
-    var headerY = host.y + height; // off-screen effectively
+    var headerY = host.y; // At the top of the screen
+    var listY = host.y + headerHeight + paddingHeight; // Below the header with padding
     if (this.listFrame) {
         var needsListRebuild = this.listFrame.width !== width || this.listFrame.height !== listHeight
-            || this.listFrame.x !== host.x || this.listFrame.y !== host.y;
+            || this.listFrame.x !== host.x || this.listFrame.y !== listY;
         if (needsListRebuild) {
             try { this.listFrame.close(); } catch (eCloseList) { }
             this.listFrame = null;
         }
     }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 2);
-
         var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
-        this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, this.paletteAttr('CONTENT_FRAME'), this.hostFrame || this.parentFrame);
+        this.listFrame = new Frame(host.x, listY, width, listHeight, WHITE | BG_BLUE || this.paletteAttr('CONTENT_FRAME'), this.hostFrame || this.parentFrame);
 
         this.listFrame.open();
         this.registerFrame(this.listFrame);
@@ -342,8 +360,7 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.headerFrame) {
         var attr = this.paletteAttr('HEADER_FRAME') || (BG_BLUE | LIGHTGRAY);
-        this.headerFrame = new Frame(this.parentFrame.x, this.parentFrame.y,
-            this.parentFrame.width, 1, attr, this.hostFrame || this.parentFrame);
+        this.headerFrame = new Frame(host.x, headerY, width, headerHeight, attr, this.hostFrame || this.parentFrame);
         try { this.headerFrame.open(); } catch (eDF) { }
         this.registerFrame(this.headerFrame);
     }
@@ -365,18 +382,29 @@ UsageViewer.prototype.ensureFrames = function () {
 
 UsageViewer.prototype.draw = function () {
     this.ensureFrames();
-    if (!this.listFrame) return;
+    if (!this.listFrame || !this.headerFrame) return;
     if (this.footerFrame) {
         try { this.footerFrame.clear(this.footerFrame.attr); } catch (_ffClear) { }
     }
+    // Clear and draw header frame (containing back button and header info)
+    var hf = this.headerFrame;
+    hf.clear(hf.attr);
+    var headerStartX = this._ensureBackButton(hf); // Pass headerFrame to back button
+    if (!this._backButton) headerStartX = 1;
+    if (headerStartX < 1) headerStartX = 1;
+    if (headerStartX > hf.width) headerStartX = hf.width;
+    // Create action buttons next to back button
+    headerStartX = this._ensureSortButton(hf, headerStartX);
+    headerStartX = this._ensureUserFilterButton(hf, headerStartX);
+    headerStartX = this._ensureMonthPrevButton(hf, headerStartX);
+    headerStartX = this._ensureMonthNextButton(hf, headerStartX);
+    var headerMaxWidth = Math.max(0, hf.width - headerStartX + 1);
+    // Clear and setup list frame for program display only
     var lf = this.listFrame;
     lf.attr = BG_BLACK | LIGHTGRAY;
     lf.clear(BG_BLACK | LIGHTGRAY);
-    var headerStartX = this._ensureBackButton();
-    if (!this._backButton) headerStartX = 1;
-    if (headerStartX < 1) headerStartX = 1;
-    if (headerStartX > lf.width) headerStartX = lf.width;
-    var headerMaxWidth = Math.max(0, lf.width - headerStartX + 1);
+    // Store the current scroll position to detect if scrolling happened
+    var prevScrollTop = this._lastProgramTop || -1;
     var current = this.months[this.index] || { month: 'All Time', count: 0, seconds: 0, programs: [] };
     // Prepare filtered program list early for header counts
     var rawProgsForHeader = (current.programs || []).slice(0);
@@ -445,20 +473,16 @@ UsageViewer.prototype.draw = function () {
             }
         }
     }
-    var sortDescriptor = sortLabelPrefix + ' ' + sortColor + sortLabel + this.colorReset();
+    // Headers line 2: Month navigation and any remaining info
+    // Sort and User filter are now buttons, so we can simplify this
     var filterParts = [];
-    filterParts.push(monthNav);
-    filterParts.push(sortDescriptor);
     if (this._categoryFilter) filterParts.push('Cat:' + this._categoryFilter);
-    var userStateLabel = this._userFilterAlias ? this._userFilterAlias : 'All Users';
-    var userIndicator = '\x01h\x01mU\x01n=\x01h\x01m' + userStateLabel + this.colorReset();
-    filterParts.push(userIndicator);
-    var filterLineFull = filterParts.join('  ');
+    var filterLineFull = filterParts.length > 0 ? filterParts.join('  ') : '';
     this._renderHeaderFrameForState(filterLineFull);
     var filterLine = filterLineFull;
     if (headerMaxWidth > 0 && filterLine.length > headerMaxWidth) filterLine = filterLine.substr(0, headerMaxWidth);
-    if (headerMaxWidth > 0) {
-        try { lf.gotoxy(headerStartX, 2); lf.putmsg(filterLine + '\x01n'); } catch (_) { }
+    if (headerMaxWidth > 0 && filterLine.length > 0) {
+        try { hf.gotoxy(headerStartX, 2); hf.putmsg(filterLine + '\x01n'); } catch (_) { }
     }
     var dataParts = [];
     dataParts.push('Launches ' + displayLaunches);
@@ -467,12 +491,12 @@ UsageViewer.prototype.draw = function () {
     var dataLineFull = dataParts.join('  ');
     var dataLine = dataLineFull;
     if (headerMaxWidth > 0 && dataLine.length > headerMaxWidth) dataLine = dataLine.substr(0, headerMaxWidth);
-    var dataRow = (lf.height >= 4) ? 4 : null;
+    var dataRow = (hf.height >= 4) ? 4 : null;
     if (dataRow !== null && headerMaxWidth > 0) {
-        try { lf.gotoxy(headerStartX, dataRow); lf.putmsg(dataLine + '\x01n'); } catch (_) { }
+        try { hf.gotoxy(1, dataRow); hf.center(dataLine + '\x01n'); } catch (_) { }
     }
-    // Stylized icon block rendering (restored)
-    var startRow = (dataRow !== null) ? dataRow + 2 : 5; // leave breathing room below help
+    // Stylized icon block rendering starts at top of list frame (row 1)
+    var startRow = 1; // listFrame is already positioned below header
     if (startRow > lf.height) startRow = lf.height;
     var availableRows = lf.height - (startRow - 1);
     if (availableRows < 1) availableRows = 1;
@@ -530,6 +554,10 @@ UsageViewer.prototype.draw = function () {
         var msgX = Math.min(headerStartX, lf.width);
         try { lf.gotoxy(msgX, startRow); lf.putmsg(this.colorizeShared('WARNING', '(No accessible icon programs)')); } catch (_m) { }
         this._registerBackButtonHotspot(hotspotDefs);
+        this._registerSortButtonHotspot(hotspotDefs);
+        this._registerUserFilterButtonHotspot(hotspotDefs);
+        this._registerMonthPrevButtonHotspot(hotspotDefs);
+        this._registerMonthNextButtonHotspot(hotspotDefs);
         if (this.hotspots) this.hotspots.set(hotspotDefs);
         try { lf.cycle(); } catch (_mc) { }
         return;
@@ -564,18 +592,18 @@ UsageViewer.prototype.draw = function () {
     }
     this._programHotspots = hotspots;
     this._programHotspotDefs = hotspotDefs.slice();
-    if (this._backButton && this._backButton.frame) {
-        if (typeof this._backButton.frame.top === 'function') {
-            try { this._backButton.frame.top(); } catch (_eBtnTop) { }
-        }
-        if (typeof this._backButton.frame.cycle === 'function') {
-            try { this._backButton.frame.cycle(); } catch (_eBtnCycle) { }
-        }
-    }
     this._registerBackButtonHotspot(hotspotDefs);
+    this._registerSortButtonHotspot(hotspotDefs);
+    this._registerUserFilterButtonHotspot(hotspotDefs);
+    this._registerMonthPrevButtonHotspot(hotspotDefs);
+    this._registerMonthNextButtonHotspot(hotspotDefs);
     if (this.hotspots) this.hotspots.set(hotspotDefs);
     this._drawDetail();
+    // Cycle frames in proper order: list first, then header on top
     try { lf.cycle(); } catch (_c) { }
+    try { hf.cycle(); } catch (_hc) { }
+    // Header frame is now on top, so back button will always be visible
+    this._lastProgramTop = this.programTop || 0;
 
 };
 UsageViewer.prototype._formatProgramLine = function (index, prog) {
@@ -680,9 +708,13 @@ UsageViewer.prototype.handleKey = function (key) {
         case '\x1B': this._activateBackButton(); return;
         case 'Q': case 'q': this.exit(); return;
         case 'R': case 'r': this._loadData(); this.draw(); return;
-        case 'S': case 's': this._cycleSort(); this.draw(); return;
+        case 'S': this._activateSortButton(); return;
+        case 's': this._cycleSort(); this.draw(); return;
         case 'C': case 'c': this._cycleCategory(); this.draw(); return;
-        case 'U': case 'u': this._showUserFilter(); return;
+        case 'U': this._activateUserFilterButton(); return;
+        case 'u': this._showUserFilter(); return;
+        case 'P': this._activateMonthPrevButton(); return;
+        case 'N': this._activateMonthNextButton(); return;
         // case '\r':
         // case '\n':
         case KEY_ENTER:
@@ -861,15 +893,16 @@ UsageViewer.prototype._renderHeaderFrameForState = function (text) {
     } catch (_eHeaderPut) { }
 };
 
-UsageViewer.prototype._ensureBackButton = function () {
-    if (!this.listFrame || this.listFrame.width < 6 || this.listFrame.height < 2) {
+UsageViewer.prototype._ensureBackButton = function (parentFrame) {
+    // Use provided frame or fall back to headerFrame
+    parentFrame = parentFrame || this.headerFrame;
+    if (!parentFrame || parentFrame.width < 6 || parentFrame.height < 2) {
         this._destroyBackButton();
         return 1;
     }
-    var parent = this.listFrame;
+    var parent = parentFrame;
     var x = 2;
-    var baseY = Math.min(2, Math.max(1, parent.height - 1));
-    var y = Math.min(parent.height - 1, baseY + 1);
+    var y = 2; // Position at line 2 of frame
     var availableWidth = Math.max(0, parent.width - x + 1);
     if (availableWidth < 6) {
         this._destroyBackButton();
@@ -881,64 +914,39 @@ UsageViewer.prototype._ensureBackButton = function () {
     var desiredWidth = Math.max(8, label.length + 4);
     if (desiredWidth > availableWidth) desiredWidth = Math.max(6, Math.min(availableWidth, label.length + 2));
     var buttonAttr = ((typeof BG_MAGENTA !== 'undefined' ? BG_MAGENTA : 0) | (typeof YELLOW !== 'undefined' ? YELLOW : 14));
-    var maskFg = (typeof BLACK !== 'undefined' ? BLACK : 0);
-    var maskBg = (typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0);
     var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
     var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
-    var focusAttr = buttonAttr;
     var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
     var self = this;
     var clickHandler = function () { self.exit(); };
 
-    if (!this._backButton) {
-        try {
-            this._backButton = new Button({
-                parentFrame: parent,
-                x: x,
-                y: y,
-                width: desiredWidth,
-                label: label,
-                attr: buttonAttr,
-                focusAttr: focusAttr,
-                shadowAttr: shadowAttr,
-                backgroundColors: [BLACK, BG_BLACK],
-                shadowColors: [shadowFg, shadowBg],
-                onClick: clickHandler
-            });
-            this._backButton.setFocused(false);
-            this._registerBackButtonFrame();
-        } catch (e) {
-            this._destroyBackButton();
-            return 1;
+    // Destroy and recreate on each draw to ensure clean state
+    if (this._backButton) {
+        try { this._backButton.destroy(); } catch (e) { }
+        this._backButton = null;
+    }
+
+    try {
+        this._backButton = new Button({
+            parentFrame: parent,
+            x: x,
+            y: y,
+            width: desiredWidth,
+            label: label,
+            attr: buttonAttr,
+            focusAttr: buttonAttr,
+            shadowAttr: shadowAttr,
+            backgroundColors: [0, 0],
+            shadowColors: [shadowFg, shadowBg],
+            onClick: clickHandler
+        });
+        this._backButton.setFocused(false);
+        if (this._backButton.frame && Array.isArray(this._myFrames) && this._myFrames.indexOf(this._backButton.frame) === -1) {
+            this.registerFrame(this._backButton.frame);
         }
-    } else {
-        if (!this._backButton.frame) {
-            this._destroyBackButton();
-            return this._ensureBackButton();
-        }
-        this._backButton.parentFrame = parent;
-        this._backButton.attr = buttonAttr;
-        this._backButton.focusAttr = focusAttr;
-        this._backButton.shadowAttr = shadowAttr;
-        this._backButton.backgroundColors = [maskFg, maskBg];
-        this._backButton.shadowColors = [shadowFg, shadowBg];
-        this._backButton.setOnClick(clickHandler);
-        this._backButton.setLabel(label);
-        this._backButton.width = desiredWidth;
-        this._backButton.height = 2;
-        var frame = this._backButton.frame;
-        if (frame) {
-            if (typeof frame.moveTo === 'function') {
-                try { frame.moveTo(x, y); } catch (_) { frame.x = x; frame.y = y; }
-            } else {
-                frame.x = x; frame.y = y;
-            }
-            frame.width = desiredWidth;
-            frame.height = 2;
-            frame.parent = parent;
-        }
-        this._registerBackButtonFrame();
-        this._backButton.render();
+    } catch (e) {
+        this._backButton = null;
+        return 1;
     }
     var headerStart = x + desiredWidth + 2;
     if (headerStart > parent.width) headerStart = parent.width;
@@ -951,6 +959,312 @@ UsageViewer.prototype._activateBackButton = function () {
     } else {
         this.exit();
     }
+};
+
+UsageViewer.prototype._activateSortButton = function () {
+    if (this._sortButton && typeof this._sortButton.press === 'function') {
+        this._sortButton.press();
+    }
+};
+
+UsageViewer.prototype._activateUserFilterButton = function () {
+    if (this._userFilterButton && typeof this._userFilterButton.press === 'function') {
+        this._userFilterButton.press();
+    }
+};
+
+UsageViewer.prototype._activateMonthPrevButton = function () {
+    if (this._monthPrevButton && typeof this._monthPrevButton.press === 'function') {
+        this._monthPrevButton.press();
+    }
+};
+
+UsageViewer.prototype._activateMonthNextButton = function () {
+    if (this._monthNextButton && typeof this._monthNextButton.press === 'function') {
+        this._monthNextButton.press();
+    }
+};
+
+UsageViewer.prototype._ensureSortButton = function (parentFrame, startX) {
+    if (!parentFrame || parentFrame.width < 6) {
+        if (this._sortButton) { try { this._sortButton.destroy(); } catch (e) { } }
+        this._sortButton = null;
+        return startX;
+    }
+    var x = startX + 1; // 1-column margin from previous button
+    var y = 2;
+    var sortLabel = this._sortMode.substr(0, 1).toUpperCase() + this._sortMode.substr(1);
+    var label = 'Sort: ' + sortLabel;
+    var desiredWidth = 16; // Fixed width to accommodate "Sort: Launches"
+
+    // Check if button fits
+    if (x + desiredWidth > parentFrame.width) {
+        if (this._sortButton) { try { this._sortButton.destroy(); } catch (e) { } }
+        this._sortButton = null;
+        return startX;
+    }
+
+    var buttonAttr = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof CYAN !== 'undefined' ? CYAN : 11));
+    var focusAttr = buttonAttr;
+    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
+    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
+    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    var self = this;
+
+    var clickHandler = function () { self._cycleSort(); self.draw(); };
+
+    if (!this._sortButton) {
+        try {
+            this._sortButton = new Button({
+                parentFrame: parentFrame,
+                x: x,
+                y: y,
+                width: desiredWidth,
+                label: label,
+                attr: buttonAttr,
+                focusAttr: focusAttr,
+                shadowAttr: shadowAttr,
+                backgroundColors: [0, 0],
+                shadowColors: [shadowFg, shadowBg],
+                onClick: clickHandler
+            });
+            this._sortButton.setFocused(false);
+            if (this._sortButton.frame && Array.isArray(this._myFrames) && this._myFrames.indexOf(this._sortButton.frame) === -1) {
+                this.registerFrame(this._sortButton.frame);
+            }
+        } catch (e) {
+            this._sortButton = null;
+            return startX;
+        }
+    } else {
+        this._sortButton.parentFrame = parentFrame;
+        this._sortButton.attr = buttonAttr;
+        this._sortButton.focusAttr = focusAttr;
+        this._sortButton.setLabel(label);
+        this._sortButton.width = desiredWidth;
+        this._sortButton.height = 2;
+        this._sortButton.setOnClick(clickHandler);
+        if (this._sortButton.frame) {
+            this._sortButton.frame.x = x;
+            this._sortButton.frame.y = y;
+            this._sortButton.frame.width = desiredWidth;
+            this._sortButton.frame.height = 2;
+            this._sortButton.frame.parent = parentFrame;
+        }
+    }
+    return x + desiredWidth;
+};
+
+UsageViewer.prototype._ensureUserFilterButton = function (parentFrame, startX) {
+    if (!parentFrame || parentFrame.width < 6) {
+        if (this._userFilterButton) { try { this._userFilterButton.destroy(); } catch (e) { } }
+        this._userFilterButton = null;
+        return startX;
+    }
+    var x = startX + 1; // 1-column margin from previous button
+    var y = 2;
+    var userLabel = this._userFilterAlias ? this._userFilterAlias.slice(0, 8) : 'All';
+    var label = 'User: ' + userLabel;
+    var desiredWidth = 17; // Fixed width to accommodate "User: {8 chars}"
+
+    // Check if button fits
+    if (x + desiredWidth > parentFrame.width) {
+        if (this._userFilterButton) { try { this._userFilterButton.destroy(); } catch (e) { } }
+        this._userFilterButton = null;
+        return startX;
+    }
+
+    var buttonAttr = ((typeof BG_GREEN !== 'undefined' ? BG_GREEN : 0) | (typeof BLACK !== 'undefined' ? BLACK : 0));
+    var focusAttr = buttonAttr;
+    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
+    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
+    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    var self = this;
+
+    var clickHandler = function () { self._showUserFilter(); };
+
+    if (!this._userFilterButton) {
+        try {
+            this._userFilterButton = new Button({
+                parentFrame: parentFrame,
+                x: x,
+                y: y,
+                width: desiredWidth,
+                label: label,
+                attr: buttonAttr,
+                focusAttr: focusAttr,
+                shadowAttr: shadowAttr,
+                backgroundColors: [0, 0],
+                shadowColors: [shadowFg, shadowBg],
+                onClick: clickHandler
+            });
+            this._userFilterButton.setFocused(false);
+            if (this._userFilterButton.frame && Array.isArray(this._myFrames) && this._myFrames.indexOf(this._userFilterButton.frame) === -1) {
+                this.registerFrame(this._userFilterButton.frame);
+            }
+        } catch (e) {
+            this._userFilterButton = null;
+            return startX;
+        }
+    } else {
+        this._userFilterButton.parentFrame = parentFrame;
+        this._userFilterButton.attr = buttonAttr;
+        this._userFilterButton.focusAttr = focusAttr;
+        this._userFilterButton.setLabel(label);
+        this._userFilterButton.width = desiredWidth;
+        this._userFilterButton.height = 2;
+        this._userFilterButton.setOnClick(clickHandler);
+        if (this._userFilterButton.frame) {
+            this._userFilterButton.frame.x = x;
+            this._userFilterButton.frame.y = y;
+            this._userFilterButton.frame.width = desiredWidth;
+            this._userFilterButton.frame.height = 2;
+            this._userFilterButton.frame.parent = parentFrame;
+        }
+    }
+    return x + desiredWidth;
+};
+
+UsageViewer.prototype._ensureMonthPrevButton = function (parentFrame, startX) {
+    if (!parentFrame || parentFrame.width < 6 || this.months.length <= 1) {
+        if (this._monthPrevButton) { try { this._monthPrevButton.destroy(); } catch (e) { } }
+        this._monthPrevButton = null;
+        return startX;
+    }
+    var x = startX + 1; // 1-column margin from previous button
+    var y = 2;
+    var label = '< Prev';
+    var desiredWidth = 8; // Fixed width to accommodate "< Prev"
+
+    // Check if button fits and if we're not at the beginning
+    if (x + desiredWidth > parentFrame.width || this.index <= 0) {
+        if (this._monthPrevButton) { try { this._monthPrevButton.destroy(); } catch (e) { } }
+        this._monthPrevButton = null;
+        return startX;
+    }
+
+    var buttonAttr = ((typeof BG_CYAN !== 'undefined' ? BG_CYAN : 0) | (typeof BLACK !== 'undefined' ? BLACK : 0));
+    var focusAttr = buttonAttr;
+    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
+    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
+    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    var self = this;
+
+    var clickHandler = function () {
+        if (self.index > 0) {
+            self.index--;
+            self.programIndex = 0;
+            self.programTop = 0;
+            self.draw();
+        }
+    };
+
+    if (!this._monthPrevButton) {
+        try {
+            this._monthPrevButton = new Button({
+                parentFrame: parentFrame,
+                x: x,
+                y: y,
+                width: desiredWidth,
+                label: label,
+                attr: buttonAttr,
+                focusAttr: focusAttr,
+                shadowAttr: shadowAttr,
+                backgroundColors: [0, 0],
+                shadowColors: [shadowFg, shadowBg],
+                onClick: clickHandler
+            });
+            this._monthPrevButton.setFocused(false);
+            if (this._monthPrevButton.frame && Array.isArray(this._myFrames) && this._myFrames.indexOf(this._monthPrevButton.frame) === -1) {
+                this.registerFrame(this._monthPrevButton.frame);
+            }
+        } catch (e) {
+            this._monthPrevButton = null;
+            return startX;
+        }
+    } else {
+        this._monthPrevButton.parentFrame = parentFrame;
+        this._monthPrevButton.setOnClick(clickHandler);
+        if (this._monthPrevButton.frame) {
+            this._monthPrevButton.frame.x = x;
+            this._monthPrevButton.frame.y = y;
+            this._monthPrevButton.frame.width = desiredWidth;
+            this._monthPrevButton.frame.height = 2;
+            this._monthPrevButton.frame.parent = parentFrame;
+        }
+    }
+    return x + desiredWidth;
+};
+
+UsageViewer.prototype._ensureMonthNextButton = function (parentFrame, startX) {
+    if (!parentFrame || parentFrame.width < 6 || this.months.length <= 1) {
+        if (this._monthNextButton) { try { this._monthNextButton.destroy(); } catch (e) { } }
+        this._monthNextButton = null;
+        return startX;
+    }
+    var x = startX + 1; // 1-column margin from previous button
+    var y = 2;
+    var label = 'Next >';
+    var desiredWidth = 8; // Fixed width to accommodate "Next >"
+
+    // Check if button fits and if we're not at the end
+    if (x + desiredWidth > parentFrame.width || this.index >= this.months.length - 1) {
+        if (this._monthNextButton) { try { this._monthNextButton.destroy(); } catch (e) { } }
+        this._monthNextButton = null;
+        return startX;
+    }
+
+    var buttonAttr = ((typeof BG_CYAN !== 'undefined' ? BG_CYAN : 0) | (typeof BLACK !== 'undefined' ? BLACK : 0));
+    var focusAttr = buttonAttr;
+    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
+    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
+    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    var self = this;
+
+    var clickHandler = function () {
+        if (self.index < self.months.length - 1) {
+            self.index++;
+            self.programIndex = 0;
+            self.programTop = 0;
+            self.draw();
+        }
+    };
+
+    if (!this._monthNextButton) {
+        try {
+            this._monthNextButton = new Button({
+                parentFrame: parentFrame,
+                x: x,
+                y: y,
+                width: desiredWidth,
+                label: label,
+                attr: buttonAttr,
+                focusAttr: focusAttr,
+                shadowAttr: shadowAttr,
+                backgroundColors: [0, 0],
+                shadowColors: [shadowFg, shadowBg],
+                onClick: clickHandler
+            });
+            this._monthNextButton.setFocused(false);
+            if (this._monthNextButton.frame && Array.isArray(this._myFrames) && this._myFrames.indexOf(this._monthNextButton.frame) === -1) {
+                this.registerFrame(this._monthNextButton.frame);
+            }
+        } catch (e) {
+            this._monthNextButton = null;
+            return startX;
+        }
+    } else {
+        this._monthNextButton.parentFrame = parentFrame;
+        this._monthNextButton.setOnClick(clickHandler);
+        if (this._monthNextButton.frame) {
+            this._monthNextButton.frame.x = x;
+            this._monthNextButton.frame.y = y;
+            this._monthNextButton.frame.width = desiredWidth;
+            this._monthNextButton.frame.height = 2;
+            this._monthNextButton.frame.parent = parentFrame;
+        }
+    }
+    return x + desiredWidth;
 };
 
 UsageViewer.prototype._resolveAbsoluteRect = function (frame) {
@@ -985,6 +1299,118 @@ UsageViewer.prototype._registerBackButtonHotspot = function (defs) {
             y2: endY,
             swallow: false,
             owner: 'usage-viewer:back'
+        });
+        return;
+    }
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    for (var row = startY; row <= endY; row++) {
+        try { console.add_hotspot(key, false, minX, maxX, row); } catch (e) { }
+    }
+};
+
+UsageViewer.prototype._registerSortButtonHotspot = function (defs) {
+    if (!this._sortButton || !this._sortButton.frame) return;
+    var rect = this._resolveAbsoluteRect(this._sortButton.frame);
+    if (!rect) return;
+    var key = this._sortButtonHotkey || 'S';
+    var startY = Math.max(1, rect.y - 2);
+    var height = Math.max(1, rect.h || 0);
+    var endY = startY + height - 1;
+    var minX = rect.x;
+    var maxX = rect.x + Math.max(0, (rect.w || 1) - 1);
+    if (this.hotspots && Array.isArray(defs)) {
+        defs.push({
+            key: key,
+            x1: minX,
+            x2: maxX,
+            y1: startY,
+            y2: endY,
+            swallow: false,
+            owner: 'usage-viewer:sort'
+        });
+        return;
+    }
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    for (var row = startY; row <= endY; row++) {
+        try { console.add_hotspot(key, false, minX, maxX, row); } catch (e) { }
+    }
+};
+
+UsageViewer.prototype._registerUserFilterButtonHotspot = function (defs) {
+    if (!this._userFilterButton || !this._userFilterButton.frame) return;
+    var rect = this._resolveAbsoluteRect(this._userFilterButton.frame);
+    if (!rect) return;
+    var key = this._userFilterButtonHotkey || 'U';
+    var startY = Math.max(1, rect.y - 2);
+    var height = Math.max(1, rect.h || 0);
+    var endY = startY + height - 1;
+    var minX = rect.x;
+    var maxX = rect.x + Math.max(0, (rect.w || 1) - 1);
+    if (this.hotspots && Array.isArray(defs)) {
+        defs.push({
+            key: key,
+            x1: minX,
+            x2: maxX,
+            y1: startY,
+            y2: endY,
+            swallow: false,
+            owner: 'usage-viewer:user-filter'
+        });
+        return;
+    }
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    for (var row = startY; row <= endY; row++) {
+        try { console.add_hotspot(key, false, minX, maxX, row); } catch (e) { }
+    }
+};
+
+UsageViewer.prototype._registerMonthPrevButtonHotspot = function (defs) {
+    if (!this._monthPrevButton || !this._monthPrevButton.frame) return;
+    var rect = this._resolveAbsoluteRect(this._monthPrevButton.frame);
+    if (!rect) return;
+    var key = this._monthPrevButtonHotkey || 'P';
+    var startY = Math.max(1, rect.y - 2);
+    var height = Math.max(1, rect.h || 0);
+    var endY = startY + height - 1;
+    var minX = rect.x;
+    var maxX = rect.x + Math.max(0, (rect.w || 1) - 1);
+    if (this.hotspots && Array.isArray(defs)) {
+        defs.push({
+            key: key,
+            x1: minX,
+            x2: maxX,
+            y1: startY,
+            y2: endY,
+            swallow: false,
+            owner: 'usage-viewer:month-prev'
+        });
+        return;
+    }
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    for (var row = startY; row <= endY; row++) {
+        try { console.add_hotspot(key, false, minX, maxX, row); } catch (e) { }
+    }
+};
+
+UsageViewer.prototype._registerMonthNextButtonHotspot = function (defs) {
+    if (!this._monthNextButton || !this._monthNextButton.frame) return;
+    var rect = this._resolveAbsoluteRect(this._monthNextButton.frame);
+    if (!rect) return;
+    var key = this._monthNextButtonHotkey || 'N';
+    var startY = Math.max(1, rect.y - 2);
+    var height = Math.max(1, rect.h || 0);
+    var endY = startY + height - 1;
+    var minX = rect.x;
+    var maxX = rect.x + Math.max(0, (rect.w || 1) - 1);
+    if (this.hotspots && Array.isArray(defs)) {
+        defs.push({
+            key: key,
+            x1: minX,
+            x2: maxX,
+            y1: startY,
+            y2: endY,
+            swallow: false,
+            owner: 'usage-viewer:month-next'
         });
         return;
     }
@@ -1316,7 +1742,10 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     var width = df.width;
     if (width <= 0 || height <= 0) return;
     var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
-    var blockFrame = new Frame(1, baseY + 1, width, height + 1, attr, df);
+    // Use absolute positioning: df.x, df.y provide the base, baseY is relative to df
+    var absX = df.x || 1;
+    var absY = (df.y || 1) + baseY - 1;  // Convert relative baseY to absolute
+    var blockFrame = new Frame(absX, absY, width, height, attr, this.hostFrame || this.parentFrame);
     blockFrame.transparent = true;
     try { blockFrame.open(); } catch (e) { }
     blockFrame.clear(attr);
@@ -1335,10 +1764,11 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     var textStart = gap + 1;
     var iconError = null;
     if (showIcon) {
-        var iconX = blockFrame.x + leftPad;
-        var iconY = blockFrame.y;
+        // Icon frame using absolute positioning
+        var iconX = absX + leftPad;
+        var iconY = absY;
         try {
-            iconFrame = new Frame(iconX, iconY, iconWidth, iconHeight, iconAttr, df);
+            iconFrame = new Frame(iconX, iconY, iconWidth, iconHeight, iconAttr, this.hostFrame || this.parentFrame);
             iconFrame.transparent = true;
             this._programFrames.push(iconFrame);
             this._renderProgramIcon(iconFrame, display);

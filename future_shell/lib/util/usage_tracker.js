@@ -64,6 +64,17 @@ if (typeof JSONdb === 'undefined') {
         var userNumber = (typeof info.userNumber === 'number') ? info.userNumber : null;
         var usersKey = userAlias || (userNumber != null ? '#' + userNumber : null);
 
+        // DEFENSIVE: Reload data from disk before modifying to ensure we have latest state
+        // This prevents data loss if multiple processes are writing or if the in-memory
+        // state has become stale
+        try {
+            if (typeof db.load === 'function') {
+                db.load();
+            }
+        } catch (e) {
+            log(LOG_WARNING, 'usage_tracker: reload failed (' + e + '), continuing with cached data');
+        }
+
         var root = db.masterData.data || {};
         var month = root[monthKey];
         if (!month) {
@@ -105,8 +116,9 @@ if (typeof JSONdb === 'undefined') {
         db.masterData.data = root;
         try {
             db.save();
+            log(LOG_DEBUG, 'usage_tracker: recorded usage for ' + (usersKey || 'unknown') + ':' + programId + ' (' + elapsed + 's)');
         } catch (e) {
-            log(LOG_ERROR, 'usage_tracker: save failed (' + e + ')');
+            log(LOG_ERROR, 'usage_tracker: save failed (' + e + ') - data loss may have occurred!');
         }
     };
 
