@@ -1352,6 +1352,14 @@ IconShell.prototype._handleHotkeyAction = function (ch) {
                 if (cell && cell.item && cell.item.hotkey === ch) {
                     // Found the cell matching this hotkey, update selection
                     this.selection = this.scrollOffset + i;
+                    // Draw border on the clicked cell before dissolve animation
+                    if (cell.borderFrame) {
+                        this.drawCellBorder(cell);
+                        // Cycle the view to render the border
+                        if (this.view && typeof this.view.cycle === 'function') {
+                            this.view.cycle();
+                        }
+                    }
                     break;
                 }
             }
@@ -1394,7 +1402,26 @@ IconShell.prototype._handleHotkeyItemSelection = function (ch) {
         if (item.hotkey && ch === item.hotkey) {
             logFile.writeln('[_handleHotkeyItemSelection] MATCH FOUND: label=' + (item.label || '') + ' hotkey=' + JSON.stringify(item.hotkey));
             dbug(item.hotkey + ":" + item.label, "hotkeys");
+            // Clear border from previous selection if it's different
+            if (this.previousSelectedIndex >= 0 && this.previousSelectedIndex !== (this.scrollOffset + i)) {
+                var prevVisibleIdx = this.previousSelectedIndex - this.scrollOffset;
+                if (this.grid && this.grid.cells && this.grid.cells[prevVisibleIdx] && this.grid.cells[prevVisibleIdx].borderFrame) {
+                    var prevBorderFrame = this.grid.cells[prevVisibleIdx].borderFrame;
+                    try {
+                        prevBorderFrame.clear();
+                        prevBorderFrame.cycle();
+                    } catch (e) { }
+                }
+            }
             this.selection = this.scrollOffset + i;
+            // Draw border on the selected cell before opening
+            if (this.grid && this.grid.cells && this.grid.cells[i] && this.grid.cells[i].borderFrame) {
+                this.drawCellBorder(this.grid.cells[i]);
+                if (this.view && typeof this.view.cycle === 'function') {
+                    this.view.cycle();
+                }
+            }
+            this.previousSelectedIndex = this.selection;
             logFile.writeln('[_handleHotkeyItemSelection] calling openSelection with selection=' + this.selection);
             logFile.close();
             this.openSelection();

@@ -2,6 +2,8 @@ load('future_shell/lib/subprograms/subprogram.js');
 // Use shared Icon renderer for consistency with main shell
 load('future_shell/lib/shell/icon.js');
 load('future_shell/lib/subprograms/subprogram_hotspots.js');
+// Load dissolve animation function
+try { load('future_shell/lib/effects/eye_candy.js'); } catch (e) { /* dissolve optional */ }
 if (typeof registerModuleExports !== 'function') {
 	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
@@ -493,6 +495,15 @@ Mail.prototype.draw = function () {
 	this._iconGridHeight = gridInfo.heightUsed || 0;
 	// Register hotspots for each icon cell region (map to digit key 1..9 / A.. etc if >9 later)
 	this._addMouseHotspots();
+	// Clear all borders, then draw border on currently selected item
+	if (this.iconCells) {
+		for (var b = 0; b < this.iconCells.length; b++) {
+			this.clearCellBorder(this.iconCells[b]);
+		}
+	}
+	if (this.iconCells && this.iconCells[this.selectedIndex]) {
+		this.drawCellBorder(this.iconCells[this.selectedIndex]);
+	}
 	// scrollback below icons
 	var reservedRows = 0;
 	if (this.mode === 'promptRecipient') {
@@ -563,10 +574,12 @@ Mail.prototype.handleKey = function (k) {
 		case 'KEY_LEFT':
 		case '\x1B[D':
 		case KEY_LEFT:
+		case "\u001d":
 			this._moveMenuSelection(-1, 0); return;
 		case 'KEY_RIGHT':
 		case '\x1B[C':
 		case KEY_RIGHT:
+		case "\u0006":
 			this._moveMenuSelection(1, 0); return;
 		case '\r':
 		case '\n':
@@ -584,12 +597,43 @@ Mail.prototype._moveMenuSelection = function (dx, dy) {
 	var cols = this._iconCols || this.menuOptions.length;
 	if (cols < 1) cols = this.menuOptions.length;
 	var idx = this.selectedIndex;
-	if (dx === 1) idx = Math.min(this.menuOptions.length - 1, idx + 1);
-	else if (dx === -1) idx = Math.max(0, idx - 1);
-	else if (dy === 1) idx = Math.min(this.menuOptions.length - 1, idx + cols);
-	else if (dy === -1) idx = Math.max(0, idx - cols);
+	var row = Math.floor(idx / cols);
+	var col = idx % cols;
+
+	if (dx === 1) {
+		// Move right: next column in same row, or wrap to next row
+		col = col + 1;
+		if (col >= cols) {
+			col = 0;
+			row = row + 1;
+		}
+		idx = (row * cols) + col;
+		if (idx >= this.menuOptions.length) idx = this.selectedIndex; // stay put if out of bounds
+	} else if (dx === -1) {
+		// Move left: previous column in same row, or wrap to previous row
+		col = col - 1;
+		if (col < 0) {
+			col = cols - 1;
+			row = row - 1;
+		}
+		idx = (row * cols) + col;
+		if (idx < 0 || row < 0) idx = this.selectedIndex; // stay put if out of bounds
+	} else if (dy === 1) {
+		idx = Math.min(this.menuOptions.length - 1, idx + cols);
+	} else if (dy === -1) {
+		idx = Math.max(0, idx - cols);
+	}
+
 	if (idx !== this.selectedIndex) {
+		// Clear border from previous selection
+		if (this.iconCells && this.iconCells[this.selectedIndex]) {
+			this.clearCellBorder(this.iconCells[this.selectedIndex]);
+		}
 		this.selectedIndex = idx;
+		// Draw border on new selection
+		if (this.iconCells && this.iconCells[this.selectedIndex]) {
+			this.drawCellBorder(this.iconCells[this.selectedIndex]);
+		}
 		this.draw();
 	}
 };
@@ -597,6 +641,31 @@ Mail.prototype._moveMenuSelection = function (dx, dy) {
 Mail.prototype.invokeSelected = function () {
 	var opt = this.menuOptions[this.selectedIndex]; if (!opt) return;
 	if (opt.confirm) { this.mode = 'confirm'; this.confirmFor = opt; this.draw(); return; }
+
+	// Play dissolve animation before launching
+	try {
+		if (this.shell && typeof this.shell.playDissolveBefore === 'function') {
+			// Map local selectedIndex to appropriate cell for dissolve
+			if (this.iconCells && this.iconCells[this.selectedIndex] && this.iconCells[this.selectedIndex].icon) {
+				var cell = this.iconCells[this.selectedIndex];
+				var wasTransparent = cell.icon.transparent;
+				cell.icon.transparent = false;
+				var fallbackDissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+				var dissolveColor = fallbackDissolveColor;
+				try {
+					dissolve(cell.icon, dissolveColor, 5);
+				} catch (e) {
+					dbug("dissolve error in mail invokeSelected: " + e, "view");
+				}
+				cell.icon.transparent = wasTransparent;
+				cell.icon.clear();
+				cell.icon.cycle();
+			}
+		}
+	} catch (e) {
+		dbug("Error in invokeSelected dissolve: " + e, "view");
+	}
+
 	try { opt.action && opt.action(); } catch (e) { /* suppressed option error */ }
 };
 
@@ -723,9 +792,15 @@ Mail.prototype.drawIconGrid = function (o) {
 			var item = { label: labelText, iconFile: opt.iconFile, iconBg: opt.iconBg, iconFg: opt.iconFg, _labelSegments: segments };
 			var iconFrame = new Frame(o.x + x - 1, o.y + y - 1, ICON_W, ICON_H, BG_BLACK | LIGHTGRAY, o.parent);
 			var labelFrame = new Frame(o.x + x - 1, o.y + y - 1 + ICON_H, ICON_W, labelH, BG_BLACK | LIGHTGRAY, o.parent);
+
+			// Create border frame for selection highlighting (positioned around icon+label with 1-cell margin)
+			var borderFrame = new Frame(o.x + x - 2, o.y + y - 2, ICON_W + 2, ICON_H + labelH + 2, BG_BLACK | LIGHTGRAY, o.parent);
+			borderFrame.transparent = true;
+			if (typeof borderFrame.open === 'function') borderFrame.open();
+
 			var iconObj = new Icon(iconFrame, labelFrame, item);
 			iconObj.render();
-			this.iconCells.push({ icon: iconFrame, label: labelFrame, item: item, iconObj: iconObj });
+			this.iconCells.push({ icon: iconFrame, label: labelFrame, item: item, iconObj: iconObj, borderFrame: borderFrame });
 		}
 		this._iconCols = cols;
 	}
@@ -801,6 +876,27 @@ Mail.prototype._drawMailLabel = function (frame, item, isSelected) {
 	}
 };
 
+Mail.prototype.drawCellBorder = function (cell) {
+	if (!cell || !cell.borderFrame) return;
+	var borderColor = (typeof CYAN !== 'undefined' ? CYAN : 6);
+	try {
+		cell.borderFrame.drawBorder(borderColor);
+		cell.borderFrame.cycle();
+	} catch (e) {
+		dbug('drawCellBorder error: ' + e, 'view');
+	}
+};
+
+Mail.prototype.clearCellBorder = function (cell) {
+	if (!cell || !cell.borderFrame) return;
+	try {
+		cell.borderFrame.clear();
+		cell.borderFrame.cycle();
+	} catch (e) {
+		dbug('clearCellBorder error: ' + e, 'view');
+	}
+};
+
 Mail.prototype._addMouseHotspots = function () {
 	if (!this.hotspots) return;
 	if (!this.iconCells || !this.iconCells.length) {
@@ -838,6 +934,7 @@ Mail.prototype._destroyIconCells = function () {
 		if (!cell) continue;
 		try { if (cell.icon) cell.icon.close(); } catch (e) { }
 		try { if (cell.label) cell.label.close(); } catch (e) { }
+		try { if (cell.borderFrame) cell.borderFrame.close(); } catch (e) { }
 	}
 	this.iconCells = [];
 	this._iconCols = null;

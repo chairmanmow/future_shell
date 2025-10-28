@@ -288,7 +288,10 @@ IconShell.prototype._closePreviousFrames = function () {
         for (var i = 0; i < this.grid.cells.length; i++) {
             if (this.grid.cells[i].icon && typeof this.grid.cells[i].icon.close === 'function') this.grid.cells[i].icon.close();
             if (this.grid.cells[i].label && typeof this.grid.cells[i].label.close === 'function') this.grid.cells[i].label.close();
-            if (this.grid.cells[i].borderFrame && typeof this.grid.cells[i].borderFrame.close === 'function') this.grid.cells[i].borderFrame.close();
+            if (this.grid.cells[i].borderFrame) {
+                try { this.grid.cells[i].borderFrame.clear(); } catch (e) { }
+                if (typeof this.grid.cells[i].borderFrame.close === 'function') this.grid.cells[i].borderFrame.close();
+            }
         }
     }
 };
