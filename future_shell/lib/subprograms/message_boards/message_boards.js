@@ -8,6 +8,8 @@ load('future_shell/lib/subprograms/subprogram_hotspots.js');
 if (typeof lazyLoadModule !== 'function' || typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
+// Load dissolve animation function
+try { load('future_shell/lib/effects/eye_candy.js'); } catch (e) { /* dissolve optional */ }
 if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 if (typeof KEY_ESC === 'undefined') var KEY_ESC = '\x1b';
 if (typeof KEY_BACKSPACE === 'undefined') var KEY_BACKSPACE = '\b';
@@ -1107,7 +1109,28 @@ MessageBoard.prototype._handleKey = function (key) {
                             it.action();
                             return false;
                         }
-                        if (typeof it.groupIndex !== 'undefined') { this._renderSubView(it.groupIndex); return false; }
+                        if (typeof it.groupIndex !== 'undefined') {
+                            // Dissolve animation on group selection
+                            try {
+                                if (this._iconCells && typeof this.scrollOffset !== 'undefined') {
+                                    var localIdx = this.selection - this.scrollOffset;
+                                    if (localIdx >= 0 && localIdx < this._iconCells.length && this._iconCells[localIdx] && this._iconCells[localIdx].icon) {
+                                        var cell = this._iconCells[localIdx];
+                                        cell.icon.transparent = false;
+                                        var dissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+                                        try {
+                                            dissolve(cell.icon, dissolveColor, 5);
+                                        } catch (e) {
+                                            // dissolve optional
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                // silence errors
+                            }
+                            this._renderSubView(it.groupIndex);
+                            return false;
+                        }
                     }
                 } else if (this.view === 'sub') {
                     var it2 = this.items[this.selection];
@@ -1117,6 +1140,24 @@ MessageBoard.prototype._handleKey = function (key) {
                             return false;
                         }
                         if (it2.subCode) {
+                            // Dissolve animation on sub selection
+                            try {
+                                if (this._iconCells && typeof this.scrollOffset !== 'undefined') {
+                                    var localIdx = this.selection - this.scrollOffset;
+                                    if (localIdx >= 0 && localIdx < this._iconCells.length && this._iconCells[localIdx] && this._iconCells[localIdx].icon) {
+                                        var cell = this._iconCells[localIdx];
+                                        cell.icon.transparent = false;
+                                        var dissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+                                        try {
+                                            dissolve(cell.icon, dissolveColor, 5);
+                                        } catch (e) {
+                                            // dissolve optional
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                // silence errors
+                            }
                             var hasUnread = this._subHasUnread ? this._subHasUnread(it2.subCode, it2._messageCount) : ((it2._unreadCount || 0) > 0);
                             if (hasUnread) this._openSubReader(it2.subCode);
                             else this._renderFlatView({ subCode: it2.subCode });
@@ -1182,9 +1223,16 @@ MessageBoard.prototype._handleKey = function (key) {
         }
     }
     var controller = this._getViewController(this.view);
+    dbug("_processKeyInput: view=" + this.view + " controller=" + (controller ? controller.constructor.name : 'null') + " hasHandleKey=" + (controller && typeof controller.handleKey === 'function'), "view");
     if (controller && typeof controller.handleKey === 'function') {
-        var handled = controller.handleKey.call(controller, key);
-        if (typeof handled !== 'undefined') return handled;
+        try {
+            dbug("_processKeyInput: calling controller.handleKey for view=" + this.view + " handleKey=" + (typeof controller.handleKey), "view");
+            var handled = controller.handleKey.call(controller, key);
+            dbug("_processKeyInput: after handleKey call, handled=" + handled, "view");
+            if (typeof handled !== 'undefined') return handled;
+        } catch (keyHandleErr) {
+            dbug("_processKeyInput: EXCEPTION in handleKey: " + keyHandleErr, "view");
+        }
     }
     switch (this.view) {
         case 'group': return this._handleGroupKey(key);
@@ -4026,16 +4074,46 @@ MessageBoard.prototype._handleSearchKey = function (key) {
 };
 
 MessageBoard.prototype._paintIconGrid = function () {
-    this._clearIconGrid();
-    this.outputFrame.clear();
-    this._releaseHotspots();
-    if (!this.items.length) { this.outputFrame.putmsg('No items'); return; }
+    if (!this.items.length) {
+        this._clearIconGrid();
+        this.outputFrame.clear();
+        this._releaseHotspots();
+        this.outputFrame.putmsg('No items');
+        return;
+    }
+
     // Lazy load Icon and reuse existing icon infrastructure
     if (!this._Icon) { try { this._Icon = load('future_shell/lib/shell/icon.js').Icon || Icon; } catch (e) { try { load('future_shell/lib/shell/icon.js'); this._Icon = Icon; } catch (e2) { } } }
     var metrics = this._calcGridMetrics();
     var maxVisible = metrics.cols * metrics.rows;
+
+    // Check if scroll offset will change
+    var previousScrollOffset = this.scrollOffset;
     if (this.selection < this.scrollOffset) this.scrollOffset = this.selection;
     if (this.selection >= this.scrollOffset + maxVisible) this.scrollOffset = Math.max(0, this.selection - maxVisible + 1);
+
+    // If scroll didn't change, do selective border update only
+    var scrollChanged = (previousScrollOffset !== this.scrollOffset);
+    if (!scrollChanged && this._iconCells && this._iconCells.length) {
+        // Just update borders for same-page navigation
+        if (this._lastSelectedIndex !== undefined && this._lastSelectedIndex !== this.selection) {
+            var oldLocal = this._lastSelectedIndex - this.scrollOffset;
+            var newLocal = this.selection - this.scrollOffset;
+            if (oldLocal >= 0 && oldLocal < this._iconCells.length) {
+                this.clearCellBorder(this._iconCells[oldLocal]);
+            }
+            if (newLocal >= 0 && newLocal < this._iconCells.length) {
+                this.drawCellBorder(this._iconCells[newLocal]);
+            }
+        }
+        this._lastSelectedIndex = this.selection;
+        return;
+    }
+
+    // Full redraw needed (scroll changed or first render)
+    this._clearIconGrid();
+    this.outputFrame.clear();
+    this._releaseHotspots();
     var end = Math.min(this.items.length, this.scrollOffset + maxVisible);
     var visible = this.items.slice(this.scrollOffset, end);
     // Build and render each visible icon
@@ -4057,6 +4135,7 @@ MessageBoard.prototype._paintIconGrid = function () {
         if (typeof ICSH_PERF_TAG !== 'undefined') { try { iconFrame.__perfTag = 'mb-icon'; } catch (_ptI) { } }
         var labelFrame = new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, BG_BLACK | LIGHTGRAY, this.outputFrame);
         if (typeof ICSH_PERF_TAG !== 'undefined') { try { labelFrame.__perfTag = 'mb-icon-label'; } catch (_ptIL) { } }
+
         var iconTitleFrame = null;
         if (inSubView) {
             var titleColor = (typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : (typeof CYAN !== 'undefined' ? CYAN : WHITE);
@@ -4066,6 +4145,14 @@ MessageBoard.prototype._paintIconGrid = function () {
             if (typeof iconTitleFrame.word_wrap !== 'undefined') iconTitleFrame.word_wrap = false;
             try { iconTitleFrame.open(); } catch (_ignoredOpen) { }
         }
+
+        // Create border frame for selection highlighting (adjust for title frame in sub-view)
+        var borderY = inSubView ? (iconFrame.y - 2) : (iconFrame.y - 1);
+        var borderH = inSubView ? (1 + metrics.iconH + 1 + 2) : (metrics.iconH + 1 + 2);
+        var borderFrame = new Frame(iconFrame.x - 1, borderY, metrics.iconW + 2, borderH, CYAN, this.outputFrame);
+        borderFrame.transparent = true;
+        if (typeof borderFrame.open === 'function') borderFrame.open();
+        if (typeof ICSH_PERF_TAG !== 'undefined') { try { borderFrame.__perfTag = 'mb-icon-border'; } catch (_ptB) { } }
         if (itemData.type === 'sub' && itemData.subCode) {
             var updated = this._getSubMessageCount(itemData.subCode);
             itemData._messageCount = updated;
@@ -4099,7 +4186,7 @@ MessageBoard.prototype._paintIconGrid = function () {
                 try { iconTitleFrame.cycle(); } catch (_ignoredCycle) { }
             } catch (_ignoredTitle) { }
         }
-        this._iconCells.push({ icon: iconFrame, label: labelFrame, title: iconTitleFrame, item: itemData, iconObj: iconObj });
+        this._iconCells.push({ icon: iconFrame, label: labelFrame, title: iconTitleFrame, item: itemData, iconObj: iconObj, borderFrame: borderFrame });
         try {
             this._renderIconLabel(labelFrame, itemData, isSelected, metrics.iconW);
         } catch (e) { }
@@ -4136,6 +4223,18 @@ MessageBoard.prototype._paintIconGrid = function () {
         }
         idx++;
     }
+
+    // Draw border on currently selected visible item
+    if (this._iconCells && this.scrollOffset !== undefined) {
+        var localIdx = this.selection - this.scrollOffset;
+        if (localIdx >= 0 && localIdx < this._iconCells.length) {
+            this.drawCellBorder(this._iconCells[localIdx]);
+        }
+    }
+
+    // Track last selection for next navigation
+    this._lastSelectedIndex = this.selection;
+
     var baseHelp;
     if (this.view === 'group') baseHelp = 'Enter=Open  S=Search  ESC=Quit ';
     else if (this.view === 'sub') baseHelp = 'Enter=Open  S=Search  ESC=Groups  Backspace=Groups ';
@@ -4148,11 +4247,33 @@ MessageBoard.prototype._clearIconGrid = function () {
     if (!this._iconCells) return;
     for (var i = 0; i < this._iconCells.length; i++) {
         var c = this._iconCells[i];
+        try { c.borderFrame && c.borderFrame.close(); } catch (e) { }
         try { c.icon && c.icon.close(); } catch (e) { }
         try { c.label && c.label.close(); } catch (e) { }
         try { c.title && c.title.close(); } catch (e) { }
     }
     this._iconCells = [];
+};
+
+MessageBoard.prototype.drawCellBorder = function (cell) {
+    if (!cell || !cell.borderFrame) return;
+    var borderColor = (typeof CYAN !== 'undefined' ? CYAN : 6);
+    try {
+        cell.borderFrame.drawBorder(borderColor);
+        cell.borderFrame.cycle();
+    } catch (e) {
+        dbug('drawCellBorder error: ' + e, 'messageboard');
+    }
+};
+
+MessageBoard.prototype.clearCellBorder = function (cell) {
+    if (!cell || !cell.borderFrame) return;
+    try {
+        cell.borderFrame.clear();
+        cell.borderFrame.cycle();
+    } catch (e) {
+        dbug('clearCellBorder error: ' + e, 'messageboard');
+    }
 };
 
 // ---- Threads View ----

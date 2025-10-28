@@ -145,13 +145,20 @@ if (typeof lazyLoadModule !== 'function') {
         var cols = metrics.cols || 1;
         var maxVisible = (metrics.cols || 1) * (metrics.rows || board.items.length);
         var oldSel = board.selection;
-        if (key === KEY_LEFT) board.selection = Math.max(0, board.selection - 1);
-        else if (key === KEY_RIGHT) board.selection = Math.min(board.items.length - 1, board.selection + 1);
-        else if (key === KEY_UP) board.selection = Math.max(0, board.selection - cols);
-        else if (key === KEY_DOWN) board.selection = Math.min(board.items.length - 1, board.selection + cols);
-        else if (key === '\x0d' || key === '\n') return handleGroupEnter(board);
-        else if (key === 'S' || key === 's' || key === '/') return promptGroupSearch(board);
-        else if (key === 'Y' || key === 'y') {
+        // Use safe key comparisons - avoid undefined KEY_* constants
+        var keyCode = typeof key === 'string' ? key.charCodeAt(0) : key;
+        var keyStr = typeof key === 'string' ? key : String.fromCharCode(key);
+
+        if (keyCode === 0x4B || keyStr === 'K') board.selection = Math.max(0, board.selection - 1);  // LEFT
+        else if (keyCode === 0x4D || keyStr === 'M') board.selection = Math.min(board.items.length - 1, board.selection + 1);  // RIGHT
+        else if (keyCode === 0x48 || keyStr === 'H') board.selection = Math.max(0, board.selection - cols);  // UP
+        else if (keyCode === 0x50 || keyStr === 'P') board.selection = Math.min(board.items.length - 1, board.selection + cols);  // DOWN
+        else if (keyStr === '\x0d' || keyStr === '\n') {
+            var result = handleGroupEnter(board);
+            return result;
+        }
+        else if (keyStr === 'S' || keyStr === 's' || keyStr === '/') return promptGroupSearch(board);
+        else if (keyStr === 'Y' || keyStr === 'y') {
             var scanIndex = board._findMenuIndexByType ? board._findMenuIndexByType('scan') : -1;
             if (scanIndex !== -1 && board.items[scanIndex] && typeof board.items[scanIndex].action === 'function') {
                 board.selection = scanIndex;
@@ -159,8 +166,8 @@ if (typeof lazyLoadModule !== 'function') {
                 return false;
             }
         }
-        else if (key === KEY_PAGEUP) board.selection = Math.max(0, board.selection - maxVisible);
-        else if (key === KEY_PAGEDN) board.selection = Math.min(board.items.length - 1, board.selection + maxVisible);
+        else if (keyCode === 0x49 || keyStr === 'I') board.selection = Math.max(0, board.selection - maxVisible);  // PAGEUP
+        else if (keyCode === 0x51 || keyStr === 'Q') board.selection = Math.min(board.items.length - 1, board.selection + maxVisible);  // PAGEDN
         if (board.selection !== oldSel && board._paintIconGrid) board._paintIconGrid();
         return true;
     };
@@ -225,12 +232,14 @@ if (typeof lazyLoadModule !== 'function') {
     function handleGroupEnter(board) {
         var item = board.items[board.selection];
         if (!item) return false;
-        if (item.action && typeof item.action === 'function') {
-            item.action();
-            return false;
-        }
+
         if (item.type === 'group') {
             board._renderSubView(item.groupIndex);
+            return false;
+        }
+
+        if (item.action && typeof item.action === 'function') {
+            item.action();
             return false;
         }
         return false;
@@ -276,15 +285,21 @@ if (typeof lazyLoadModule !== 'function') {
         var cols = metrics.cols || 1;
         var maxVisible = (metrics.cols || 1) * (metrics.rows || board.items.length);
         var oldSel = board.selection;
-        if (key === KEY_LEFT) board.selection = Math.max(0, board.selection - 1);
-        else if (key === KEY_RIGHT) board.selection = Math.min(board.items.length - 1, board.selection + 1);
-        else if (key === KEY_UP) board.selection = Math.max(0, board.selection - cols);
-        else if (key === KEY_DOWN) board.selection = Math.min(board.items.length - 1, board.selection + cols);
-        else if (key === '\x08') { board._renderGroupView(); return false; }
-        else if (key === '\x0d' || key === '\n') return handleSubEnter(board);
-        else if (key === 'S' || key === 's' || key === '/') return promptSubSearch(board);
-        else if (key === KEY_PAGEUP) board.selection = Math.max(0, board.selection - maxVisible);
-        else if (key === KEY_PAGEDN) board.selection = Math.min(board.items.length - 1, board.selection + maxVisible);
+        // Use safe key comparisons - avoid undefined KEY_* constants
+        var keyCode = typeof key === 'string' ? key.charCodeAt(0) : key;
+        var keyStr = typeof key === 'string' ? key : String.fromCharCode(key);
+
+        if (keyCode === 0x4B || keyStr === 'K') board.selection = Math.max(0, board.selection - 1);  // LEFT
+        else if (keyCode === 0x4D || keyStr === 'M') board.selection = Math.min(board.items.length - 1, board.selection + 1);  // RIGHT
+        else if (keyCode === 0x48 || keyStr === 'H') board.selection = Math.max(0, board.selection - cols);  // UP
+        else if (keyCode === 0x50 || keyStr === 'P') board.selection = Math.min(board.items.length - 1, board.selection + cols);  // DOWN
+        else if (keyStr === '\x08') { board._renderGroupView(); return false; }
+        else if (keyStr === '\x0d' || keyStr === '\n') {
+            return handleSubEnter(board);
+        }
+        else if (keyStr === 'S' || keyStr === 's' || keyStr === '/') return promptSubSearch(board);
+        else if (keyCode === 0x49 || keyStr === 'I') board.selection = Math.max(0, board.selection - maxVisible);  // PAGEUP
+        else if (keyCode === 0x51 || keyStr === 'Q') board.selection = Math.min(board.items.length - 1, board.selection + maxVisible);  // PAGEDN
         return updateSelection(board, oldSel);
     };
 
