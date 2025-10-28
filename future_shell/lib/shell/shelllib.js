@@ -7,6 +7,7 @@ if (typeof dbug !== 'function') {
 load("event-timer.js");
 var ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
 try { load('future_shell/lib/effects/screensaver.js'); } catch (e) { }
+try { load('future_shell/lib/effects/eye_candy.js'); } catch (e) { log('WARNING: failed to load eye_candy.js: ' + e); }
 // Performance instrumentation (optional)
 try { load('future_shell/lib/util/perf.js'); } catch (e) { }
 try { load('future_shell/lib/subprograms/subprogram.js'); } catch (e) { }
@@ -156,6 +157,8 @@ IconShell.prototype.init = function () {
     this.grid = null;
     // Current scroll offset (index of first visible item)
     this.scrollOffset = 0;
+    // Track previous selection for border clearing (selection highlighting)
+    this.previousSelectedIndex = -1;
     // Set true if folder was changed and needs redraw
     this.folderChanged = false;
     // Last known screen size (for resize detection)
@@ -342,6 +345,140 @@ IconShell.prototype.init = function () {
     }
 };
 
+/**
+ * Draw a border around the given cell's icon and label.
+ * Uses the cell's borderFrame and applies selection color from theme.
+ */
+IconShell.prototype.drawCellBorder = function (cell) {
+    if (!cell || !cell.borderFrame) return;
+
+    // Get border color from theme, fallback to CYAN
+    var fallbackBorderColor = (typeof CYAN !== 'undefined' ? CYAN : 6);
+    var borderColor = (typeof this.paletteAttr === 'function')
+        ? this.paletteAttr('ICON_SELECTION_BORDER', fallbackBorderColor)
+        : fallbackBorderColor;
+
+    // Draw the border using Frame.prototype.drawBorder from frame-ext.js
+    try {
+        cell.borderFrame.drawBorder(borderColor);
+        cell.borderFrame.cycle();
+    } catch (e) {
+        dbug('drawCellBorder error: ' + e, 'view');
+    }
+};
+
+/**
+ * Clear the border frame for the given cell.
+ */
+IconShell.prototype.clearCellBorder = function (cell) {
+    if (!cell || !cell.borderFrame) return;
+    try {
+        cell.borderFrame.clear();
+        cell.borderFrame.cycle();
+    } catch (e) {
+        dbug('clearCellBorder error: ' + e, 'view');
+    }
+};
+
+/**
+ * Play dissolve animation on the icon frame for the given selection index.
+ * Called just before launching an item to create visual "disappear" effect.
+ */
+IconShell.prototype.playDissolveBefore = function (selectionIndex) {
+    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
+    logFile.open('a');
+
+    logFile.writeln('[playDissolveBefore] called with selectionIndex=' + selectionIndex);
+    logFile.writeln('[playDissolveBefore] this.scrollOffset=' + this.scrollOffset);
+    logFile.writeln('[playDissolveBefore] this.grid=' + (this.grid ? 'exists' : 'null'));
+    logFile.writeln('[playDissolveBefore] this.grid.cells=' + (this.grid && this.grid.cells ? 'exists, length=' + this.grid.cells.length : 'null'));
+
+    if (!this.grid || !this.grid.cells) {
+        logFile.writeln('[playDissolveBefore] FAIL: no grid or cells');
+        logFile.close();
+        return false;
+    }
+
+    var visibleIdx = selectionIndex - this.scrollOffset;
+    logFile.writeln('[playDissolveBefore] visibleIdx=' + visibleIdx);
+
+    if (visibleIdx < 0 || visibleIdx >= this.grid.cells.length) {
+        logFile.writeln('[playDissolveBefore] FAIL: invalid visible index');
+        logFile.close();
+        return false;
+    }
+
+    var cell = this.grid.cells[visibleIdx];
+    logFile.writeln('[playDissolveBefore] cell exists=' + (cell ? 'yes' : 'no'));
+
+    if (cell) {
+        logFile.writeln('[playDissolveBefore] cell.icon exists=' + (cell.icon ? 'yes' : 'no'));
+        logFile.writeln('[playDissolveBefore] cell.label exists=' + (cell.label ? 'yes' : 'no'));
+        logFile.writeln('[playDissolveBefore] cell.iconFrame exists=' + (cell.iconFrame ? 'yes' : 'no'));
+        logFile.writeln('[playDissolveBefore] cell.borderFrame exists=' + (cell.borderFrame ? 'yes' : 'no'));
+        logFile.writeln('[playDissolveBefore] cell.iconObj exists=' + (cell.iconObj ? 'yes' : 'no'));
+        logFile.writeln('[playDissolveBefore] cell.item exists=' + (cell.item ? 'yes' : 'no'));
+    }
+
+    if (cell && cell.icon) {
+        logFile.writeln('[playDissolveBefore] cell.icon.width=' + cell.icon.width);
+        logFile.writeln('[playDissolveBefore] cell.icon.height=' + cell.icon.height);
+        logFile.writeln('[playDissolveBefore] cell.icon.transparent=' + cell.icon.transparent);
+    }
+
+    if (!cell || !cell.icon) {
+        logFile.writeln('[playDissolveBefore] FAIL: no cell or icon');
+        logFile.close();
+        return false;
+    }
+
+    // Verify dissolve function is available (loaded via pre-load at top)
+    logFile.writeln('[playDissolveBefore] typeof dissolve=' + typeof dissolve);
+
+    if (typeof dissolve !== 'function') {
+        logFile.writeln('[playDissolveBefore] FAIL: dissolve not a function');
+        logFile.close();
+        return false;
+    }
+
+    try {
+        logFile.writeln('[playDissolveBefore] About to call dissolve()');
+
+        // Temporarily disable transparency so setData() in dissolve produces visible output
+        var wasTransparent = cell.icon.transparent;
+        cell.icon.transparent = false;
+        logFile.writeln('[playDissolveBefore] Set transparent=false (was ' + wasTransparent + ')');
+
+        // Play dissolve on icon frame with theme-configured color
+        // Use 12ms delay for better visibility of animation
+        var fallbackDissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+        var dissolveColor = (typeof this.paletteAttr === 'function')
+            ? this.paletteAttr('ICON_DISSOLVE_COLOR', fallbackDissolveColor)
+            : fallbackDissolveColor;
+        logFile.writeln('[playDissolveBefore] Calling dissolve(frame, color=' + dissolveColor + ', 12)');
+        dissolve(cell.icon, dissolveColor, 12);
+        logFile.writeln('[playDissolveBefore] dissolve() completed');
+
+        // Clear the frame to reset it after dissolve animation
+        logFile.writeln('[playDissolveBefore] Clearing frame after dissolve');
+        cell.icon.clear();
+        cell.icon.cycle();
+
+        // Restore transparency state
+        cell.icon.transparent = wasTransparent;
+        logFile.writeln('[playDissolveBefore] Restored transparent=' + wasTransparent);
+
+        logFile.writeln('[playDissolveBefore] SUCCESS');
+        logFile.close();
+        return true;
+    } catch (e) {
+        logFile.writeln('[playDissolveBefore] EXCEPTION: ' + e);
+        logFile.writeln('[playDissolveBefore] Stack: ' + (e.stack ? e.stack : 'N/A'));
+        logFile.close();
+        return false;
+    }
+};
+
 IconShell.prototype._computeToastDismissRegions = function (toastRects) {
     if (!toastRects || !toastRects.length) return [];
     var root = this.root;
@@ -496,6 +633,11 @@ IconShell.prototype.main = function () {
 
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function (ch) {
+    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
+    logFile.open('a');
+    logFile.writeln('[processKeyboardInput] called with ch=' + JSON.stringify(ch) + ' charCode=' + (ch && typeof ch === 'string' ? ch.charCodeAt(0) : 'N/A'));
+    logFile.close();
+
     if (this.activeSubprogram && this.activeSubprogram.running === false) {
         dbug('Releasing inactive subprogram before handling key', 'subprogram');
         this.exitSubprogram();
@@ -1151,6 +1293,10 @@ IconShell.prototype._handleSubprogramKey = function (ch) {
 };
 
 IconShell.prototype._handleNavigationKey = function (ch) {
+    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
+    logFile.open('a');
+    logFile.writeln('[_handleNavigationKey] called with ch=' + JSON.stringify(ch) + ' charCode=' + (ch ? ch.charCodeAt(0) : 'null'));
+
     // Defensive: ensure selection/index not out of sync with current visible items (especially root view)
     try {
         var node = this.stack[this.stack.length - 1];
@@ -1159,15 +1305,19 @@ IconShell.prototype._handleNavigationKey = function (ch) {
         if (this.selection >= items.length) this.selection = items.length ? items.length - 1 : 0;
     } catch (e) { }
     switch (ch) {
-        case KEY_LEFT: this.moveSelection(-1, 0); return true;
-        case KEY_RIGHT: this.moveSelection(1, 0); return true;
-        case KEY_UP: this.moveSelection(0, -1); return true;
+        case KEY_LEFT: this.moveSelection(-1, 0); logFile.close(); return true;
+        case KEY_RIGHT: this.moveSelection(1, 0); logFile.close(); return true;
+        case KEY_UP: this.moveSelection(0, -1); logFile.close(); return true;
         case KEY_DOWN:
         case "\u000a":
             log('key down detected as navigation');
+            logFile.writeln('[_handleNavigationKey] DOWN/LF pressed, moving selection');
             this.moveSelection(0, 1);
+            logFile.close();
             return true;
         case '\r': // ENTER
+            logFile.writeln('[_handleNavigationKey] ENTER pressed, calling openSelection');
+            logFile.close();
             this.openSelection();
             return true;
         case '\x1B': // ESC: up a level (if possible)
@@ -1178,8 +1328,10 @@ IconShell.prototype._handleNavigationKey = function (ch) {
                     if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
                 }
             }
+            logFile.close();
             return true;
         default:
+            logFile.close();
             return false;
     }
 };
@@ -1191,6 +1343,27 @@ IconShell.prototype._handleHotkeyAction = function (ch) {
     var action = hotkeyMap[ch];
     if (typeof action === 'function') {
         dbug("Executing hotkey action for " + ch + " in view " + viewId, "hotkeys");
+
+        // Before executing, try to update selection to match the clicked/pressed item
+        // This is important for mouse clicks which don't automatically update selection
+        if (this.grid && this.grid.cells) {
+            for (var i = 0; i < this.grid.cells.length; i++) {
+                var cell = this.grid.cells[i];
+                if (cell && cell.item && cell.item.hotkey === ch) {
+                    // Found the cell matching this hotkey, update selection
+                    this.selection = this.scrollOffset + i;
+                    break;
+                }
+            }
+        }
+
+        // Play dissolve animation before launching item via hotkey
+        try {
+            this.playDissolveBefore(this.selection);
+        } catch (e) {
+            dbug("dissolve error in _handleHotkeyAction: " + e, "view");
+        }
+
         action();
         if (this.folderChanged) {
             this.folderChanged = false;
@@ -1202,6 +1375,10 @@ IconShell.prototype._handleHotkeyAction = function (ch) {
 };
 
 IconShell.prototype._handleHotkeyItemSelection = function (ch) {
+    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
+    logFile.open('a');
+    logFile.writeln('[_handleHotkeyItemSelection] called with ch=' + JSON.stringify(ch));
+
     var node = this.stack[this.stack.length - 1];
     var items = node.children ? node.children.slice() : [];
     if (this.stack.length > 1) {
@@ -1215,8 +1392,11 @@ IconShell.prototype._handleHotkeyItemSelection = function (ch) {
     for (var i = 0; i < visibleItems.length; i++) {
         var item = visibleItems[i];
         if (item.hotkey && ch === item.hotkey) {
+            logFile.writeln('[_handleHotkeyItemSelection] MATCH FOUND: label=' + (item.label || '') + ' hotkey=' + JSON.stringify(item.hotkey));
             dbug(item.hotkey + ":" + item.label, "hotkeys");
             this.selection = this.scrollOffset + i;
+            logFile.writeln('[_handleHotkeyItemSelection] calling openSelection with selection=' + this.selection);
+            logFile.close();
             this.openSelection();
             if (this.folderChanged) {
                 this.folderChanged = false;
@@ -1225,6 +1405,8 @@ IconShell.prototype._handleHotkeyItemSelection = function (ch) {
             return true;
         }
     }
+    logFile.writeln('[_handleHotkeyItemSelection] no match found');
+    logFile.close();
     return false;
 };
 

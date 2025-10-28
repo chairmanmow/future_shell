@@ -1,5 +1,9 @@
 // Update openSelection to use changeFolder for both up and down navigation
 IconShell.prototype.openSelection = function () {
+    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
+    logFile.open('a');
+    logFile.writeln('[openSelection] called');
+
     dbug('[openSelection] selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, 'nav');
     var node = this.stack[this.stack.length - 1];
     if (!node._cachedChildren) {
@@ -21,16 +25,23 @@ IconShell.prototype.openSelection = function () {
     var isFolderNav = (item.type === 'folder') || (hasUp && this.selection === 0);
     if (!isFolderNav) this.flashSelection();
     if (hasUp && this.selection === 0) {
+        logFile.writeln('[openSelection] UP action triggered');
+        logFile.close();
         dbug('[openSelection] UP action triggered', 'nav');
         this._handleUpSelection(item);
         return;
     }
+    logFile.writeln('[openSelection] activating label=' + (item.label || '') + ' type=' + item.type);
     dbug('[openSelection] activating label=' + (item.label || '') + ' type=' + item.type, 'nav');
     if (item.type === 'folder') {
+        logFile.writeln('[openSelection] calling _handleFolderSelection');
+        logFile.close();
         this._handleFolderSelection(item);
         return;
     }
     if (item.type === 'item') {
+        logFile.writeln('[openSelection] calling _handleItemSelection');
+        logFile.close();
         this._handleItemSelection(item);
     }
 };
@@ -78,6 +89,14 @@ IconShell.prototype._handleFolderSelection = function (realItem) {
         childrenChanged = true;
     }
     dbug('[folder] ENTER child label=' + realItem.label + ' children=' + (realItem.children ? realItem.children.length : 0), 'folder');
+
+    // Play dissolve animation before opening folder
+    try {
+        this.playDissolveBefore(this.selection);
+    } catch (e) {
+        dbug("dissolve error in _handleFolderSelection: " + e, "view");
+    }
+
     this.changeFolder(realItem, { direction: 'down' });
     // ALWAYS redraw after entering a folder. Previously we only redrew when childrenChanged.
     // That left the grid showing the OLD (parent) folder icons while the stack now pointed
@@ -88,16 +107,28 @@ IconShell.prototype._handleFolderSelection = function (realItem) {
 };
 
 IconShell.prototype._handleItemSelection = function (realItem) {
+    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
+    logFile.open('a');
+    logFile.writeln('[_handleItemSelection] called, typeof realItem.action=' + typeof realItem.action);
+
     if (typeof realItem.action === "function") {
+        logFile.writeln('[_handleItemSelection] action is function, about to call playDissolveBefore');
         try {
+            // Play dissolve animation before launching
+            this.playDissolveBefore(this.selection);
+            logFile.writeln('[_handleItemSelection] playDissolveBefore returned');
+
             // Ensure the action runs with IconShell as 'this' (was unbound, breaking runExternal etc.)
             realItem.action.call(this);
         } catch (e) {
+            logFile.writeln('[_handleItemSelection] EXCEPTION: ' + e);
+            logFile.close();
             dbug("IconShell action error: " + e, "view");
             if (e === "Exit Shell") throw e;
         }
         this.drawFolder();
     }
+    logFile.close();
 };
 
 
@@ -163,6 +194,8 @@ IconShell.prototype.drawFolder = function (options) {
     dbug('selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, "drawFolder");
     this._closePreviousFrames();
     this._clearHotspots();
+    // Reset border tracking when redrawing grid
+    this.previousSelectedIndex = -1;
     var fallbackHeader = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
     var fallbackView = ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
     var fallbackCrumb = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
@@ -255,6 +288,7 @@ IconShell.prototype._closePreviousFrames = function () {
         for (var i = 0; i < this.grid.cells.length; i++) {
             if (this.grid.cells[i].icon && typeof this.grid.cells[i].icon.close === 'function') this.grid.cells[i].icon.close();
             if (this.grid.cells[i].label && typeof this.grid.cells[i].label.close === 'function') this.grid.cells[i].label.close();
+            if (this.grid.cells[i].borderFrame && typeof this.grid.cells[i].borderFrame.close === 'function') this.grid.cells[i].borderFrame.close();
         }
     }
 };
@@ -448,7 +482,17 @@ IconShell.prototype._highlightSelectedCell = function () {
     if (this.grid && this.grid.cells) {
         var selIdx = this.selection - this.scrollOffset;
         if (selIdx >= 0 && selIdx < this.grid.cells.length) {
+            // Clear previous border if different cell
+            if (this.previousSelectedIndex >= 0 && this.previousSelectedIndex !== selIdx) {
+                var prevCell = this.grid.cells[this.previousSelectedIndex];
+                if (prevCell) this.clearCellBorder(prevCell);
+            }
+
+            // Paint icon and draw border for current selection
             this.paintIcon(this.grid.cells[selIdx], true, false);
+            this.drawCellBorder(this.grid.cells[selIdx]);
+
+            this.previousSelectedIndex = selIdx;
         }
     }
 };
@@ -602,7 +646,7 @@ IconShell.prototype._createIconCell = function (i, dims, items, parentFrame, Ico
         return {
             icon: { x: x, y: y, width: dims.iconW, height: dims.iconH, isPlaceholder: true },
             label: { x: x, y: y + dims.iconH, width: dims.iconW, height: dims.labelH, isPlaceholder: true },
-            item: items[i], iconObj: null
+            item: items[i], iconObj: null, borderFrame: null
         };
     }
     var hasBg = typeof items[i].iconBg !== 'undefined';
@@ -616,9 +660,17 @@ IconShell.prototype._createIconCell = function (i, dims, items, parentFrame, Ico
     var fallbackFrameAttr = ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
     var frameAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('FRAME_STANDARD', fallbackFrameAttr) : fallbackFrameAttr;
     var labelFrame = new Frame(x, y + dims.iconH, dims.iconW, dims.labelH, frameAttr, parentFrame);
+
+    // Create border frame for selection highlighting
+    // Positioned around icon+label with 1-cell margin, dimensions include the margin
+    var borderFrameAttr = ((typeof BG_BLACK !== 'undefined' ? BG_BLACK : 0) | (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7));
+    var borderFrame = new Frame(x - 1, y - 1, dims.iconW + 2, dims.iconH + dims.labelH + 2, borderFrameAttr, parentFrame);
+    borderFrame.transparent = true;
+    if (typeof borderFrame.open === 'function') borderFrame.open();
+
     var iconObj = new Icon(iconFrame, labelFrame, items[i], i == 0);
     iconObj.render();
-    return { icon: iconFrame, label: labelFrame, item: items[i], iconObj: iconObj };
+    return { icon: iconFrame, label: labelFrame, item: items[i], iconObj: iconObj, borderFrame: borderFrame };
 };
 
 IconShell.prototype._handleScreenTooSmall = function (parentFrame, msg, iconW, iconH) {

@@ -119,8 +119,14 @@ IconShell.prototype.moveSelection = function(dx, dy) {
         // Only repaint the old and new selection
         var oldIdx = oldSelection - this.scrollOffset;
         var newIdx = this.selection - this.scrollOffset;
-    if (grid.cells[oldIdx]) this.paintIcon(grid.cells[oldIdx], false, false);
-    if (grid.cells[newIdx]) this.paintIcon(grid.cells[newIdx], true, false);
+        if (grid.cells[oldIdx]) {
+            this.paintIcon(grid.cells[oldIdx], false, false);
+            this.clearCellBorder(grid.cells[oldIdx]);
+        }
+        if (grid.cells[newIdx]) {
+            this.paintIcon(grid.cells[newIdx], true, false);
+            this.drawCellBorder(grid.cells[newIdx]);
+        }
         // Visible item mapping after move
         try {
             var visStart = this.scrollOffset;
