@@ -1110,12 +1110,21 @@ MessageBoard.prototype._handleKey = function (key) {
                             return false;
                         }
                         if (typeof it.groupIndex !== 'undefined') {
-                            // Dissolve animation on group selection
-                            try {
-                                if (this._iconCells && typeof this.scrollOffset !== 'undefined') {
-                                    var localIdx = this.selection - this.scrollOffset;
-                                    if (localIdx >= 0 && localIdx < this._iconCells.length && this._iconCells[localIdx] && this._iconCells[localIdx].icon) {
-                                        var cell = this._iconCells[localIdx];
+                            // Clear previous border and draw new border before dissolve
+                            if (this._iconCells && typeof this.scrollOffset !== 'undefined') {
+                                var localIdx = this.selection - this.scrollOffset;
+                                if (localIdx >= 0 && localIdx < this._iconCells.length && this._iconCells[localIdx] && this._iconCells[localIdx].icon) {
+                                    var cell = this._iconCells[localIdx];
+                                    // Clear all borders first
+                                    for (var i = 0; i < this._iconCells.length; i++) {
+                                        if (this._iconCells[i]) {
+                                            this.clearCellBorder(this._iconCells[i]);
+                                        }
+                                    }
+                                    // Draw border on selected cell
+                                    this.drawCellBorder(cell);
+                                    // Dissolve animation on group selection
+                                    try {
                                         cell.icon.transparent = false;
                                         var dissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
                                         try {
@@ -1123,10 +1132,10 @@ MessageBoard.prototype._handleKey = function (key) {
                                         } catch (e) {
                                             // dissolve optional
                                         }
+                                    } catch (e) {
+                                        // silence errors
                                     }
                                 }
-                            } catch (e) {
-                                // silence errors
                             }
                             this._renderSubView(it.groupIndex);
                             return false;
@@ -1140,12 +1149,21 @@ MessageBoard.prototype._handleKey = function (key) {
                             return false;
                         }
                         if (it2.subCode) {
-                            // Dissolve animation on sub selection
-                            try {
-                                if (this._iconCells && typeof this.scrollOffset !== 'undefined') {
-                                    var localIdx = this.selection - this.scrollOffset;
-                                    if (localIdx >= 0 && localIdx < this._iconCells.length && this._iconCells[localIdx] && this._iconCells[localIdx].icon) {
-                                        var cell = this._iconCells[localIdx];
+                            // Clear previous border and draw new border before dissolve
+                            if (this._iconCells && typeof this.scrollOffset !== 'undefined') {
+                                var localIdx = this.selection - this.scrollOffset;
+                                if (localIdx >= 0 && localIdx < this._iconCells.length && this._iconCells[localIdx] && this._iconCells[localIdx].icon) {
+                                    var cell = this._iconCells[localIdx];
+                                    // Clear all borders first
+                                    for (var i = 0; i < this._iconCells.length; i++) {
+                                        if (this._iconCells[i]) {
+                                            this.clearCellBorder(this._iconCells[i]);
+                                        }
+                                    }
+                                    // Draw border on selected cell
+                                    this.drawCellBorder(cell);
+                                    // Dissolve animation on sub selection
+                                    try {
                                         cell.icon.transparent = false;
                                         var dissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
                                         try {
@@ -1153,10 +1171,10 @@ MessageBoard.prototype._handleKey = function (key) {
                                         } catch (e) {
                                             // dissolve optional
                                         }
+                                    } catch (e) {
+                                        // silence errors
                                     }
                                 }
-                            } catch (e) {
-                                // silence errors
                             }
                             var hasUnread = this._subHasUnread ? this._subHasUnread(it2.subCode, it2._messageCount) : ((it2._unreadCount || 0) > 0);
                             if (hasUnread) this._openSubReader(it2.subCode);
