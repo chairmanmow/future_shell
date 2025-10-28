@@ -12,6 +12,8 @@ if (typeof registerModuleExports !== 'function') {
 load('future_shell/lib/shell/icon.js');
 load('future_shell/lib/util/gif2ans/img_loader.js')
 load('future_shell/lib/util/layout/button.js');
+// Load dissolve animation function
+try { load('future_shell/lib/effects/eye_candy.js'); } catch (e) { /* dissolve optional */ }
 
 function newsreaderEnsureTrailingSlash(path) {
     if (!path) return '';
@@ -1315,6 +1317,7 @@ NewsReader.prototype._destroyIconCells = function (cells) {
     for (var i = 0; i < cells.length; i++) {
         var cell = cells[i];
         if (!cell) continue;
+        if (cell.borderFrame) this._deleteFrame(cell.borderFrame);
         if (cell.icon) this._deleteFrame(cell.icon);
         if (cell.label) this._deleteFrame(cell.label);
     }
@@ -1338,6 +1341,27 @@ NewsReader.prototype._destroyFeedIcons = function () {
     if (this._gridLayout && this._gridLayout.type === 'feeds') {
         this._releaseHotspots();
         this._gridLayout = null;
+    }
+};
+
+NewsReader.prototype.drawCellBorder = function (cell) {
+    if (!cell || !cell.borderFrame) return;
+    var borderColor = (typeof CYAN !== 'undefined' ? CYAN : 6);
+    try {
+        cell.borderFrame.drawBorder(borderColor);
+        cell.borderFrame.cycle();
+    } catch (e) {
+        dbug('drawCellBorder error: ' + e, 'view');
+    }
+};
+
+NewsReader.prototype.clearCellBorder = function (cell) {
+    if (!cell || !cell.borderFrame) return;
+    try {
+        cell.borderFrame.clear();
+        cell.borderFrame.cycle();
+    } catch (e) {
+        dbug('clearCellBorder error: ' + e, 'view');
     }
 };
 
@@ -2042,6 +2066,12 @@ NewsReader.prototype._renderCategoryIcons = function () {
             iconFrame.open();
             labelFrame.open();
 
+            // Create border frame for selection highlighting (positioned around icon+label with 1-cell margin)
+            var borderFrame = new Frame(x - 1, y - 1, metrics.width + 2, metrics.height + labelHeight + 2, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
+            borderFrame.transparent = true;
+            if (typeof borderFrame.open === 'function') borderFrame.open();
+            if (typeof this.registerFrame === 'function') this.registerFrame(borderFrame);
+
             var iconName = this._iconNameForCategory(item);
             var iconData = { iconFile: iconName, label: '', iconBg: bgVal, iconFg: fgVal };
             var iconObj = new Icon(iconFrame, labelFrame, iconData);
@@ -2058,7 +2088,7 @@ NewsReader.prototype._renderCategoryIcons = function () {
                 else if (item.name) labelText = item.name;
             }
             this._renderIconLabel(labelFrame, labelText, index === this.selectedIndex);
-            cells.push({ icon: iconFrame, label: labelFrame, index: index, labelText: labelText, iconObj: iconObj });
+            cells.push({ icon: iconFrame, label: labelFrame, index: index, labelText: labelText, iconObj: iconObj, borderFrame: borderFrame });
         }
     }
 
@@ -2072,8 +2102,15 @@ NewsReader.prototype._renderCategoryIcons = function () {
         cellHeight: cellH,
         cellWidth: cellW
     };
-    if (cells.length) this._registerGridHotspots(cells);
-    else this._releaseHotspots();
+    if (cells.length) {
+        // Draw border on initial selection
+        if (this.selectedIndex >= 0 && this.selectedIndex < cells.length) {
+            this.drawCellBorder(cells[this.selectedIndex]);
+        }
+        this._registerGridHotspots(cells);
+    } else {
+        this._releaseHotspots();
+    }
 };
 
 NewsReader.prototype._renderFeedIcons = function () {
@@ -2138,6 +2175,12 @@ NewsReader.prototype._renderFeedIcons = function () {
             iconFrame.open();
             labelFrame.open();
 
+            // Create border frame for selection highlighting (positioned around icon+label with 1-cell margin)
+            var borderFrame = new Frame(x - 1, y - 1, metrics.width + 2, metrics.height + labelHeight + 2, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
+            borderFrame.transparent = true;
+            if (typeof borderFrame.open === 'function') borderFrame.open();
+            if (typeof this.registerFrame === 'function') this.registerFrame(borderFrame);
+
             var iconName;
             if (item && item._type === 'back') iconName = 'back';
             else iconName = this._iconNameForFeed(item);
@@ -2152,7 +2195,7 @@ NewsReader.prototype._renderFeedIcons = function () {
             var labelText = item && item._type === 'back' ? 'Back' : (item && item.label ? item.label : 'Feed');
             if (item && item._type !== 'back' && this._isFeedFavorite(item)) labelText += ' *';
             this._renderIconLabel(labelFrame, labelText, index === this.selectedIndex);
-            cells.push({ icon: iconFrame, label: labelFrame, index: index, labelText: labelText, iconObj: iconObj });
+            cells.push({ icon: iconFrame, label: labelFrame, index: index, labelText: labelText, iconObj: iconObj, borderFrame: borderFrame });
         }
     }
 
@@ -2166,8 +2209,15 @@ NewsReader.prototype._renderFeedIcons = function () {
         cellHeight: cellH,
         cellWidth: cellW
     };
-    if (cells.length) this._registerGridHotspots(cells);
-    else this._releaseHotspots();
+    if (cells.length) {
+        // Draw border on initial selection
+        if (this.selectedIndex >= 0 && this.selectedIndex < cells.length) {
+            this.drawCellBorder(cells[this.selectedIndex]);
+        }
+        this._registerGridHotspots(cells);
+    } else {
+        this._releaseHotspots();
+    }
 };
 
 NewsReader.prototype._gridCellsForLayout = function () {
@@ -2186,10 +2236,19 @@ NewsReader.prototype._refreshGridSelectionHighlight = function (previousIndex, n
         if (index === undefined || index === null) return;
         for (var i = 0; i < cells.length; i++) {
             var cell = cells[i];
-            if (cell && cell.index === index && cell.label) {
-                this._renderIconLabel(cell.label, cell.labelText, !!isSelected);
-                if (typeof cell.label.cycle === 'function') {
-                    try { cell.label.cycle(); } catch (_cycleErr) { }
+            if (cell && cell.index === index) {
+                // Update label
+                if (cell.label) {
+                    this._renderIconLabel(cell.label, cell.labelText, !!isSelected);
+                    if (typeof cell.label.cycle === 'function') {
+                        try { cell.label.cycle(); } catch (_cycleErr) { }
+                    }
+                }
+                // Update border
+                if (isSelected) {
+                    this.drawCellBorder(cell);
+                } else {
+                    this.clearCellBorder(cell);
                 }
                 updated = true;
                 return;
@@ -3151,6 +3210,29 @@ NewsReader.prototype.handleKey = function (key) {
             var activateCategory = function () {
                 var item = catItems[this.selectedIndex];
                 if (!item) return;
+
+                // Play dissolve animation before activation
+                try {
+                    var cells = this._gridCellsForLayout();
+                    if (cells && this.selectedIndex >= 0 && this.selectedIndex < cells.length && cells[this.selectedIndex] && cells[this.selectedIndex].icon) {
+                        var cell = cells[this.selectedIndex];
+                        var wasTransparent = cell.icon.transparent;
+                        cell.icon.transparent = false;
+                        var fallbackDissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+                        var dissolveColor = fallbackDissolveColor;
+                        try {
+                            dissolve(cell.icon, dissolveColor, 5);
+                        } catch (e) {
+                            dbug("dissolve error in activateCategory: " + e, "view");
+                        }
+                        cell.icon.transparent = wasTransparent;
+                        cell.icon.clear();
+                        cell.icon.cycle();
+                    }
+                } catch (e) {
+                    dbug("Error in activateCategory dissolve: " + e, "view");
+                }
+
                 if (item._type === 'exit') {
                     this.exit();
                     return;
@@ -3216,6 +3298,29 @@ NewsReader.prototype.handleKey = function (key) {
             var activateFeed = function () {
                 var item = feedItems[this.selectedIndex];
                 if (!item) return;
+
+                // Play dissolve animation before activation
+                try {
+                    var cells = this._gridCellsForLayout();
+                    if (cells && this.selectedIndex >= 0 && this.selectedIndex < cells.length && cells[this.selectedIndex] && cells[this.selectedIndex].icon) {
+                        var cell = cells[this.selectedIndex];
+                        var wasTransparent = cell.icon.transparent;
+                        cell.icon.transparent = false;
+                        var fallbackDissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+                        var dissolveColor = fallbackDissolveColor;
+                        try {
+                            dissolve(cell.icon, dissolveColor, 5);
+                        } catch (e) {
+                            dbug("dissolve error in activateFeed: " + e, "view");
+                        }
+                        cell.icon.transparent = wasTransparent;
+                        cell.icon.clear();
+                        cell.icon.cycle();
+                    }
+                } catch (e) {
+                    dbug("Error in activateFeed dissolve: " + e, "view");
+                }
+
                 if (item._type === 'back') {
                     feedBack();
                     return;
