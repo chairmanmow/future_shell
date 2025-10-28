@@ -26,8 +26,8 @@ var DEBUG_CONFIG = {
     config: { active: false, log_color: ANSI_COLORS.CYAN },
     settings: { active: false, log_color: ANSI_COLORS.CYAN },
     view: { active: false, log_color: ANSI_COLORS.CYAN },
-    messageboard: { active: true, log_color: ANSI_COLORS.CYAN },
-    toast: { active: true, log_color: ANSI_COLORS.YELLOW },
+    messageboard: { active: false, log_color: ANSI_COLORS.CYAN },
+    toast: { active: false, log_color: ANSI_COLORS.YELLOW },
     icon: { active: false, log_color: ANSI_COLORS.CYAN },
 };
 

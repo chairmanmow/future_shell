@@ -7,7 +7,6 @@
 // Previous guard removed to align with other libs. We close any existing modals to avoid stale prototype issues.
 // Debug switched off by default; can be re-enabled at runtime if needed.
 var ICSH_MODAL_DEBUG = true;
-try { if (typeof log === 'function') log('[MODAL LOAD] redefining Modal v20251008-8'); } catch (_) { }
 // Close lingering old-version modals safely
 try {
     if (typeof Modal !== 'undefined' && Modal && Array.isArray(Modal._activeList)) {
@@ -1371,4 +1370,3 @@ Modal._HOT_VERSION = '20251008-12';
 Modal.VERSION = Modal._HOT_VERSION;
 if (typeof module !== 'undefined') module.exports = Modal;
 if (typeof this !== 'undefined') this.Modal = Modal;
-try { if (ICSH_MODAL_DEBUG) log('[MODAL LOAD] defined v' + Modal._HOT_VERSION); } catch (_) { }

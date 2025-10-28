@@ -267,11 +267,12 @@ var BUILTIN_ACTIONS = {
 		module: 'future_shell/lib/subprograms/users.js',
 		queueName: 'users',
 		instanceProperty: 'Users',
-		loadFailureMessage: 'Failed loading user_list.js ',
+		loadFailureMessage: 'Failed loading users.js ',
 		missingMessage: 'Users class missing after load',
-		options: function () { return { parentFrame: this.root }; },
-		afterEnsure: function (instance) {
-			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
+		options: function () { return { parentFrame: this.root, shell: this }; },
+		onReuse: function (instance) {
+			instance.parentFrame = this.root;
+			instance.shell = this;
 		}
 	}),
 	userlist: new SubprogramActionHandler('UserList', {

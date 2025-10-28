@@ -4,6 +4,7 @@ if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 try { load('future_shell/lib/shell/icon.js'); } catch (_) { }
+require('nodedefs.js', 'NODE_INUSE', 'NODE_QUIET');
 
 function Users(opts) {
     opts = opts || {};
@@ -115,16 +116,58 @@ Users.prototype.updateAllUsers = function () {
     var users = this.getUsers();
     var online = this.getOnlineUsers();
     this.users = this._hydrateOnlineUsers(users, online);
-}
+    // Debug: log users count and online status
+    try {
+        var onlineCount = this.users.filter(function(u) { return u.online !== -1; }).length;
+        dbug('Users updated: ' + this.users.length + ' total, ' + onlineCount + ' online', 'users');
+    } catch (e) { }
+};
+
+Users.prototype.updateOnlineStatus = function () {
+    // Lightweight update: just refresh online status for existing users
+    // without rebuilding the full user list
+    var online = this.getOnlineUsers();
+    var changed = [];
+
+    for (var i = 0; i < this.users.length; i++) {
+        var u = this.users[i];
+        var oldOnline = u.online;
+        var foundOnline = false;
+
+        for (var j = 0; j < online.length; j++) {
+            if (u.number === online[j].number) {
+                u.online = online[j].node || 1;
+                foundOnline = true;
+                break;
+            }
+        }
+
+        if (!foundOnline) {
+            u.online = -1;
+        }
+
+        // Track which users changed status
+        if (oldOnline !== u.online) {
+            changed.push(i);
+        }
+    }
+
+    return changed;
+};
+
+Users.prototype.refreshUserList = function () {
+    // Full refresh (used on explicit re-entry)
+    this.updateAllUsers();
+    this.draw();
+};
 
 Users.prototype.getUsers = function () {
     var users = [];
     var total = system.lastuser;
-    var u = new User;
     for (var i = 1; i <= total; i++) {
-        u.number = i;
+        var u = new User(i);  // Create fresh User object for each user number
         if (u.settings & (USER_DELETED | USER_INACTIVE)) continue;
-        users.push({
+        var userRecord = {
             number: u.number,
             alias: u.alias,
             location: u.location,
@@ -134,34 +177,73 @@ Users.prototype.getUsers = function () {
             netmail: u.netmail,
             avatar: null, // lazy
             online: -1
-        });
+        };
+        users.push(userRecord);
     }
+    // Debug: log how many users we loaded
+    try {
+        dbug('getUsers loaded ' + users.length + ' valid users (out of ' + total + ' total)', 'users');
+    } catch (e) { }
     return users;
 };
 
 Users.prototype.getOnlineUsers = function () {
     var collected = [];
+    // NODE_INUSE = user actively on the BBS
+    // NODE_QUIET = sysop on BBS but don't show them to regular users
+    // Any other status means the node is not actively in use
+
     for (var n = 1; n <= system.nodes; n++) {
         var node = system.node_list[n - 1];
-        if (!node || !node.useron) continue;
+
+        if (!node) continue;
+
+        // Only consider nodes that are actively in use (NODE_INUSE or NODE_QUIET)
+        if (node.status !== NODE_INUSE && node.status !== NODE_QUIET) continue;
+
+        // Check for valid user number
+        if (typeof node.useron !== 'number' || node.useron <= 0) continue;
+
         var u = new User(node.useron);
         collected.push({ node: n, alias: u.alias, number: u.number });
     }
     this.onlineUsers = collected.length;
+    // Debug: log which users are actually online
+    try {
+        var aliases = collected.map(function(u) { return u.alias + ' (node ' + u.node + ')'; });
+        dbug('Online users detected: ' + (aliases.length ? aliases.join(', ') : 'none'), 'users');
+    } catch (e) { }
     return collected;
 }
 
 Users.prototype._hydrateOnlineUsers = function (users, online) {
+    var markedOnline = [];
+    var markedOffline = [];
     for (var i = 0; i < users.length; i++) {
         var u = users[i];
+        var foundOnline = false;
         for (var j = 0; j < online.length; j++) {
             if (u.number === online[j].number) {
                 // Use node number (or 1) to mark online; previous code assigned undefined (online[j].online) causing miss
                 u.online = online[j].node || 1;
+                foundOnline = true;
+                markedOnline.push(u.alias);
                 break;
             }
         }
+        // Ensure users not in online list are marked offline
+        if (!foundOnline) {
+            u.online = -1;
+            markedOffline.push(u.alias);
+        }
     }
+    // Debug: log hydration results
+    try {
+        dbug('Hydration - marked online: ' + (markedOnline.length ? markedOnline.join(', ') : 'none'), 'users');
+        if (markedOffline.length > 0 && markedOffline.length < 50) { // only log if not too many
+            dbug('Hydration - marked offline: ' + markedOffline.join(', '), 'users');
+        }
+    } catch (e) { }
     return users;
 };
 
@@ -171,9 +253,44 @@ Users.prototype._toggleWhichUsers = function () {
 }
 
 Users.prototype.enter = function (done) {
+    // Reset state on entry to ensure fresh view (important for singleton reuse)
+    this.whichUsers = 'all';
+    this.sortMode = null;
+    this.page = 0;
+    this.selectedIndex = 0;
+    this._avatarCache = {}; // Clear avatar cache
+    this._lastUserListUpdate = 0; // Reset polling timer
     this.updateAllUsers();
     Subprogram.prototype.enter.call(this, done);
     // this.draw();
+};
+
+Users.prototype.cycle = function () {
+    // Only poll if we're still running (not suspended by another subprogram)
+    if (!this.running) return;
+
+    // Poll the online status every ~5 seconds to keep current while viewing
+    var now = Date.now();
+    var pollInterval = 5000; // 5 seconds
+
+    if (!this._lastUserListUpdate) {
+        this._lastUserListUpdate = now;
+    }
+
+    if (now - this._lastUserListUpdate >= pollInterval) {
+        try {
+            // Update just the online status (lightweight)
+            var changed = this.updateOnlineStatus();
+
+            // Only redraw if there were actual changes
+            if (changed.length > 0) {
+                this.draw();
+            }
+            this._lastUserListUpdate = now;
+        } catch (e) {
+            try { dbug('Users cycle error: ' + e, 'users'); } catch (_) { }
+        }
+    }
 };
 
 Users.prototype._filterUsers = function () {
@@ -396,8 +513,13 @@ Users.prototype._drawTile = function (index, tile, hotspotDefs) {
     if (!user) return;
     var header = user.alias + ' #' + user.number;
     if (header.length > tileW) header = header.substr(0, tileW);
-    var footer = (user.online !== -1) ? '[ON]' : system.datestr(user.laston);
-    if (footer.length > tileW) footer = footer.substr(0, tileW);
+    var footer = (user.online !== -1) ? '\x01W[\x01C ON Node #' + user.online + '\x01W]' : system.datestr(user.laston);
+    // Strip color codes to get actual display width (codes don't render)
+    var footerDisplay = footer.replace(/\x01[a-zA-Z0-9]/g, '');
+    if (footerDisplay.length > tileW) {
+        // If too long, remove color codes first, then truncate
+        footer = footerDisplay.substr(0, tileW);
+    }
 
     var containerHeight = contentHeight;
     var headerRows = Math.max(1, headerHeight || 1);
@@ -1089,11 +1211,42 @@ Users.prototype._blitAvatarToFrame = function (frame, binData, w, h, dstX, dstY)
     frame.top();
 };
 
+Users.prototype._cleanup = function () {
+    // Clean up all child frames when exiting
+    this._destroyTileIcons();
+    if (this.hotspots) this.hotspots.clear();
+    if (this.headerFrame) {
+        try { this.headerFrame.clear(); } catch (_e) { }
+        try { this.headerFrame.close(); } catch (_e2) { }
+        this.headerFrame = null;
+    }
+    if (this.listFrame) {
+        try { this.listFrame.clear(); } catch (_e3) { }
+        try { this.listFrame.close(); } catch (_e4) { }
+        this.listFrame = null;
+    }
+    if (this.statusFrame) {
+        try { this.statusFrame.clear(); } catch (_e5) { }
+        try { this.statusFrame.close(); } catch (_e6) { }
+        this.statusFrame = null;
+    }
+};
+
 Users.prototype.resumeForReason = function (reason) {
-    if (reason === 'screensaver_off') {
-        this.hostFrame.clear();
-        this.hostFrame.cycle();
+    // Redraw the subprogram when coming back from external events
+    if (reason === 'screensaver_off' || reason === 'external_return') {
+        this.draw();
     }
 }
+
+Users.prototype.pauseForReason = function (reason) {
+    // Optional: Clear display when pausing for external programs
+    if (reason === 'external_launch') {
+        if (this.hostFrame) {
+            try { this.hostFrame.clear(); } catch (_e) { }
+        }
+    }
+}
+
 // Export
 registerModuleExports({ Users: Users });

@@ -281,6 +281,12 @@ IconShell.prototype.init = function () {
                 if (!toastMsg) return;
                 var trimmed = (toastMsg.message != null ? String(toastMsg.message) : '').replace(ANSI_ESCAPE_RE, '');
                 if (!trimmed.length) return;
+                // Filter out MRC app launch/return messages - they're just clutter since XTRN toasts are more useful
+                // Check both the trimmed (codes removed) and original message in case codes interfere
+                if (/\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(trimmed) || /\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(toastMsg.message)) {
+                    log("Suppressing MRC app message: " + trimmed);
+                    return;
+                }
                 log("Showing toast: " + trimmed);
                 self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, height: 6, timeout: 8000 });
             } catch (e) { dbug('node toast error: ' + e, 'toast'); }
@@ -1392,6 +1398,16 @@ IconShell.prototype.onShellPrefsSaved = function (prefs) {
 IconShell.prototype.showToast = function (params) {
     var self = this;
     var opts = params || {};
+
+    // Filter out MRC app launch/return messages - they're just clutter since XTRN toasts are more useful
+    // Check title instead of message since that's where the user name comes from
+    var title = opts.title || '';
+    var message = opts.message || opts.body || '';
+    if ((/\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(title)) || (/\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(message))) {
+        try { log('[toast] suppressed MRC app message from ' + title); } catch (_) { }
+        return null;
+    }
+
     opts.parentFrame = this.root;
     var action = (typeof opts.action === 'function') ? opts.action : null;
     var launch = null;
