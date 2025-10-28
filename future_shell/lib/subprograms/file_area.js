@@ -13,6 +13,8 @@ load('future_shell/lib/shell/icon.js');
 load('future_shell/lib/subprograms/subprogram_hotspots.js');
 load('sbbsdefs.js');
 load('file_size.js');
+// Load dissolve animation function
+try { load('future_shell/lib/effects/eye_candy.js'); } catch (e) { /* dissolve optional */ }
 
 // ---------- Constructor & lifecycle ----------
 
@@ -286,9 +288,14 @@ FileArea.prototype._destroyIconCells = function () {
         if (!c) continue;
         if (c.icon) { try { c.icon.close(); } catch (_e1) { } }
         if (c.label) { try { c.label.close(); } catch (_e2) { } }
+        if (c.borderFrame) {
+            try { c.borderFrame.clear(); } catch (_e3) { }
+            try { c.borderFrame.close(); } catch (_e4) { }
+        }
         if (this._myFrames) {
             if (c.icon) { var ai = this._myFrames.indexOf(c.icon); if (ai !== -1) this._myFrames.splice(ai, 1); }
             if (c.label) { var al = this._myFrames.indexOf(c.label); if (al !== -1) this._myFrames.splice(al, 1); }
+            if (c.borderFrame) { var ab = this._myFrames.indexOf(c.borderFrame); if (ab !== -1) this._myFrames.splice(ab, 1); }
         }
     }
     this.iconCells = [];
@@ -336,6 +343,27 @@ FileArea.prototype._renderIconLabel = function (frame, text, isSelected) {
     if (padLeft) frame.putmsg(new Array(padLeft + 1).join(' '));
     if (label) frame.putmsg(label);
     if (padRight) frame.putmsg(new Array(padRight + 1).join(' '));
+};
+
+FileArea.prototype.drawCellBorder = function (cell) {
+    if (!cell || !cell.borderFrame) return;
+    var borderColor = (typeof CYAN !== 'undefined' ? CYAN : 6);
+    try {
+        cell.borderFrame.drawBorder(borderColor);
+        cell.borderFrame.cycle();
+    } catch (e) {
+        dbug('drawCellBorder error: ' + e, 'view');
+    }
+};
+
+FileArea.prototype.clearCellBorder = function (cell) {
+    if (!cell || !cell.borderFrame) return;
+    try {
+        cell.borderFrame.clear();
+        cell.borderFrame.cycle();
+    } catch (e) {
+        dbug('clearCellBorder error: ' + e, 'view');
+    }
 };
 
 FileArea.prototype._ensureHotspotChars = function () {
@@ -468,7 +496,7 @@ FileArea.prototype._renderGrid = function (items, type) {
             var index = row * cols + col;
             if (index >= total) break;
             var item = tiles[index];
-            var x = 1 + col * cellW;
+            var x = 2 + col * cellW;
             var y = 1 + paddingTop + (row - startRow) * cellH;
             if (y + metrics.height + labelH - 1 > fh) continue;
 
@@ -476,6 +504,12 @@ FileArea.prototype._renderGrid = function (items, type) {
             var labelFrame = new Frame(x, y + metrics.height, metrics.width, labelH, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
             iconFrame.open(); labelFrame.open();
             if (typeof this.registerFrame === 'function') { this.registerFrame(iconFrame); this.registerFrame(labelFrame); }
+
+            // Create border frame for selection highlighting (positioned around icon+label with 1-cell margin)
+            var borderFrame = new Frame(x - 1, y - 1, metrics.width + 2, metrics.height + labelH + 2, this.paletteAttr('LIST_INACTIVE'), this.listFrame);
+            borderFrame.transparent = true;
+            if (typeof borderFrame.open === 'function') borderFrame.open();
+            if (typeof this.registerFrame === 'function') this.registerFrame(borderFrame);
 
             var iconName = '';
             if (item._type === 'exit') iconName = 'back';
@@ -490,7 +524,7 @@ FileArea.prototype._renderGrid = function (items, type) {
             var label = item.name || (type === 'libs' ? 'Library' : 'Directory');
             this._renderIconLabel(labelFrame, label, index === this.selectedIndex);
 
-            cells.push({ icon: iconFrame, label: labelFrame, index: index, iconObj: iconObj, labelText: label });
+            cells.push({ icon: iconFrame, label: labelFrame, index: index, iconObj: iconObj, labelText: label, borderFrame: borderFrame });
         }
     }
 
@@ -498,6 +532,15 @@ FileArea.prototype._renderGrid = function (items, type) {
     this._gridLayout = { type: type, cols: cols, visibleRows: visibleRows, total: total, rows: rows, cellWidth: cellW, cellHeight: cellH };
     if (cells.length) this._registerGridHotspots(cells);
     else this._releaseHotspots();
+    // Draw border on currently selected cell
+    if (this.iconCells && this.iconCells.length && this.selectedIndex >= 0) {
+        for (var c = 0; c < this.iconCells.length; c++) {
+            if (this.iconCells[c] && this.iconCells[c].index === this.selectedIndex) {
+                this.drawCellBorder(this.iconCells[c]);
+                break;
+            }
+        }
+    }
     var line = this.colorize('TEXT_HOTKEY', 'ENTER') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'open ') +
         this.colorize('TEXT_HOTKEY', 'ESC') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'exit ') +
         this.colorize('TEXT_HOTKEY', 'Click') + this.colorize('TEXT_NORMAL', '=') + this.colorize('TEXT_BOLD', 'select ');
@@ -716,6 +759,8 @@ FileArea.prototype._handleGridNav = function (key, lengthWithTile, onEnter, onBa
             return; // unhandled key
     }
 
+    var previousIndex = this.selectedIndex;
+    var previousScrollOffset = this.scrollOffset;
     this.selectedIndex = idx;
 
     // Adjust scroll with a minimal grid object if renderer layout missing
@@ -723,7 +768,30 @@ FileArea.prototype._handleGridNav = function (key, lengthWithTile, onEnter, onBa
     if (typeof this._adjustGridScroll === 'function') {
         this._adjustGridScroll(adjustGrid, length);
     }
-    this.draw();
+
+    // Check if scroll changed - if so, full redraw is needed
+    if (this.scrollOffset !== previousScrollOffset) {
+        // Scroll changed, need full redraw
+        this.draw();
+    } else {
+        // Selection changed on same page - selective update
+        if (previousIndex !== this.selectedIndex && this.iconCells && this.iconCells.length) {
+            // Clear border from previous selection
+            for (var p = 0; p < this.iconCells.length; p++) {
+                if (this.iconCells[p] && this.iconCells[p].index === previousIndex) {
+                    this.clearCellBorder(this.iconCells[p]);
+                    break;
+                }
+            }
+            // Draw border on new selection
+            for (var n = 0; n < this.iconCells.length; n++) {
+                if (this.iconCells[n] && this.iconCells[n].index === this.selectedIndex) {
+                    this.drawCellBorder(this.iconCells[n]);
+                    break;
+                }
+            }
+        }
+    }
 };
 
 FileArea.prototype._adjustGridScroll = function (grid, length) {
@@ -792,6 +860,33 @@ FileArea.prototype._activateLib = function () {
     if (this.selectedIndex === 0) { this.exit(); return; }
     var idx = this.selectedIndex - 1;
     if (idx < 0 || idx >= this.libs.length) return;
+
+    // Draw border on selected cell before dissolve animation
+    if (this.iconCells && this.iconCells[this.selectedIndex]) {
+        this.drawCellBorder(this.iconCells[this.selectedIndex]);
+    }
+
+    // Play dissolve animation before loading
+    try {
+        if (this.iconCells && this.iconCells[this.selectedIndex] && this.iconCells[this.selectedIndex].icon) {
+            var cell = this.iconCells[this.selectedIndex];
+            var wasTransparent = cell.icon.transparent;
+            cell.icon.transparent = false;
+            var fallbackDissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+            var dissolveColor = fallbackDissolveColor;
+            try {
+                dissolve(cell.icon, dissolveColor, 5);
+            } catch (e) {
+                dbug("dissolve error in _activateLib: " + e, "view");
+            }
+            cell.icon.transparent = wasTransparent;
+            cell.icon.clear();
+            cell.icon.cycle();
+        }
+    } catch (e) {
+        dbug("Error in _activateLib dissolve: " + e, "view");
+    }
+
     this._setStatus('Loading directories...');
     this._loadDirs(this.libs[idx].index);
     this.draw();
@@ -802,6 +897,33 @@ FileArea.prototype._activateDir = function () {
     if (this.selectedIndex === 0) { this._backFromDirs(); return; }
     var idx = this.selectedIndex - 1;
     if (idx < 0 || idx >= this.dirs.length) return;
+
+    // Draw border on selected cell before dissolve animation
+    if (this.iconCells && this.iconCells[this.selectedIndex]) {
+        this.drawCellBorder(this.iconCells[this.selectedIndex]);
+    }
+
+    // Play dissolve animation before loading
+    try {
+        if (this.iconCells && this.iconCells[this.selectedIndex] && this.iconCells[this.selectedIndex].icon) {
+            var cell = this.iconCells[this.selectedIndex];
+            var wasTransparent = cell.icon.transparent;
+            cell.icon.transparent = false;
+            var fallbackDissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+            var dissolveColor = fallbackDissolveColor;
+            try {
+                dissolve(cell.icon, dissolveColor, 5);
+            } catch (e) {
+                dbug("dissolve error in _activateDir: " + e, "view");
+            }
+            cell.icon.transparent = wasTransparent;
+            cell.icon.clear();
+            cell.icon.cycle();
+        }
+    } catch (e) {
+        dbug("Error in _activateDir dissolve: " + e, "view");
+    }
+
     this._setStatus('Loading files...');
     this._loadFiles(this.dirs[idx].code);
     this.draw();
