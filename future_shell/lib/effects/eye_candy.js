@@ -25,6 +25,10 @@ function dissolve(theFrame,color,delay) {
 	if (typeof(delay) === "undefined") { delay = 1; }
 
 	var x, y, xl, yl, pixelArray = [];
+	var dissolveStartTime = Date.now();
+	var logFile = new File(system.logs_dir + 'dissolve_timing.log');
+	logFile.open('a');
+	logFile.writeln('[dissolve] START - width=' + theFrame.width + ', height=' + theFrame.height + ', delay=' + delay + 'ms');
 
 	xl = theFrame.width;
 	yl = theFrame.height;
@@ -33,6 +37,9 @@ function dissolve(theFrame,color,delay) {
 			pixelArray.push([x,y]);
 		}
 	}
+	logFile.writeln('[dissolve] Created pixelArray with ' + pixelArray.length + ' pixels');
+
+	var pixelCount = 0;
 	while( pixelArray.length > 0 ) {
 		var randomIndex = Math.floor(Math.random() * pixelArray.length);
 		var randomPixel = pixelArray.splice(randomIndex, 1);
@@ -46,7 +53,11 @@ function dissolve(theFrame,color,delay) {
 		if (delay > 0) {
 			mswait(delay);
 		}
+		pixelCount++;
 	}
+	var dissolveEndTime = Date.now();
+	logFile.writeln('[dissolve] END - processed ' + pixelCount + ' pixels in ' + (dissolveEndTime - dissolveStartTime) + 'ms');
+	logFile.close();
 }
 
 

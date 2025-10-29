@@ -127,6 +127,8 @@ if (typeof lazyLoadModule !== 'function') {
             var items = buildGroupItems(board);
             board.items = items;
             if (board._computeNonSpecialOrdinals) board._computeNonSpecialOrdinals();
+            // Initialize selection to 0 if undefined, then constrain to valid range
+            if (typeof board.selection !== 'number' || isNaN(board.selection)) board.selection = 0;
             board.selection = Math.min(board.selection, Math.max(0, items.length - 1));
             if (board.outputFrame) {
                 try { board.outputFrame.clear(); board.outputFrame.cycle(); } catch (_ignored4) { }

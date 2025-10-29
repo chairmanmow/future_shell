@@ -134,14 +134,29 @@ IconShell.prototype._notifyMrcExternalResume = function (info) {
 // Queue a subprogram launch so the triggering key (e.g. ENTER) is fully processed
 // before the subprogram begins receiving keystrokes.
 IconShell.prototype.queueSubprogramLaunch = function (name, instance) {
+    var ts = Date.now();
     dbug('Queue subprogram launch: ' + name, 'subprogram');
-    this._pendingSubLaunch = { name: name, instance: instance };
+    var logFile = new File(system.logs_dir + 'subprogram_timing.log');
+    logFile.open('a');
+    logFile.writeln('[' + ts + '] queueSubprogramLaunch START - name: ' + name);
+    logFile.close();
+    this._pendingSubLaunch = { name: name, instance: instance, _queuedAt: ts };
     // Mark that we just processed a CR; swallow subsequent LF if present
     this._swallowNextLF = true;
+    var ts2 = Date.now();
+    logFile.open('a');
+    logFile.writeln('[' + ts2 + '] queueSubprogramLaunch END (duration: ' + (ts2 - ts) + 'ms)');
+    logFile.close();
 };
 
 // Launch a subprogram (e.g., chat)
 IconShell.prototype.launchSubprogram = function (name, handlers) {
+    var ts1 = Date.now();
+    var logFile = new File(system.logs_dir + 'subprogram_timing.log');
+    logFile.open('a');
+    logFile.writeln('[' + ts1 + '] launchSubprogram START - name: ' + name);
+    logFile.close();
+
     dbug("Launch subprogram " + name, "subprogram");
     // If launching chat, always use the persistent instance
     if (name === "chat" && this.chat) {
@@ -153,9 +168,31 @@ IconShell.prototype.launchSubprogram = function (name, handlers) {
         this.activeSubprogram.attachShellTimer(this.timer);
     }
     // Proactively shelve (dispose) folder frames to prevent residual redraw artifacts.
+    var ts2 = Date.now();
+    logFile.open('a');
+    logFile.writeln('[' + ts2 + '] launchSubprogram before _shelveFolderFrames (duration so far: ' + (ts2 - ts1) + 'ms)');
+    logFile.close();
+
     if (typeof this._shelveFolderFrames === 'function') this._shelveFolderFrames();
+
+    var ts3 = Date.now();
+    logFile.open('a');
+    logFile.writeln('[' + ts3 + '] launchSubprogram before enter() call (duration so far: ' + (ts3 - ts1) + 'ms)');
+    logFile.close();
+
     this.activeSubprogram.enter(this.exitSubprogram.bind(this));
+
+    var ts4 = Date.now();
+    logFile.open('a');
+    logFile.writeln('[' + ts4 + '] launchSubprogram after enter() call (duration: ' + (ts4 - ts3) + 'ms)');
+    logFile.close();
+
     this._refreshScreenSaverFrame();
+
+    var ts5 = Date.now();
+    logFile.open('a');
+    logFile.writeln('[' + ts5 + '] launchSubprogram END - total duration: ' + (ts5 - ts1) + 'ms');
+    logFile.close();
 };
 
 // Exit subprogram and return to shell

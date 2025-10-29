@@ -109,17 +109,25 @@ IconShell.prototype._handleFolderSelection = function (realItem) {
 IconShell.prototype._handleItemSelection = function (realItem) {
     var logFile = new File(system.logs_dir + 'dissolve_debug.log');
     logFile.open('a');
+    logFile.writeln('[_handleItemSelection] *** CODE VERSION: v2-with-timing ***');
     logFile.writeln('[_handleItemSelection] called, typeof realItem.action=' + typeof realItem.action);
 
     if (typeof realItem.action === "function") {
-        logFile.writeln('[_handleItemSelection] action is function, about to call playDissolveBefore');
+        logFile.writeln('[_handleItemSelection] action is function');
         try {
+            var t1 = Date.now();
+            logFile.writeln('[_handleItemSelection] playDissolveBefore START at ' + t1);
             // Play dissolve animation before launching
             this.playDissolveBefore(this.selection);
-            logFile.writeln('[_handleItemSelection] playDissolveBefore returned');
+            var t2 = Date.now();
+            logFile.writeln('[_handleItemSelection] playDissolveBefore END at ' + t2 + ' (duration: ' + (t2 - t1) + 'ms)');
 
             // Ensure the action runs with IconShell as 'this' (was unbound, breaking runExternal etc.)
+            var t3 = Date.now();
+            logFile.writeln('[_handleItemSelection] action START at ' + t3);
             realItem.action.call(this);
+            var t4 = Date.now();
+            logFile.writeln('[_handleItemSelection] action END at ' + t4 + ' (duration: ' + (t4 - t3) + 'ms)');
         } catch (e) {
             logFile.writeln('[_handleItemSelection] EXCEPTION: ' + e);
             logFile.close();

@@ -385,96 +385,40 @@ IconShell.prototype.clearCellBorder = function (cell) {
  * Called just before launching an item to create visual "disappear" effect.
  */
 IconShell.prototype.playDissolveBefore = function (selectionIndex) {
-    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
-    logFile.open('a');
-
-    logFile.writeln('[playDissolveBefore] called with selectionIndex=' + selectionIndex);
-    logFile.writeln('[playDissolveBefore] this.scrollOffset=' + this.scrollOffset);
-    logFile.writeln('[playDissolveBefore] this.grid=' + (this.grid ? 'exists' : 'null'));
-    logFile.writeln('[playDissolveBefore] this.grid.cells=' + (this.grid && this.grid.cells ? 'exists, length=' + this.grid.cells.length : 'null'));
-
     if (!this.grid || !this.grid.cells) {
-        logFile.writeln('[playDissolveBefore] FAIL: no grid or cells');
-        logFile.close();
         return false;
     }
 
     var visibleIdx = selectionIndex - this.scrollOffset;
-    logFile.writeln('[playDissolveBefore] visibleIdx=' + visibleIdx);
-
     if (visibleIdx < 0 || visibleIdx >= this.grid.cells.length) {
-        logFile.writeln('[playDissolveBefore] FAIL: invalid visible index');
-        logFile.close();
         return false;
     }
 
     var cell = this.grid.cells[visibleIdx];
-    logFile.writeln('[playDissolveBefore] cell exists=' + (cell ? 'yes' : 'no'));
-
-    if (cell) {
-        logFile.writeln('[playDissolveBefore] cell.icon exists=' + (cell.icon ? 'yes' : 'no'));
-        logFile.writeln('[playDissolveBefore] cell.label exists=' + (cell.label ? 'yes' : 'no'));
-        logFile.writeln('[playDissolveBefore] cell.iconFrame exists=' + (cell.iconFrame ? 'yes' : 'no'));
-        logFile.writeln('[playDissolveBefore] cell.borderFrame exists=' + (cell.borderFrame ? 'yes' : 'no'));
-        logFile.writeln('[playDissolveBefore] cell.iconObj exists=' + (cell.iconObj ? 'yes' : 'no'));
-        logFile.writeln('[playDissolveBefore] cell.item exists=' + (cell.item ? 'yes' : 'no'));
-    }
-
-    if (cell && cell.icon) {
-        logFile.writeln('[playDissolveBefore] cell.icon.width=' + cell.icon.width);
-        logFile.writeln('[playDissolveBefore] cell.icon.height=' + cell.icon.height);
-        logFile.writeln('[playDissolveBefore] cell.icon.transparent=' + cell.icon.transparent);
-    }
-
     if (!cell || !cell.icon) {
-        logFile.writeln('[playDissolveBefore] FAIL: no cell or icon');
-        logFile.close();
         return false;
     }
 
-    // Verify dissolve function is available (loaded via pre-load at top)
-    logFile.writeln('[playDissolveBefore] typeof dissolve=' + typeof dissolve);
-
     if (typeof dissolve !== 'function') {
-        logFile.writeln('[playDissolveBefore] FAIL: dissolve not a function');
-        logFile.close();
         return false;
     }
 
     try {
-        logFile.writeln('[playDissolveBefore] About to call dissolve()');
-
-        // Temporarily disable transparency so setData() in dissolve produces visible output
         var wasTransparent = cell.icon.transparent;
         cell.icon.transparent = false;
-        logFile.writeln('[playDissolveBefore] Set transparent=false (was ' + wasTransparent + ')');
 
-        // Play dissolve on icon frame with theme-configured color
-        // Use 12ms delay for better visibility of animation
         var fallbackDissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
         var dissolveColor = (typeof this.paletteAttr === 'function')
             ? this.paletteAttr('ICON_DISSOLVE_COLOR', fallbackDissolveColor)
             : fallbackDissolveColor;
-        logFile.writeln('[playDissolveBefore] Calling dissolve(frame, color=' + dissolveColor + ', 12)');
-        dissolve(cell.icon, dissolveColor, 12);
-        logFile.writeln('[playDissolveBefore] dissolve() completed');
 
-        // Clear the frame to reset it after dissolve animation
-        logFile.writeln('[playDissolveBefore] Clearing frame after dissolve');
+        dissolve(cell.icon, dissolveColor, 12);
         cell.icon.clear();
         cell.icon.cycle();
 
-        // Restore transparency state
         cell.icon.transparent = wasTransparent;
-        logFile.writeln('[playDissolveBefore] Restored transparent=' + wasTransparent);
-
-        logFile.writeln('[playDissolveBefore] SUCCESS');
-        logFile.close();
         return true;
     } catch (e) {
-        logFile.writeln('[playDissolveBefore] EXCEPTION: ' + e);
-        logFile.writeln('[playDissolveBefore] Stack: ' + (e.stack ? e.stack : 'N/A'));
-        logFile.close();
         return false;
     }
 };
