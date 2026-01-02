@@ -230,20 +230,36 @@ if (typeof lazyLoadModule !== 'function') {
         return items;
     }
 
+    // Play dissolve animation on selected icon before transition
+    function playDissolveBeforeTransition(board) {
+        if (board && typeof board.playDissolveOnSelection === 'function') {
+            board.playDissolveOnSelection();
+        }
+    }
+
     // Handle Enter in the groups grid.
     function handleGroupEnter(board) {
+        dbug('[handleGroupEnter] START: selection=' + board.selection, 'view');
         var item = board.items[board.selection];
-        if (!item) return false;
+        if (!item) {
+            dbug('[handleGroupEnter] No item at selection', 'view');
+            return false;
+        }
 
         if (item.type === 'group') {
+            dbug('[handleGroupEnter] Group item, calling playDissolveBeforeTransition', 'view');
+            playDissolveBeforeTransition(board);
             board._renderSubView(item.groupIndex);
             return false;
         }
 
         if (item.action && typeof item.action === 'function') {
+            dbug('[handleGroupEnter] Action item, calling playDissolveBeforeTransition', 'view');
+            playDissolveBeforeTransition(board);
             item.action();
             return false;
         }
+        dbug('[handleGroupEnter] No group or action type', 'view');
         return false;
     }
 
@@ -369,15 +385,31 @@ if (typeof lazyLoadModule !== 'function') {
 
     // Handle Enter within the subs grid.
     function handleSubEnter(board) {
+        dbug('[handleSubEnter] START: selection=' + board.selection, 'view');
         var item = board.items[board.selection];
-        if (!item) return false;
-        if (item.type === 'groups') { board._renderGroupView(); return false; }
+        if (!item) {
+            dbug('[handleSubEnter] No item at selection', 'view');
+            return false;
+        }
+        if (item.type === 'groups') {
+            dbug('[handleSubEnter] Groups item, calling playDissolveBeforeTransition', 'view');
+            playDissolveBeforeTransition(board);
+            board._renderGroupView();
+            return false;
+        }
         if (item.type === 'sub') {
+            dbug('[handleSubEnter] Sub item, calling playDissolveBeforeTransition', 'view');
+            playDissolveBeforeTransition(board);
             var hasUnread = board._subHasUnread ? board._subHasUnread(item.subCode, item._messageCount) : ((item._unreadCount || 0) > 0);
             if (hasUnread) board._openSubReader(item.subCode);
             else board._renderThreadsView(item.subCode);
             return false;
         }
+        if (item.type === 'search') {
+            dbug('[handleSubEnter] Search item, calling playDissolveBeforeTransition', 'view');
+            playDissolveBeforeTransition(board);
+        }
+        dbug('[handleSubEnter] Unknown item type', 'view');
         return false;
     }
 

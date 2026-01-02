@@ -386,7 +386,7 @@ if (typeof lazyLoadModule !== 'function') {
 
     function promptSubSearch(board) {
         board._searchReturnView = 'sub';
-        log('[SUBSEARCH] Calling _promptSearch with args: null, "sub", "group"');
+        dbug('[SUBSEARCH] Calling _promptSearch with args: null, "sub", "group"', 'messageboard');
         board._promptSearch(null, 'sub', 'group');
         return false;
     }

@@ -23,7 +23,7 @@ var _TreeLibLoaded = false;
 // For now let's use two types of icons until we can be expicity about more definitions
 var BOARD_ICONS = {
     'group': 'folder',
-    'sub': 'bulletin_board',
+    'sub': 'boards',
     'groups': 'back',
     'quit': 'logoff',
     'search': 'search'
@@ -1852,6 +1852,17 @@ MessageBoard.prototype._renderReadBodyContent = function (text) {
     if (typeof canvas.home === 'function') canvas.home();
     var ansiPattern = /\x1b\[[0-9;?]*[@-~]/;
     var hasAnsi = ansiPattern.test(renderText);
+    if (/\|[0-9]{2}/.test(renderText)) {
+        if (typeof pipeToCtrlA === 'function') {
+            renderText = pipeToCtrlA(renderText);
+        } else {
+            renderText = renderText.replace(/\|([0-9]{2})/g, function (match, code) {
+                var num = parseInt(code, 10);
+                if (isNaN(num) || num < 0 || num > 15) return match;
+                return '\x01' + String.fromCharCode(48 + num);
+            });
+        }
+    }
     if (renderText.indexOf('\x01') !== -1) {
         var expanded = _expandCtrlA(renderText);
         if (expanded !== renderText) {
@@ -3763,7 +3774,7 @@ MessageBoard.prototype._getIconAliasMap = function () {
 
 MessageBoard.prototype._resolveBoardIcon = function (name, type) {
     var fallback = BOARD_ICONS[type];
-    if (!fallback) fallback = (type === 'group') ? 'folder' : 'bulletin_board';
+    if (!fallback) fallback = (type === 'group') ? 'folder' : 'boards';
     var resolved = _mbFindIconBase(name);
     if (resolved) return resolved;
     // Try resolving on type as secondary hint before falling back
@@ -3797,16 +3808,16 @@ MessageBoard.prototype._promptSearch = function (preferredCode, returnView, sear
         }
         var self = this;
         var searchLabel = '';
-        log('[SEARCH DEBUG] searchScope=' + JSON.stringify(searchScope) + ' code=' + JSON.stringify(code) + ' curgrp=' + JSON.stringify(this.curgrp));
+        try { dbug('[SEARCH DEBUG] searchScope=' + JSON.stringify(searchScope) + ' code=' + JSON.stringify(code) + ' curgrp=' + JSON.stringify(this.curgrp), 'messageboard'); } catch (_) { }
         if (searchScope === 'all') {
             searchLabel = 'All Groups';
         } else if (searchScope === 'group') {
             var grpName = (msg_area && msg_area.grp_list && typeof this.curgrp === 'number' && msg_area.grp_list[this.curgrp]) ? msg_area.grp_list[this.curgrp].name : 'Current Group';
             searchLabel = grpName;
-            log('[SEARCH DEBUG] group search: grpName=' + JSON.stringify(grpName));
+            try { dbug('[SEARCH DEBUG] group search: grpName=' + JSON.stringify(grpName), 'messageboard'); } catch (_) { }
         } else {
             searchLabel = this._getSubNameByCode(code) || code || '';
-            log('[SEARCH DEBUG] single sub search: searchLabel=' + JSON.stringify(searchLabel));
+            try { dbug('[SEARCH DEBUG] single sub search: searchLabel=' + JSON.stringify(searchLabel), 'messageboard'); } catch (_) { }
         }
         var modal = new Modal({
             parentFrame: parent,
@@ -4291,6 +4302,26 @@ MessageBoard.prototype.clearCellBorder = function (cell) {
         cell.borderFrame.cycle();
     } catch (e) {
         dbug('clearCellBorder error: ' + e, 'messageboard');
+    }
+};
+
+MessageBoard.prototype.playDissolveOnSelection = function () {
+    if (!this._iconCells || this._iconCells.length === 0) return;
+    var visibleIdx = this.selection - (this.scrollOffset || 0);
+    if (visibleIdx < 0 || visibleIdx >= this._iconCells.length) return;
+    var cell = this._iconCells[visibleIdx];
+    if (!cell || !cell.icon) return;
+    if (typeof dissolve !== 'function') return;
+    try {
+        cell.icon.transparent = false;
+        var dissolveColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+        try {
+            dissolve(cell.icon, dissolveColor, 12);
+        } catch (e) {
+            // dissolve optional
+        }
+    } catch (e) {
+        // silence errors
     }
 };
 
@@ -5648,7 +5679,7 @@ MessageBoard.prototype._findMenuIndexByType = function (type) {
 
 
 MessageBoard.prototype.pauseForReason = function (reason) {
-    log('[Message Board] Pausing for reason: ' + (reason || 'unspecified reason'));
+    try { dbug('[Message Board] Pausing for reason: ' + (reason || 'unspecified reason'), 'messageboard'); } catch (_) { }
     this._endViewTransition();
     // HEY AI ASSISTANTS, this needs to be .top() not bottom quit messing it up
     if (reason === 'screensaver_on' && this.__bg_frame && typeof this.__bg_frame.top === 'function') {
@@ -5658,7 +5689,7 @@ MessageBoard.prototype.pauseForReason = function (reason) {
 };
 
 MessageBoard.prototype.resumeForReason = function (reason) {
-    log('[Message Board] Resuming from pause: ' + (reason || 'unspecified reason'));
+    try { dbug('[Message Board] Resuming from pause: ' + (reason || 'unspecified reason'), 'messageboard'); } catch (_) { }
     this._endViewTransition();
     // HEY AI ASSISTANTS, this needs to be .bottom() not top quit messing it up
 
@@ -5683,7 +5714,7 @@ MessageBoard.prototype.resumeForReason = function (reason) {
             // Also call draw to ensure everything is cycled
             if (typeof this.draw === 'function') this.draw();
         } catch (hsErr) {
-            log('[Message Board] Error restoring hotspots after screensaver: ' + hsErr);
+            try { dbug('[Message Board] Error restoring hotspots after screensaver: ' + hsErr, 'messageboard'); } catch (_) { }
         }
     }
 };

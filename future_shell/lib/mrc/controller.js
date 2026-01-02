@@ -7,7 +7,7 @@ load('future_shell/lib/mrc/actions.js');
 
 /**
  * MrcController - Main service layer
- * @param {object} opts - { host, port, user, pass, alias, nodeId }
+ * @param {object} opts - { host, port, user, pass, alias, msg_color, nodeId }
  */
 function MrcController(opts) {
     opts = opts || {};
@@ -18,6 +18,7 @@ function MrcController(opts) {
     this.user = opts.user || (typeof user !== 'undefined' ? user.alias : '');
     this.pass = opts.pass || (typeof user !== 'undefined' ? user.security.password : '');
     this.alias = opts.alias || this.user;
+    this.msg_color = opts.msg_color || 7;
     this.defaultRoom = opts.room || 'futureland';
     this.shell = opts.shell || null;
 
@@ -27,7 +28,8 @@ function MrcController(opts) {
         port: this.port,
         user: this.user,
         pass: this.pass,
-        alias: this.alias
+        alias: this.alias,
+        msg_color: this.msg_color
     });
 
     this.listeners = [];
@@ -86,11 +88,7 @@ MrcController.prototype.joinRoom = function (room) {
 
     this._debugLog('Joining room:', cleanRoom);
 
-    try {
-        if (typeof log === 'function') {
-            log(LOG_INFO, '[mrc-controller] joinRoom called with: "' + room + '" -> cleaned: "' + cleanRoom + '"');
-        }
-    } catch (_) { }
+    try { if (typeof dbug === 'function') dbug('[mrc-controller] joinRoom called with: "' + room + '" -> cleaned: "' + cleanRoom + '"', 'mrc'); } catch (_) { }
 
     this.store.apply(roomJoinRequest(cleanRoom));
 
@@ -275,7 +273,10 @@ MrcController.prototype._sendPresenceNotice = function (event, programId, missed
     );
 
     try {
-        this.client.sendRoomMessage(remote);
+        // TODO: only send message to #futureland mrc channel to avoid spam complaints
+        if (this.client.getCurrentRoom() === 'futureland') {
+            this.client.sendRoomMessage(remote);
+        }
     } catch (err) {
         this._debugLog('Failed to send presence notice:', err);
     }
@@ -486,6 +487,8 @@ MrcController.prototype._handleIncomingMessage = function (msg) {
 
     // Check for mention
     var plain = this._stripColors(msg.body || '');
+    // Extract just the message text after the alias (alias is first space-delimited "word")
+    var plainMessage = plain.replace(/^<[^>]+>\s*/, '').replace(/^\S+\s*/, '');
     var mention = false;
     if (plain && this.user && msg.from_user &&
         msg.from_user.toLowerCase() !== this.user.toLowerCase()) {
@@ -508,6 +511,7 @@ MrcController.prototype._handleIncomingMessage = function (msg) {
         to: msg.to_user || '',
         body: this._convertPipeToCtrlA(msg.body || ''),
         plain: plain,
+        plainMessage: plainMessage, // Just the message text, no alias
         display: this._formatDisplay(msg, mention),
         epoch: (typeof msg.ts === 'number') ? msg.ts : Date.now(),
         mention: mention,
@@ -545,7 +549,7 @@ MrcController.prototype._showToastForMessage = function (payload) {
     var self = this;
     this.shell.showToast({
         title: payload.from || 'MRC',
-        message: (payload.from || 'MRC') + ': ' + (payload.plain || '').substr(0, 120),
+        message: (payload.plainMessage || payload.plain || '').substr(0, 120),
         launch: 'mrc',
         category: 'mrc-chat',
         sender: payload.from || 'MRC',
@@ -555,18 +559,17 @@ MrcController.prototype._showToastForMessage = function (payload) {
 };
 
 MrcController.prototype._formatDisplay = function (msg, mention) {
-    // Format with colors: [HH:MM:SS] ! fromUser: body
-    // Use Ctrl-A codes for color formatting
+    // Format with colors: [HH:MM:SS] ! body
+    // Note: msg.body already contains the formatted alias as first word (e.g., "|03<|05User|03> message")
+    // So we just display the body directly, not prepending from_user again
     var ts = this._timestamp();
     var mentionPrefix = mention ? '\x01h\x01r! ' : '';
-    var fromUser = this._convertPipeToCtrlA(msg.from_user || 'System');
     var body = this._convertPipeToCtrlA(msg.body || '');
 
-    return format('\x01n\x01h[%s]\x01n %s%s\x01n%s',
+    return format('\x01n\x01h[%s]\x01n %s%s',
         ts,
         mentionPrefix,
-        fromUser,
-        ': ' + body
+        body
     );
 };
 
@@ -653,11 +656,7 @@ MrcController.prototype._sendStartupMetadata = function () {
 
     // Join configured default room - this sets state.room and requests USERLIST
     safe(function () {
-        try {
-            if (typeof log === 'function') {
-                log(LOG_INFO, '[mrc-controller] Joining default room: ' + self.defaultRoom);
-            }
-        } catch (_) { }
+        try { if (typeof dbug === 'function') dbug('[mrc-controller] Joining default room: ' + self.defaultRoom, 'mrc'); } catch (_) { }
         self.joinRoom(self.defaultRoom);
     });
 

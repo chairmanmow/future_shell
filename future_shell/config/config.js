@@ -384,6 +384,24 @@ var BUILTIN_ACTIONS = {
 			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
 		}
 	}),
+	telnet_gateway: new SubprogramActionHandler('TelnetGateway', {
+		module: 'future_shell/lib/subprograms/telnet_gateway.js',
+		queueName: 'telnet-gateway',
+		instanceProperty: 'telnetGatewaySub',
+		loadFailureMessage: 'Failed loading telnet_gateway.js ',
+		missingMessage: 'TelnetGateway class missing after load',
+		options: function () { return { parentFrame: this.root, shell: this, timer: this.timer }; },
+		onReuse: function (instance) {
+			instance.parentFrame = this.root;
+			instance.shell = this;
+			instance.timer = this.timer;
+		},
+		afterEnsure: function (instance) {
+			if (typeof instance.setParentFrame === 'function') instance.setParentFrame(this.root);
+			instance.shell = this;
+			instance.timer = this.timer;
+		}
+	}),
 	mail: new SubprogramActionHandler('Mail', {
 		module: 'future_shell/lib/subprograms/mail.js',
 		queueName: 'mail',
@@ -1246,6 +1264,7 @@ var ICSH_CONFIG = _DYNAMIC_ICSH_CONFIG || {
 			iconFile: "apps",
 			get children() { return ensureXtrnMenuLoaded() ? getItemsForXtrnSection(0) : []; }
 		},
+		{ label: "Telnet", type: "item", iconFile: "netrunner", action: BUILTIN_ACTIONS.telnet_gateway },
 		{ label: "Messages", type: "item", iconFile: "messages", action: makeExecXtrnAction("ECREADER", { label: "Messages", icon: "messages" }) },
 		{ label: "News", type: "item", iconFile: "news", action: BUILTIN_ACTIONS.newsreader },
 		{ label: "Mail", type: "item", iconFile: "mail", dynamic: true, action: BUILTIN_ACTIONS.mail },

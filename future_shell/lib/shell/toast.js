@@ -80,15 +80,15 @@ function Toast(options) {
                     try { if (typeof bbs !== 'undefined') { if (!bbs.mods) bbs.mods = {}; if (!bbs.mods.avatar_lib) bbs.mods.avatar_lib = lib; } } catch (_) { }
                     return lib;
                 }
-            } catch (e) { try { log('[Chat] avatar_lib miss ' + path + ': ' + e); } catch (_) { } }
+            } catch (e) { try { dbug('[Chat] avatar_lib miss ' + path + ': ' + e, 'chat'); } catch (_) { } }
             return null;
         }
         var candidates = ['avatar_lib.js', '../exec/load/avatar_lib.js', '../../exec/load/avatar_lib.js'];
         for (var i = 0; i < candidates.length; i++) {
             var lib = attempt(candidates[i], 'avatar_lib.chat:' + i);
-            if (lib) { try { log('[Chat] avatar_lib loaded from ' + candidates[i]); } catch (_) { } return lib; }
+            if (lib) { try { dbug('[Chat] avatar_lib loaded from ' + candidates[i], 'chat'); } catch (_) { } return lib; }
         }
-        try { log('[Chat] avatar_lib unavailable after attempts: ' + candidates.join(', ')); } catch (_) { }
+        try { dbug('[Chat] avatar_lib unavailable after attempts: ' + candidates.join(', '), 'chat'); } catch (_) { }
         return null;
     })();
     var timeout = (typeof options.timeout === 'number') ? options.timeout : DEFAULT_TOAST_TIMEOUT;

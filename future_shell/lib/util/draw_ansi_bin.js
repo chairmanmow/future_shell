@@ -2,13 +2,13 @@
 // drawAnsiBin(inputPathOrBase, opts)
 // opts: { bases:["answer","logon"], speed:0, pausing:true, forceSimple:false, autowrap:true, debug:false, pause:false, finalPause:false }
 function dbg(msg) {
-	log(msg);
+	try { if (typeof dbug === 'function') dbug(msg, 'paint'); } catch (_) { }
 }
 function drawAnsiBin(input, opts, cb) {
-	if (!!cb) log("DRAW ANSI BIN HAS CALLBACK");
+	if (!!cb) try { if (typeof dbug === 'function') dbug('DRAW ANSI BIN HAS CALLBACK', 'paint'); } catch (_) { }
 	opts = opts || {};
 	var debug = false;
-	function dbg(msg) { if (debug) try { log('[drawAnsiBin] ' + msg); } catch (e) { } }
+	function dbg(msg) { if (debug) try { if (typeof dbug === 'function') dbug('[drawAnsiBin] ' + msg, 'paint'); } catch (e) { } }
 
 	var bases = opts.bases || [];
 	var forceSimple = opts.forceSimple === true;

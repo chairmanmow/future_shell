@@ -6,6 +6,7 @@ if (typeof dbug !== 'function') {
 
 load("event-timer.js");
 var ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
+var MAX_TOASTS_PER_TYPE = 5;
 try { load('future_shell/lib/effects/screensaver.js'); } catch (e) { }
 try { load('future_shell/lib/effects/eye_candy.js'); } catch (e) { log('WARNING: failed to load eye_candy.js: ' + e); }
 // Performance instrumentation (optional)
@@ -184,6 +185,7 @@ IconShell.prototype.init = function () {
     this._toastSequenceTimeoutMs = 600;
     this._toastHotspotStashActive = false;
     this._toastDismissCmd = this._reserveHotspotCmd('\u0006');
+    this._maxToastsPerType = MAX_TOASTS_PER_TYPE;
     this._lastLaunchEventId = undefined;
     this._shellPrefsInstance = null;
     // Track reserved hotspot commands so we avoid collisions
@@ -287,10 +289,10 @@ IconShell.prototype.init = function () {
                 // Filter out MRC app launch/return messages - they're just clutter since XTRN toasts are more useful
                 // Check both the trimmed (codes removed) and original message in case codes interfere
                 if (/\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(trimmed) || /\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(toastMsg.message)) {
-                    log("Suppressing MRC app message: " + trimmed);
+                    dbug("Suppressing MRC app message: " + trimmed, "toast");
                     return;
                 }
-                log("Showing toast: " + trimmed);
+                dbug("Showing toast: " + trimmed, "toast");
                 self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, height: 6, timeout: 8000 });
             } catch (e) { dbug('node toast error: ' + e, 'toast'); }
         });
@@ -338,7 +340,7 @@ IconShell.prototype.init = function () {
         var getMrcController = load({}, 'future_shell/lib/mrc/factory.js');
         if (typeof getMrcController === 'function') {
             this.mrcController = getMrcController({ shell: this, timer: this.timer });
-            log(LOG_INFO, '[shell] MRC controller initialized for node ' + bbs.node_num);
+            dbug('[shell] MRC controller initialized for node ' + bbs.node_num, 'mrc');
         }
     } catch (e) {
         try { log(LOG_ERR, '[shell] MRC controller init failed: ' + e); } catch (_) { }
@@ -534,7 +536,7 @@ IconShell.prototype._dismissAllToasts = function () {
     for (var i = pending.length - 1; i >= 0; i--) {
         var toast = pending[i];
         if (toast && typeof toast.dismiss === 'function') {
-            try { toast.dismiss(); } catch (e) { try { log('[toast] dismiss error: ' + e); } catch (_) { } }
+            try { toast.dismiss(); } catch (e) { try { dbug('[toast] dismiss error: ' + e, 'toast'); } catch (_) { } }
         }
     }
     this._toastKeyBuffer = '';
@@ -632,12 +634,12 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         }
         if (matchedToken) {
             var selectedToastToken = this._toastHotspots[matchedToken];
-            var launchedToken = false;
-            if (selectedToastToken && selectedToastToken.__shellMeta && typeof selectedToastToken.__shellMeta.action === 'function') {
-                try { selectedToastToken.__shellMeta.action(); launchedToken = true; } catch (actionErr) { log('[toast] action handler error: ' + actionErr); }
-            } else if (selectedToastToken && selectedToastToken.__shellMeta && selectedToastToken.__shellMeta.launch) {
-                launchedToken = this._launchToastTarget(selectedToastToken.__shellMeta.launch, selectedToastToken);
-            }
+        var launchedToken = false;
+        if (selectedToastToken && selectedToastToken.__shellMeta && typeof selectedToastToken.__shellMeta.action === 'function') {
+            try { selectedToastToken.__shellMeta.action(); launchedToken = true; } catch (actionErr) { dbug('[toast] action handler error: ' + actionErr, 'toast'); }
+        } else if (selectedToastToken && selectedToastToken.__shellMeta && selectedToastToken.__shellMeta.launch) {
+            launchedToken = this._launchToastTarget(selectedToastToken.__shellMeta.launch, selectedToastToken);
+        }
             if (launchedToken) {
                 if (selectedToastToken && typeof selectedToastToken.dismiss === 'function') selectedToastToken.dismiss();
             }
@@ -661,14 +663,14 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         var selectedToast = this._toastHotspots[ch];
         var launched = false;
         if (selectedToast && selectedToast.__shellMeta && typeof selectedToast.__shellMeta.action === 'function') {
-            try { selectedToast.__shellMeta.action(); launched = true; } catch (actionErr) { log('[toast] action handler error: ' + actionErr); }
+            try { selectedToast.__shellMeta.action(); launched = true; } catch (actionErr) { dbug('[toast] action handler error: ' + actionErr, 'toast'); }
         } else if (selectedToast && selectedToast.__shellMeta && selectedToast.__shellMeta.launch) {
             launched = this._launchToastTarget(selectedToast.__shellMeta.launch, selectedToast);
         }
         if (launched) {
             if (selectedToast && typeof selectedToast.dismiss === 'function') selectedToast.dismiss();
         } else {
-            log('[toast] launch not handled; toast remains visible');
+            dbug('[toast] launch not handled; toast remains visible', 'toast');
         }
         return true;
     }
@@ -915,8 +917,124 @@ IconShell.prototype._pollChatBackend = function (nowTs) {
     if (!this.jsonchat) return;
     var ts = nowTs || Date.now();
     if (this._lastChatPollTs && (ts - this._lastChatPollTs) < 1000) return;
+    
+    // Re-entrancy guard: prevent overlapping cycles that could cause state corruption
+    if (this._chatPolling) return;
+    
+    // If we've detected the connection is unhealthy, skip cycling and wait for recovery
+    if (this._chatConnectionUnhealthy) {
+        this._chatUnhealthyCount = (this._chatUnhealthyCount || 0) + 1;
+        // Attempt recovery every 10 seconds (10 poll attempts)
+        if (this._chatUnhealthyCount >= 10) {
+            this._chatUnhealthyCount = 0;
+            try { log(LOG_INFO, '[shell] Attempting jsonchat recovery after unhealthy state...'); } catch (_) { }
+            this._attemptChatRecovery();
+        }
+        return;
+    }
+    
+    // Connection health check: skip if disconnected to avoid blocking socket ops
+    var client = this.jsonchat.client;
+    if (!client || !client.connected) {
+        // Watchdog: detect disconnected state and attempt recovery
+        this._chatDisconnectCount = (this._chatDisconnectCount || 0) + 1;
+        if (this._chatDisconnectCount >= 5 && !this._chatRecoveryAttempted) {
+            this._chatRecoveryAttempted = true;
+            try { log(LOG_WARNING, '[shell] jsonchat disconnected, attempting recovery...'); } catch (_) { }
+            this._attemptChatRecovery();
+        }
+        return;
+    }
+    
+    // Reset disconnect counter on healthy connection
+    this._chatDisconnectCount = 0;
+    this._chatRecoveryAttempted = false;
+    
+    // Check if there's actually data waiting to avoid blocking recvline()
+    // Note: This helps but doesn't prevent all blocking - partial data can still cause waits
+    if (client.socket && !client.socket.data_waiting) {
+        this._lastChatPollTs = ts;
+        return; // Nothing to read, skip cycle entirely
+    }
+    
+    this._chatPolling = true;
     this._lastChatPollTs = ts;
-    try { this.jsonchat.cycle(); } catch (e) { dbug('jsonchat cycle error: ' + e, 'chat'); }
+    
+    // TIMING WATCHDOG: Track how long cycle() takes to detect blocking
+    var cycleStart = Date.now();
+    try { 
+        this.jsonchat.cycle(); 
+    } catch (e) { 
+        try { log(LOG_WARNING, '[shell] jsonchat cycle error: ' + e); } catch (_) { }
+    }
+    var cycleDuration = Date.now() - cycleStart;
+    
+    // Detect slow cycles (potential blocking)
+    if (cycleDuration > 2000) {
+        this._chatSlowCycleCount = (this._chatSlowCycleCount || 0) + 1;
+        try { 
+            log(LOG_WARNING, '[shell] jsonchat cycle took ' + cycleDuration + 'ms (slow cycle #' + this._chatSlowCycleCount + ')'); 
+        } catch (_) { }
+        
+        // After 3 slow cycles, mark connection as unhealthy and stop cycling
+        if (this._chatSlowCycleCount >= 3) {
+            try { 
+                log(LOG_ERR, '[shell] jsonchat marked UNHEALTHY after ' + this._chatSlowCycleCount + ' slow cycles - suspending chat polling'); 
+            } catch (_) { }
+            this._chatConnectionUnhealthy = true;
+            this._chatUnhealthyCount = 0;
+        }
+    } else {
+        // Reset slow cycle counter on fast cycles
+        this._chatSlowCycleCount = 0;
+    }
+    
+    this._chatPolling = false;
+};
+
+// Watchdog recovery: attempt to reconnect jsonchat when connection is lost or unhealthy
+IconShell.prototype._attemptChatRecovery = function () {
+    try {
+        try { log(LOG_INFO, '[shell] Attempting to restore jsonchat connection...'); } catch (_) { }
+        var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
+        var host = bbs.sys_inetaddr || '127.0.0.1';
+        var port = 10088;
+        
+        // Close old connection gracefully
+        if (this.jsonchat && this.jsonchat.client) {
+            try { this.jsonchat.client.disconnect(); } catch (_) { }
+        }
+        
+        // Create new connection
+        var jsonclient = new JSONClient(host, port);
+        this.jsonchat = new JSONChat(usernum, jsonclient, host, port);
+        this.jsonchat.join('main');
+        
+        // Re-wrap update() for notifications
+        var origUpdate = this.jsonchat.update;
+        var self = this;
+        this.jsonchat.update = function (packet) {
+            self._processChatUpdate(packet);
+            return origUpdate.call(this, packet);
+        };
+        
+        // Update chat subprogram reference if it exists
+        if (this.chat && typeof this.chat.setJsonChat === 'function') {
+            this.chat.setJsonChat(this.jsonchat);
+        } else if (this.chat) {
+            this.chat.jsonchat = this.jsonchat;
+        }
+        
+        try { log(LOG_INFO, '[shell] jsonchat connection restored successfully'); } catch (_) { }
+        this._chatRecoveryAttempted = false;
+        this._chatDisconnectCount = 0;
+        this._chatSlowCycleCount = 0;
+        this._chatConnectionUnhealthy = false;
+    } catch (e) {
+        try { log(LOG_ERR, '[shell] jsonchat recovery failed: ' + e); } catch (_) { }
+        // Will retry after next interval
+        this._chatRecoveryAttempted = false;
+    }
 };
 
 IconShell.prototype._cycleActiveSubprogram = function () {
@@ -1131,7 +1249,7 @@ IconShell.prototype._pollLaunchQueue = function () {
             if (evt.id > this._lastLaunchEventId) this._lastLaunchEventId = evt.id;
             continue;
         }
-        try { log('[launch_queue] handling event id=' + evt.id + ' node=' + evt.node + ' program=' + evt.programId); } catch (_) { }
+        try { dbug('[launch_queue] handling event id=' + evt.id + ' node=' + evt.node + ' program=' + evt.programId, 'launch'); } catch (_) { }
         this._handleLaunchEvent(evt);
         if (evt.id > this._lastLaunchEventId) this._lastLaunchEventId = evt.id;
     }
@@ -1476,7 +1594,7 @@ IconShell.prototype._getShellPrefs = function () {
         try {
             load('future_shell/lib/subprograms/shell_prefs.js');
         } catch (loadErr) {
-            try { log('[shell-prefs] load failed: ' + loadErr); } catch (_) { }
+            try { dbug('[shell-prefs] load failed: ' + loadErr, 'settings'); } catch (_) { }
         }
     }
     if (typeof ShellPrefs !== 'function') return null;
@@ -1490,7 +1608,7 @@ IconShell.prototype._getShellPrefs = function () {
     try {
         this._shellPrefsInstance = new ShellPrefs(opts);
     } catch (instantiateErr) {
-        try { log('[shell-prefs] instantiate failed: ' + instantiateErr); } catch (_) { }
+        try { dbug('[shell-prefs] instantiate failed: ' + instantiateErr, 'settings'); } catch (_) { }
         this._shellPrefsInstance = null;
     }
     return this._shellPrefsInstance;
@@ -1500,7 +1618,7 @@ IconShell.prototype.reloadShellPrefs = function () {
     var prefs = this._shellPrefsInstance;
     if (!prefs) prefs = this._getShellPrefs();
     if (prefs && typeof prefs._load === 'function') {
-        try { prefs._load(); } catch (e) { try { log('[shell-prefs] reload failed: ' + e); } catch (_) { } }
+        try { prefs._load(); } catch (e) { try { dbug('[shell-prefs] reload failed: ' + e, 'settings'); } catch (_) { } }
     }
     return prefs;
 };
@@ -1548,6 +1666,38 @@ IconShell.prototype.onShellPrefsSaved = function (prefs) {
     this._applyScreensaverPreferences(instance);
 };
 
+IconShell.prototype._getToastTypeKey = function (opts, category, launch) {
+    if (category) return 'category:' + category;
+    var launchKey = launch;
+    if (!launchKey && opts && typeof opts.subprogram === 'string' && opts.subprogram.length) {
+        launchKey = opts.subprogram;
+    }
+    if (launchKey) return 'launch:' + launchKey;
+    return 'general';
+};
+
+IconShell.prototype._enforceToastCapForType = function (typeKey) {
+    var limit = (typeof this._maxToastsPerType === 'number' && this._maxToastsPerType > 0) ? this._maxToastsPerType : MAX_TOASTS_PER_TYPE;
+    if (!typeKey || limit <= 0 || !this.toasts || !this.toasts.length) return;
+    var sameType = [];
+    for (var i = 0; i < this.toasts.length; i++) {
+        var toast = this.toasts[i];
+        var toastType = (toast && toast.__shellMeta && typeof toast.__shellMeta.type === 'string') ? toast.__shellMeta.type : 'general';
+        if (toastType === typeKey) sameType.push(toast);
+    }
+    while (sameType.length >= limit) {
+        var stale = sameType.shift();
+        if (stale && typeof stale.dismiss === 'function') {
+            try {
+                stale.dismiss();
+                try { dbug('[toast] cap trimmed type=' + typeKey, 'toast'); } catch (_) { }
+            } catch (dismissErr) {
+                try { dbug('[toast] cap dismiss error: ' + dismissErr, 'toast'); } catch (_) { }
+            }
+        }
+    }
+};
+
 IconShell.prototype.showToast = function (params) {
     var self = this;
     var opts = params || {};
@@ -1557,7 +1707,7 @@ IconShell.prototype.showToast = function (params) {
     var title = opts.title || '';
     var message = opts.message || opts.body || '';
     if ((/\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(title)) || (/\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(message))) {
-        try { log('[toast] suppressed MRC app message from ' + title); } catch (_) { }
+        try { dbug('[toast] suppressed MRC app message from ' + title, 'toast'); } catch (_) { }
         return null;
     }
 
@@ -1574,14 +1724,16 @@ IconShell.prototype.showToast = function (params) {
             var allow = true;
             try { allow = prefs.shouldDisplayNotification(category, sender); }
             catch (_) { allow = true; }
-            try { log('[toast] prefs check category=' + (category || '') + ' sender=' + (sender || '') + ' allow=' + allow); } catch (_) { }
+            try { dbug('[toast] prefs check category=' + (category || '') + ' sender=' + (sender || '') + ' allow=' + allow, 'toast'); } catch (_) { }
             if (!allow) {
-                try { log('[toast] suppressed category=' + (category || 'unknown') + ' sender=' + (sender || 'unknown')); } catch (_) { }
+                try { dbug('[toast] suppressed category=' + (category || 'unknown') + ' sender=' + (sender || 'unknown'), 'toast'); } catch (_) { }
                 return null;
             }
         }
     }
-    log('[toast] showToast title=' + (opts.title || '') + ' launch=' + (launch || '') + ' category=' + (category || ''));
+    var toastTypeKey = this._getToastTypeKey(opts, category, launch);
+    this._enforceToastCapForType(toastTypeKey);
+    dbug('[toast] showToast title=' + (opts.title || '') + ' launch=' + (launch || '') + ' category=' + (category || ''), 'toast');
     var position = opts.position || 'bottom-right';
     var userOnDone = opts.onDone;
     opts.onDone = function (t) {
@@ -1596,14 +1748,16 @@ IconShell.prototype.showToast = function (params) {
         action: action,
         launch: launch,
         position: position,
-        command: null
+        command: null,
+        category: category,
+        type: toastTypeKey
     };
     this.toasts.push(toast);
     if (this.toasts.length === 1) this._toastKeyBuffer = '';
     if (this.toasts.length === 1 && typeof console !== 'undefined' && console && typeof console.mouse_mode !== 'undefined') {
         if (typeof this._toastMouseRestore === 'undefined') this._toastMouseRestore = console.mouse_mode;
         console.mouse_mode = true;
-        try { log('[toast] mouse mode enabled'); } catch (_) { }
+        try { dbug('[toast] mouse mode enabled', 'toast'); } catch (_) { }
     }
     this._registerToastHotspot(toast);
     this._reflowAllToasts();
@@ -1626,7 +1780,7 @@ IconShell.prototype._removeToastFromList = function (toast) {
     if (idx !== -1) this.toasts.splice(idx, 1);
     if (!this.toasts.length && typeof console !== 'undefined' && console && typeof console.mouse_mode !== 'undefined' && typeof this._toastMouseRestore !== 'undefined') {
         console.mouse_mode = this._toastMouseRestore;
-        try { log('[toast] mouse mode restored'); } catch (_) { }
+        try { dbug('[toast] mouse mode restored', 'toast'); } catch (_) { }
         this._toastMouseRestore = undefined;
     }
     if (!this.toasts.length) {
@@ -1638,7 +1792,7 @@ IconShell.prototype._removeToastFromList = function (toast) {
     this._refreshToastHotspotLayer();
     if (!this.toasts.length) {
         this._releaseToastHotspotExclusivity();
-        try { this._restoreHotspotsAfterToast(); } catch (e) { log('[toast] hotspot restore error: ' + e); }
+        try { this._restoreHotspotsAfterToast(); } catch (e) { dbug('[toast] hotspot restore error: ' + e, 'toast'); }
     }
 };
 
@@ -1648,16 +1802,16 @@ IconShell.prototype._restoreHotspotsAfterToast = function () {
         var sub = this.activeSubprogram;
         var restored = false;
         if (typeof sub.restoreHotspots === 'function') {
-            try { sub.restoreHotspots(); restored = true; } catch (restoreErr) { log('[toast] subprogram restoreHotspots error: ' + restoreErr); }
+            try { sub.restoreHotspots(); restored = true; } catch (restoreErr) { dbug('[toast] subprogram restoreHotspots error: ' + restoreErr, 'toast'); }
         }
         if (typeof sub.resumeForReason === 'function') {
-            try { sub.resumeForReason('toast_closed'); } catch (resumeErr) { log('[toast] subprogram resumeForReason error: ' + resumeErr); }
+            try { sub.resumeForReason('toast_closed'); } catch (resumeErr) { dbug('[toast] subprogram resumeForReason error: ' + resumeErr, 'toast'); }
         }
         if (!restored && typeof sub.refresh === 'function') {
-            try { sub.refresh(); restored = true; } catch (refreshErr) { log('[toast] subprogram refresh error: ' + refreshErr); }
+            try { sub.refresh(); restored = true; } catch (refreshErr) { dbug('[toast] subprogram refresh error: ' + refreshErr, 'toast'); }
         }
         if (!restored && typeof sub.draw === 'function') {
-            try { sub.draw(); restored = true; } catch (drawErr) { log('[toast] subprogram draw error: ' + drawErr); }
+            try { sub.draw(); restored = true; } catch (drawErr) { dbug('[toast] subprogram draw error: ' + drawErr, 'toast'); }
         }
         if (restored && sub.parentFrame && typeof sub.parentFrame.cycle === 'function') {
             try { sub.parentFrame.cycle(); } catch (_) { }
@@ -1675,27 +1829,27 @@ IconShell.prototype._restoreHotspotsAfterToast = function () {
 IconShell.prototype._launchToastTarget = function (target, toast) {
     if (!target) return false;
     var handled = false;
-    log('[toast] launch requested: ' + target + ' (toast=' + (toast && toast.__shellMeta ? JSON.stringify(toast.__shellMeta.launch) : 'null') + ')');
+    dbug('[toast] launch requested: ' + target + ' (toast=' + (toast && toast.__shellMeta ? JSON.stringify(toast.__shellMeta.launch) : 'null') + ')', 'toast');
     if (typeof BUILTIN_ACTIONS !== 'undefined' && BUILTIN_ACTIONS && typeof BUILTIN_ACTIONS[target] === 'function') {
-        log('[toast] invoking builtin action: ' + target);
+        dbug('[toast] invoking builtin action: ' + target, 'toast');
         try {
             BUILTIN_ACTIONS[target].call(this);
             handled = true;
         } catch (builtinErr) {
-            log('[toast] builtin action threw: ' + builtinErr);
+            dbug('[toast] builtin action threw: ' + builtinErr, 'toast');
         }
     }
     if (!handled && typeof this[target] === 'function') {
-        log('[toast] invoking shell method: ' + target);
+        dbug('[toast] invoking shell method: ' + target, 'toast');
         try {
             this[target]();
             handled = true;
         } catch (shellErr) {
-            log('[toast] shell method threw: ' + shellErr);
+            dbug('[toast] shell method threw: ' + shellErr, 'toast');
         }
     }
     if (!handled && typeof this.queueSubprogramLaunch === 'function' && target === 'mrc') {
-        log('[toast] attempting queueSubprogramLaunch for mrc');
+        dbug('[toast] attempting queueSubprogramLaunch for mrc', 'toast');
         try {
             if (!this.mrcSub && typeof MRC === 'function') {
                 this.mrcSub = new MRC({ shell: this, timer: this.timer });
@@ -1704,14 +1858,14 @@ IconShell.prototype._launchToastTarget = function (target, toast) {
                 this.queueSubprogramLaunch('mrc', this.mrcSub);
                 handled = true;
             } else {
-                log('[toast] unable to instantiate MRC subprogram');
+                dbug('[toast] unable to instantiate MRC subprogram', 'toast');
             }
         } catch (queueErr) {
-            log('[toast] queueSubprogramLaunch failed: ' + queueErr);
+            dbug('[toast] queueSubprogramLaunch failed: ' + queueErr, 'toast');
         }
     }
     if (!handled && typeof this.launchSubprogram === 'function' && target === 'mrc') {
-        log('[toast] attempting direct launchSubprogram for mrc');
+        dbug('[toast] attempting direct launchSubprogram for mrc', 'toast');
         try {
             if (!this.mrcSub && typeof MRC === 'function') {
                 this.mrcSub = new MRC({ shell: this, timer: this.timer });
@@ -1720,14 +1874,14 @@ IconShell.prototype._launchToastTarget = function (target, toast) {
                 this.launchSubprogram('mrc', this.mrcSub);
                 handled = true;
             } else {
-                log('[toast] launchSubprogram skipped; no mrc instance');
+                dbug('[toast] launchSubprogram skipped; no mrc instance', 'toast');
             }
         } catch (launchErr) {
-            log('[toast] launchSubprogram failed: ' + launchErr);
+            dbug('[toast] launchSubprogram failed: ' + launchErr, 'toast');
         }
     }
     if (!handled) {
-        log('[toast] launch target not handled: ' + target);
+        dbug('[toast] launch target not handled: ' + target, 'toast');
     }
     return handled;
 };
@@ -1741,7 +1895,7 @@ IconShell.prototype._ensureToastHotspotExclusivity = function () {
             try { this.activeSubprogram.refresh(); } catch (_) { }
         }
     } catch (stashErr) {
-        try { log('[toast] hotspot stash error: ' + stashErr); } catch (_) { }
+        try { dbug('[toast] hotspot stash error: ' + stashErr, 'toast'); } catch (_) { }
     }
 };
 
@@ -1751,7 +1905,7 @@ IconShell.prototype._releaseToastHotspotExclusivity = function () {
     try {
         this.hotspotManager.restoreStashedHotSpots();
     } catch (restoreErr) {
-        try { log('[toast] hotspot restore error: ' + restoreErr); } catch (_) { }
+        try { dbug('[toast] hotspot restore error: ' + restoreErr, 'toast'); } catch (_) { }
     }
     this._toastHotspotStashActive = false;
 };
@@ -1821,7 +1975,7 @@ IconShell.prototype._styleToastFrames = function (metaList) {
         var toast = meta.toast;
         if (!toast || typeof toast.refreshTheme !== 'function') continue;
         try { toast.refreshTheme(); } catch (err) {
-            try { log('[toast] refreshTheme error: ' + err); } catch (_) { }
+            try { dbug('[toast] refreshTheme error: ' + err, 'toast'); } catch (_) { }
         }
     }
 };
@@ -1847,7 +2001,7 @@ IconShell.prototype._registerToastHotspot = function (toast) {
         this._ensureToastHotspotExclusivity();
     }
     this._toastHotspots[cmd] = toast;
-    log('[toast] register hotspot cmd=' + JSON.stringify(cmd) + ' code=' + (cmd ? cmd.charCodeAt(0) : 'null') + ' launch=' + (toast.__shellMeta.launch || ''));
+    dbug('[toast] register hotspot cmd=' + JSON.stringify(cmd) + ' code=' + (cmd ? cmd.charCodeAt(0) : 'null') + ' launch=' + (toast.__shellMeta.launch || ''), 'toast');
     var frame = toast.toastFrame;
     var toastHeight = Math.max(1, frame.height || 1);
     toast.__shellMeta.rect = {
@@ -1878,7 +2032,7 @@ IconShell.prototype._unregisterToastHotspot = function (toast) {
     if (this._reservedHotspotCommands) delete this._reservedHotspotCommands[cmd];
     toast.__shellMeta.command = null;
     toast.__shellMeta.rect = null;
-    log('[toast] unregister hotspot cmd=' + JSON.stringify(cmd) + ' code=' + (cmd ? cmd.charCodeAt(0) : 'null'));
+    dbug('[toast] unregister hotspot cmd=' + JSON.stringify(cmd) + ' code=' + (cmd ? cmd.charCodeAt(0) : 'null'), 'toast');
     if (this.hotspotManager && this._toastHotspotLayerId) {
         this._refreshToastHotspotLayer();
         return;
@@ -1896,7 +2050,7 @@ IconShell.prototype._updateToastHotspot = function (toast) {
     if (rect && rect.x === frame.x && rect.y === frame.y && rect.width === frame.width && rect.height === frame.height) {
         return;
     }
-    log('[toast] update hotspot launch=' + (meta.launch || ''));
+    dbug('[toast] update hotspot launch=' + (meta.launch || ''), 'toast');
     var cmd = meta.command;
     meta.rect = {
         x: frame.x,

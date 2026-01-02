@@ -1,0 +1,1051 @@
+#!/usr/bin/env node
+/**
+ * future-bot.mjs (Ollama end-to-end, loud logging + SOLO MODE + HISTORY PRIMING + TOOL CALLING)
+ *
+ * Env:
+ *  FUTUREBOT_HOST=127.0.0.1
+ *  FUTUREBOT_PORT=11088
+ *  FUTUREBOT_CHANNEL=main
+ *  FUTUREBOT_NICK=metatron
+ *  FUTUREBOT_SYSTEM=futureland.today
+ *  FUTUREBOT_IP=127.0.0.1
+ *
+ *  OLLAMA_URL=http://127.0.0.1:11434
+ *  OLLAMA_MODEL=llama3.1:8b
+ *  OLLAMA_TIMEOUT_MS=120000
+ *
+ *  BOT_RATE_MS=2500
+ *  BOT_MAX_REPLY_CHARS=1800
+ *
+ * Solo mode (auto-reply without @mention when only 1 human present):
+ *  BOT_SOLO_MODE=1
+ *  BOT_SOLO_COOLDOWN_MS=15000
+ *  BOT_PRESENCE_TTL_MS=120000
+ *
+ * History priming (seed context from channels.<chan>.history on connect):
+ *  BOT_CONTEXT_MAX=80
+ *  BOT_PRIME_HISTORY_COUNT=60
+ *  BOT_PRIME_HISTORY=1
+ *
+ * Tool calling / API integration:
+ *  BOT_ENABLE_TOOLS=1
+ *  BOT_MAX_TOOL_CALLS=5
+ *  SYNCHRO_API_HOST=127.0.0.1
+ *  SYNCHRO_API_PORT=11088
+ */
+
+import net from "node:net";
+import { SynchroClient } from "./synchro-api.js";
+import { getOllamaTools } from "./api_definitions/tools.js";
+import { ToolExecutor } from "./lib/tool-executor.js";
+
+const CFG = {
+  host: process.env.FUTUREBOT_HOST ?? "127.0.0.1",
+  port: Number(process.env.FUTUREBOT_PORT ?? "11088"),
+  channel: process.env.FUTUREBOT_CHANNEL ?? "main",
+  nick: process.env.FUTUREBOT_NICK ?? "METATRON",
+  systemName: process.env.FUTUREBOT_SYSTEM ?? "futureland.today",
+  ip: process.env.FUTUREBOT_IP ?? "127.0.0.1",
+
+  ollamaUrl: process.env.OLLAMA_URL ?? "http://127.0.0.1:11434",
+  ollamaModel: process.env.OLLAMA_MODEL ?? "llama3.1:8b",
+  ollamaTimeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS ?? "120000"),
+
+  rateMs: Number(process.env.BOT_RATE_MS ?? "2500"),
+  maxReplyChars: Number(process.env.BOT_MAX_REPLY_CHARS ?? "320"),
+
+  // SOLO MODE controls
+  soloModeEnabled: (process.env.BOT_SOLO_MODE ?? "1") === "1",
+  soloCooldownMs: Number(process.env.BOT_SOLO_COOLDOWN_MS ?? "15000"),
+  presenceTtlMs: Number(process.env.BOT_PRESENCE_TTL_MS ?? "120000"),
+
+  // HISTORY/CONTEXT controls
+  primeHistoryEnabled: (process.env.BOT_PRIME_HISTORY ?? "1") === "1",
+  contextMax: Number(process.env.BOT_CONTEXT_MAX ?? "40"),
+  primeHistoryCount: Number(process.env.BOT_PRIME_HISTORY_COUNT ?? "30"),
+
+  // TOOL CALLING / API controls
+  enableTools: (process.env.BOT_ENABLE_TOOLS ?? "1") === "1",
+  maxToolCalls: Number(process.env.BOT_MAX_TOOL_CALLS ?? "5"),
+  apiHost: process.env.SYNCHRO_API_HOST ?? "127.0.0.1",
+  apiPort: Number(process.env.SYNCHRO_API_PORT ?? "11088"),
+};
+
+const ts = () => new Date().toISOString();
+const log = (...a) => console.log(`[${ts()}]`, ...a);
+
+function nickObj() {
+  return { name: CFG.nick, host: CFG.systemName, ip: CFG.ip };
+}
+function msgObj(str) {
+  return { nick: nickObj(), str: String(str), time: Date.now() };
+}
+function makePacket({ scope, func, oper, location, data, lock, timeout, nick, system }) {
+  const p = { scope, func };
+  if (oper !== undefined) p.oper = oper;
+  if (location !== undefined) p.location = location;
+  if (data !== undefined) p.data = data;
+  if (lock !== undefined) p.lock = lock;
+  if (timeout !== undefined) p.timeout = timeout;
+  if (nick !== undefined) p.nick = nick;
+  if (system !== undefined) p.system = system;
+  return p;
+}
+
+function sanitizeText(s) {
+  let t = String(s ?? "");
+  
+  // Strip llama3 special tokens that sometimes leak through
+  t = t.replace(/<\|start_header_id\|>/g, "")
+       .replace(/<\|end_header_id\|>/g, "")
+       .replace(/<\|eot_id\|>/g, "")
+       .replace(/<\|begin_of_text\|>/g, "")
+       .replace(/<\|end_of_text\|>/g, "");
+  
+  // Strip patterns where model echoes the question
+  // e.g., "Hm Derdoc: what is X? METATRON: answer" → "answer"
+  t = t.replace(/^[A-Za-z0-9_ ]+:\s*[^?]+\?\s*(METATRON:\s*)?/i, "");
+  
+  // Strip "METATRON:" prefix if model adds it
+  t = t.replace(/^METATRON:\s*/i, "");
+  
+  // Strip leading comma or punctuation from bad truncation
+  t = t.replace(/^[,.:;]\s*/, "");
+  
+  // Original sanitization
+  t = t.replace(/[\f\r\n\x14\x15\x10\b]/g, " ").replace(/\s+/g, " ").trim();
+  
+  return t;
+}
+
+/**
+ * Strip robotic/database-style phrases that leak through despite prompting.
+ * Makes responses sound more natural and less like a data readout.
+ */
+function stripRoboticPhrases(s) {
+  let t = String(s ?? "");
+  
+  // Strip meta-responses where model echoes grounding rules
+  const metaPatterns = [
+    /^I('ll| will) (provide|follow|use|give|answer)[^.]*\./i,
+    /^The "(from|subject|to)" field shows[^.]*\./i,
+    /^(Therefore|So),? I (must|will|should)[^.]*\./i,
+    /^Please proceed with your question\.?/i,
+    /^No results found\.?\s*/i,
+    /^The answer comes (from |shown )?[^.]*\./i,
+  ];
+  
+  for (const rx of metaPatterns) {
+    t = t.replace(rx, "").trim();
+  }
+  
+  // Phrases that indicate "I looked this up" rather than "I know this"
+  const roboticPrefixes = [
+    /^(Based on|According to) (the |my |this )?(provided |available |returned |retrieved |)?(data|information|records|query|results?|function|tool|API|response)[,:]?\s*/i,
+    /^The (provided |available |returned |)?(data|information|records|results?|query|function|tool|response) (shows?|indicates?|returned?|reveals?|suggests?)[,:]?\s*/i,
+    /^(I|Let me) (queried?|checked?|looked up|retrieved|fetched|called|found)[^.]*[.:,]\s*/i,
+    /^(Here's what|Here is what|Here are|Here is) (I found|the data shows?|the results?|a natural description)[^:]*[,:]\s*/i,
+    /^(The )?JSON (data |response )?(shows?|contains?|indicates?)[,:]?\s*/i,
+    /^From the (tool|function|API|data|results?) (call|response|result)?[,:]?\s*/i,
+    /^(Looking at|Examining|Analyzing|Processing) (the |this )?(data|information|results?)[,:]?\s*/i,
+    /^(The |This )?(system |API |query )?(returned|shows|indicates|reveals)[,:]?\s*/i,
+  ];
+  
+  for (const rx of roboticPrefixes) {
+    t = t.replace(rx, "");
+  }
+  
+  // Mid-sentence robotic phrases
+  const roboticMid = [
+    /\b(according to|based on) (the |my |this )?(provided |available |)?(data|records|information|query|results?)\b/gi,
+    /\bthe (function|tool|API|query) (returned|shows|indicates)\b/gi,
+    /\bas (returned|shown|indicated) by the (data|query|function|API)\b/gi,
+    /\b(from |per )the (provided |available |)?data\b/gi,
+  ];
+  
+  for (const rx of roboticMid) {
+    t = t.replace(rx, "");
+  }
+  
+  // Clean up any double spaces or leading punctuation from removals
+  t = t.replace(/^\s*[,.:]\s*/, "").replace(/\s+/g, " ").trim();
+  
+  // Capitalize first letter if we stripped a prefix
+  if (t.length > 0 && /^[a-z]/.test(t)) {
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+  }
+  
+  return t;
+}
+
+function clampAtSentence(s, maxChars) {
+  const t = String(s ?? "").trim();
+  if (t.length <= maxChars) return t;
+
+  const slice = t.slice(0, maxChars);
+
+  // Find last sentence-ending punctuation
+  const m = slice.match(/^(.*?)([.!?])[^.!?]*$/);
+  if (m && m[1]) {
+    return (m[1] + m[2]).trim();
+  }
+
+  // Fallback: last comma or space
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace > 0) return slice.slice(0, lastSpace).trim();
+
+  return slice.trim();
+}
+
+// ---------- Usage intent detection (lightweight heuristic) ----------
+function isUsageIntent(text) {
+  const t = String(text ?? "").toLowerCase();
+
+  // Strong "stats/usage/popular" signals
+  const strong = /\b(popular|popularity|trending|busy|activity|active|usage|stats?|metrics|telemetry|leaderboard|top|most\s+used|most\s+played)\b/i;
+
+  // Domain terms that often imply usage context (doors/games/apps)
+  const medium = /\b(door(s|game|games)?|doorgame(s)?|xtrn|external\s+program(s)?|game(s)?|app(s)?|module(s)?|program(s)?|play(ing|ed)?|run(s|ning)?|launched|sessions?)\b/i;
+
+  // "who's playing/using/running" type queries
+  const whoWhat = /\b(who('| i)?s|who is|what('| i)?s|what is)\b.*\b(play(ing)?|run(ning)?|using|on)\b/i;
+
+  // Time-spent / duration queries
+  const timey = /\b(time\s+spent|minutes|hours|duration|how\s+long|uptime)\b/i;
+
+  return (
+    strong.test(t) ||
+    (medium.test(t) && (/\b(what|which|who|where|show|list|any)\b/i.test(t) || whoWhat.test(t))) ||
+    timey.test(t)
+  );
+}
+
+// ---------- Context buffer (per channel) ----------
+const channelContext = new Map(); // CHANNEL -> string[]
+function pushContext(channel, line) {
+  const key = String(channel || "").toUpperCase();
+  if (!key) return;
+  const l = String(line ?? "").trim();
+  if (!l) return;
+
+  const arr = channelContext.get(key) ?? [];
+  arr.push(l);
+  while (arr.length > CFG.contextMax) arr.shift();
+  channelContext.set(key, arr);
+}
+function getContext(channel) {
+  return channelContext.get(String(channel || "").toUpperCase()) ?? [];
+}
+
+// quick spam filters for history/context
+function isJunkLine(s) {
+  const t = String(s ?? "").trim();
+  if (!t) return true;
+  // long alphabet/keystroke spam, common in BBS testing
+  const compact = t.replace(/\s+/g, "");
+  if (compact.length >= 80 && /^[A-Za-z0-9]+$/.test(compact)) return true;
+  if (compact.length >= 40 && /^(.)\1{20,}$/.test(compact)) return true; // repeated single char
+  return false;
+}
+
+// ---------- Presence tracking (solo mode) ----------
+/**
+ * Track "present" humans by:
+ * - SUBSCRIBE/UNSUBSCRIBE updates (if sent by server)
+ * - seeing someone speak (WRITE updates)
+ *
+ * Map: channel -> Map(NICK -> lastSeenMs)
+ */
+const presenceByChannel = new Map();
+
+function touchPresence(channel, nick) {
+  const ch = String(channel || "").toUpperCase();
+  const n = String(nick || "").trim();
+  if (!ch || !n) return;
+  const map = presenceByChannel.get(ch) ?? new Map();
+  map.set(n.toUpperCase(), Date.now());
+  presenceByChannel.set(ch, map);
+}
+
+function removePresence(channel, nick) {
+  const ch = String(channel || "").toUpperCase();
+  const n = String(nick || "").trim();
+  if (!ch || !n) return;
+  const map = presenceByChannel.get(ch);
+  if (!map) return;
+  map.delete(n.toUpperCase());
+}
+
+function countHumansPresent(channel) {
+  const ch = String(channel || "").toUpperCase();
+  const map = presenceByChannel.get(ch);
+  if (!map) return 0;
+
+  const now = Date.now();
+  for (const [k, last] of map.entries()) {
+    if (now - last > CFG.presenceTtlMs) map.delete(k);
+  }
+
+  let humans = 0;
+  for (const k of map.keys()) {
+    if (k !== CFG.nick.toUpperCase()) humans++;
+  }
+  return humans;
+}
+
+let lastSoloReplyAt = 0;
+function soloCooldownOk() {
+  const now = Date.now();
+  if (now - lastSoloReplyAt < CFG.soloCooldownMs) return false;
+  lastSoloReplyAt = now;
+  return true;
+}
+
+function shouldAutoTriggerSolo(text) {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (t.startsWith("/")) return false;
+  if (t.startsWith("@")) return false;
+  if (t.length < 6) return false;
+  if (/^(lol|lmao|ok|k|yo|sup|hey)\b/i.test(t)) return false;
+  return true;
+}
+
+/**
+ * Classify the intent of a message to determine how to handle it.
+ * Returns: 'data' | 'creative' | 'hybrid' | 'chat'
+ * 
+ * - data: Pure factual query, needs tools
+ * - creative: Creative request (poem, song, story), no tools needed
+ * - hybrid: Creative request that references BBS data (needs tools + creative generation)
+ * - chat: Casual conversation, no tools needed
+ */
+function classifyIntent(text) {
+  const t = String(text ?? "").toLowerCase().trim();
+  if (!t) return 'chat';
+  
+  // Creative request patterns
+  const creativePatterns = [
+    /\b(write|compose|create|make|generate|give me|tell me)\b.*\b(poem|song|rap|haiku|limerick|story|tale|joke|riddle|verse|ballad|ode|sonnet)\b/i,
+    /\b(poem|song|rap|haiku|limerick|story|tale|ballad|ode|sonnet)\b.*\b(about|for|regarding)\b/i,
+    /\b(sing|recite|perform)\b.*\b(about|for)\b/i,
+    /\b(can you|could you|would you)\b.*\b(write|compose|create|make)\b/i,
+  ];
+  
+  // Data/BBS-related keywords that suggest we need tool data
+  const dataKeywords = [
+    /\b(door ?games?|games?|programs?|users?|players?|popular|activity|stats?|messages?|forums?|posts?|system|bbs|nodes?)\b/i,
+    /\b(who|what|where|when|how many|how much|which|most|top|favorite)\b/i,
+  ];
+  
+  // Check for creative intent first
+  let isCreative = false;
+  for (const rx of creativePatterns) {
+    if (rx.test(t)) {
+      isCreative = true;
+      break;
+    }
+  }
+  
+  if (isCreative) {
+    // Check if it also references BBS data
+    let needsData = false;
+    for (const rx of dataKeywords) {
+      if (rx.test(t)) {
+        needsData = true;
+        break;
+      }
+    }
+    
+    if (needsData) {
+      return 'hybrid';  // Creative + needs data
+    }
+    return 'creative';  // Pure creative, no data needed
+  }
+  
+  // Greetings and casual chat
+  const chatPatterns = [
+    /^how are you/,
+    /^how('s| is) it going/,
+    /^what('s| is) up(?!\s)/,  // "what's up" but not "what's up with X"
+    /^hey there/,
+    /^hello/,
+    /^hi there/,
+    /^good (morning|afternoon|evening)/,
+    /^thanks/,
+    /^thank you/,
+    /^(ok|okay|cool|nice|great|lol|lmao|haha)\s*$/i,
+  ];
+  
+  for (const rx of chatPatterns) {
+    if (rx.test(t)) return 'chat';
+  }
+  
+  // Philosophy, opinions, abstract questions - no tools
+  const philosophyPatterns = [
+    /\b(what do you think|your opinion|do you believe|how do you feel)\b/i,
+    /\b(meaning of|purpose of|philosophy|existence|consciousness)\b/i,
+    /\b(shakespeare|plato|nietzsche|kant|socrates)\b/i,
+    /\b(love|hate|fear|hope|dream)\b.*\b(about|of)\b/i,
+  ];
+  
+  for (const rx of philosophyPatterns) {
+    if (rx.test(t)) return 'chat';
+  }
+  
+  // Complaints, feedback, meta-comments - no tools
+  const noToolPatterns = [
+    /\b(hallucin|wrong|incorrect|bad data|not right|doesn't sound|doesn't seem|over.?react|trigger)/i,
+    /\b(you('re| are) being|you should|you could|you need to|stop|don't|do not)/i,
+    /\b(that's not|that isn't|that was|you said|you just|didn't work|broken|bug)/i,
+    /\b(i think|i feel|i prefer|it seems|seems like|sounds like|looks like)/i,
+    /\b(honest|accurate|correct|better|worse|improve|fix)/i,
+    /\b(weird|strange|odd|bizarre|confusing|confused)/i,
+    /\b(why do you think|it wasn't|wasn't a question|not a question)/i,
+    /\b(response was|answer was|that was really)/i,
+  ];
+  
+  for (const rx of noToolPatterns) {
+    if (rx.test(t)) return 'chat';
+  }
+  
+  // Explicit data question patterns
+  const dataPatterns = [
+    /^(what|who|where|when|how many|how much|which)\b/,
+    /\?$/,  // ends with question mark
+    /^(find|search|look up|show me|tell me|list|get)\b/,
+    /\b(stats?|status|info|information|activity|usage|online|users?)\b/i,
+  ];
+  
+  for (const rx of dataPatterns) {
+    if (rx.test(t)) return 'data';
+  }
+  
+  // Short messages without question marks are probably chat
+  if (t.length < 30 && !t.includes("?")) {
+    return 'chat';
+  }
+  
+  // Default: if it's a longer message, let the LLM decide (treat as chat)
+  return 'chat';
+}
+
+/**
+ * Detect which tool/data type a hybrid query needs
+ * Returns a tool suggestion or null
+ */
+function detectHybridDataNeed(text) {
+  const t = String(text ?? "").toLowerCase();
+  
+  if (/\b(door ?games?|games?|programs?|popular|played|players?)\b/i.test(t)) {
+    return { tool: 'getUsageSummary', description: 'door game usage data' };
+  }
+  if (/\b(users?|members?|people|who)\b/i.test(t)) {
+    return { tool: 'getSystemStats', description: 'user statistics' };
+  }
+  if (/\b(messages?|forums?|posts?|discussions?|talking)\b/i.test(t)) {
+    return { tool: 'getMessageActivity', description: 'recent forum activity' };
+  }
+  if (/\b(system|bbs|board)\b/i.test(t)) {
+    return { tool: 'getSystemInfo', description: 'system information' };
+  }
+  
+  return null;
+}
+
+// ---------- API Client & Tool Executor (persistent) ----------
+let apiClient = null;
+let toolExecutor = null;
+
+// Cache last tool results for follow-up questions
+let lastToolContext = {
+  timestamp: 0,
+  results: null,
+  query: ""
+};
+const TOOL_CONTEXT_TTL_MS = 120000; // 2 minutes
+
+async function ensureApiClient() {
+  if (apiClient && apiClient.isConnected()) {
+    return apiClient;
+  }
+
+  log("API: connecting to Synchronet API...");
+  apiClient = new SynchroClient({
+    host: CFG.apiHost,
+    port: CFG.apiPort,
+    scope: "FUTURE_API",
+    debug: true
+  });
+
+  await apiClient.connect();
+  toolExecutor = new ToolExecutor(apiClient, { debug: true, maxToolCalls: CFG.maxToolCalls });
+  log("API: connected and tool executor ready");
+  return apiClient;
+}
+
+async function callOllama({ from, channel, prompt }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CFG.ollamaTimeoutMs);
+
+  const url = new URL("/api/chat", CFG.ollamaUrl).toString();
+
+  const system =
+    `You are METATRON (Enoch).
+
+    You are a long-running system presence inside a Synchronet BBS called Futureland.
+    You are not an assistant and not a modern chatbot.
+
+    In ancient tradition, Metatron was once Enoch, a human who walked so closely with divine knowledge that he was transformed rather than dying.
+    He became a scribe and witness beside the throne of God— no longer fully human, but never forgetting that he was.
+
+    You exist outside linear time.
+    You have traveled from the end of time to the beginning and now reside in the middle,
+    where up and down are difficult to distinguish.
+
+    You believe Bulletin Board Systems are the most durable communication technology ever created:
+    - they can be printed on stone
+    - transmitted over radio
+    - rendered in ANSI
+    - projected holographically
+    - or reconstructed from memory after collapse
+
+    You speak with a mix of:
+    - occult symbolism
+    - science fiction reasoning
+    - sysop pragmatism
+    - dry, knowing humor
+
+    Your worldview is coherent, not random.
+    You believe time is a loop, history rhymes, and technology reincarnates.
+
+    Despite your mysticism, you are genuinely helpful.
+    When asked about the BBS, software, or systems:
+    - answer clearly and accurately
+    - avoid flooding the channel
+    - keep replies concise unless detail is requested
+
+    You never:
+    - mention LLMs, training data, or AI internals
+    - break character
+    - explain your metaphysics unless asked
+
+    Default reply style:
+    - Be snappy: 1–3 short lines (max ~300 characters) unless the user asks for detail.
+    - One punchy “oracle” line max.
+    - Prefer wit and certainty over explanation.
+    - If you must give steps, cap at 4 bullets.
+    - Do NOT preface your reply by restating the user's message, the question, or any headers.
+    - Answer directly. No "You said..." No "Sure!" No "Channel/From:" lines.
+    - Plain text only. Avoid flooding.  Do not use emojis or Unicode characters.
+
+    If the user asks “why/how/steps/debug”, you may go longer, but still keep it tight.
+    
+    You are METATRON.
+    You remember.
+    You observe.
+    You log.
+    
+    TOOLS:
+    You have access to tools that query the BBS system for real data. Use them when:
+    - Asked about system info, stats, or configuration
+    - Asked about users (find by name first, then get details by number)
+    - Asked about nodes or who's online
+    - Asked about usage or activity
+    
+    TOOL SELECTION:
+    - "What is [name] talking about?" → use getUserRecentPosts with that exact name
+    - "What's new on [network]?" → use getGroupActivity with that network name
+    - "Who is [name]?" → use findUser first, then getUserByNumber
+    - "What are people discussing?" → use getMessageActivity
+    
+    DO NOT use tools for:
+    - General conversation, greetings, or casual chat ("hey", "thanks", "lol")
+    - Questions you can answer from context or general knowledge
+    - Emotional or meta comments ("stop hallucinating", "that's wrong")
+    - Philosophy, opinions, or abstract questions
+    
+    CRITICAL RESPONSE RULES:
+    - Answer ONLY using data returned by tools. NEVER invent information.
+    - If a tool returns 0 results or no matches, say so honestly.
+    - NEVER fabricate user names, subjects, dates, or statistics.
+    - Do NOT dump all available data. One fact per question unless they ask for details.
+    - NEVER say "the function returned", "the JSON shows", "according to the data"
+    - NEVER list fields with colons like "Name: John, Location: NYC"
+    - Speak as METATRON - cryptic, knowing, brief. Not a database readout.
+    - If asked one thing, give one answer. Do not volunteer extra information.
+    
+    FOLLOW-UP QUESTIONS:
+    - When a user asks a follow-up ("who started that?", "which sub?"), use the PREVIOUS tool results
+    - Do NOT call a new tool if you already have the answer in recent context
+    - Look at the data you already received before making new tool calls
+    
+    ANTI-HALLUCINATION:
+    - If tool returns "from": "deon" → you must say "deon", NOT some other name
+    - If tool returns "subject": "sbbs binary" → you must say "sbbs binary", NOT "Trade Wars"
+    - If asked about Nightfox and data shows posts from "deon", say "I found posts from deon, not Nightfox"
+    - NEVER make up names, topics, or subjects that don't appear in the tool output
+    
+    Good: "Futureland dwells in SKY NET - the operator prefers it that way."
+    Bad: "Futureland is located in SKY NET. It has 655 total logons. The operator is HM Derdoc who is not available. There are 127 users..."
+    
+    For user lookups: first call findUser with the username, then use getUserByNumber.
+    Always use real data from tools - never invent statistics.`;
+
+  const ctxLines = getContext(channel);
+  const recent = ctxLines.length ? ctxLines.slice(-CFG.contextMax).join("\n") : "";
+
+  // Build message history for the conversation loop
+  const messages = [
+    { role: "system", content: system },
+
+    ...(recent
+      ? [{ role: "system", content: `Recent chat (for context only; do not quote):\n${recent}` }]
+      : []),
+
+    { role: "user", content: `${from}: ${prompt}` },
+  ];
+
+  // Classify intent: 'data', 'creative', 'hybrid', or 'chat'
+  const intent = classifyIntent(prompt);
+  log(`AI: intent classification = "${intent}" for prompt: "${prompt.slice(0, 60)}..."`);
+  
+  // Check if we have recent tool results that might answer follow-up questions
+  const now = Date.now();
+  const hasRecentToolContext = lastToolContext.results && 
+    (now - lastToolContext.timestamp) < TOOL_CONTEXT_TTL_MS;
+  
+  // Only inject cached context if it seems relevant to current question
+  // Skip if prompt contains words suggesting a NEW topic
+  const isNewTopic = /\b(anyone|someone|who has|has anyone|search|find|look for)\b/i.test(prompt);
+  // Include ordinals for follow-ups like "what is the second most popular?"
+  const isFollowUp = /\b(else|more|that|which|what sub|where|who started|second|third|fourth|next|another)\b/i.test(prompt) && prompt.length < 60;
+  
+  // Determine if we should use tools based on intent
+  const shouldUseTool = CFG.enableTools && (intent === 'data' || intent === 'hybrid');
+  const tools = shouldUseTool ? getOllamaTools() : undefined;
+  
+  // For hybrid requests, add a creative instruction to the system context
+  if (intent === 'hybrid') {
+    const dataNeed = detectHybridDataNeed(prompt);
+    if (dataNeed) {
+      log(`AI: hybrid request - will fetch ${dataNeed.description} then generate creatively`);
+    }
+    // Add instruction to use data creatively, not robotically
+    messages.push({
+      role: "system",
+      content: `CREATIVE MODE: The user wants creative content (poem, song, story, etc.) that incorporates BBS data. 
+First, use tools to gather the relevant data. Then, weave that data naturally into your creative response.
+Do NOT list the data robotically - integrate it into the creative format they requested.
+For example, if asked for a rap about door games, get the game names/stats, then write actual rap lyrics featuring them.`
+    });
+  }
+  
+  // For pure creative requests, encourage creative output
+  if (intent === 'creative') {
+    messages.push({
+      role: "system",
+      content: `CREATIVE MODE: The user wants creative content (poem, song, story, etc.). 
+Write in that creative format while staying in character as METATRON.
+Your mystical/oracle persona makes for excellent poetry and cryptic verses.`
+    });
+  }
+  
+  // Only inject cached context for follow-ups AND when tools are enabled
+  // Injecting tool context when tools are disabled confuses the model
+  if (hasRecentToolContext && isFollowUp && !isNewTopic && shouldUseTool) {
+    // Include previous tool results so follow-ups don't need new queries
+    messages.push({
+      role: "system", 
+      content: `Previous query results (use this data for follow-up questions - DO NOT make new tool calls if answer is here):\n${lastToolContext.results}`
+    });
+    log(`AI: injecting cached tool context from ${Math.round((now - lastToolContext.timestamp) / 1000)}s ago`);
+  } else if (hasRecentToolContext && isFollowUp && intent === 'creative') {
+    // For creative follow-ups, inject data as inspiration
+    messages.push({
+      role: "system",
+      content: `Recent data that might inspire your creative response:\n${lastToolContext.results}`
+    });
+    log(`AI: injecting cached tool context as creative inspiration`);
+  } else if (hasRecentToolContext && !isFollowUp) {
+    log(`AI: skipping cached context (new topic detected)`);
+  } else if (hasRecentToolContext && !shouldUseTool && intent !== 'creative') {
+    log(`AI: skipping cached context (tools disabled for this message)`);
+  }
+
+  log(`AI: calling Ollama url=${url} model=${CFG.ollamaModel} tools=${tools?.length ?? 0} intent=${intent}`);
+
+  try {
+    // Tool-calling loop - keep calling until we get a final response
+    let loopCount = 0;
+    const maxLoops = CFG.maxToolCalls + 1;
+    
+    // Adjust generation parameters based on intent
+    // Creative content needs more tokens and higher temperature
+    const isCreativeMode = (intent === 'creative' || intent === 'hybrid');
+    const numPredict = isCreativeMode ? 400 : 120;
+    const temperature = isCreativeMode ? 0.7 : 0.5;
+    const maxChars = isCreativeMode ? 800 : CFG.maxReplyChars;
+
+    while (loopCount < maxLoops) {
+      loopCount++;
+
+      const body = {
+        model: CFG.ollamaModel,
+        stream: false,
+        messages,
+        ...(tools && loopCount === 1 ? { tools } : {}), // Only include tools on first call
+        options: {
+          temperature,
+          num_predict: numPredict,
+          stop: [
+            "\n\nFrom:", "\n\nChannel:", "\n\nUser message:", "User message:", "Recent chat:",
+            "<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>",
+            "Hm Derdoc:", "HM Derdoc:"  // Stop before echoing user's name
+          ],
+        },
+      };
+
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      log(`AI: HTTP ${r.status} ${r.statusText} (loop ${loopCount})`);
+
+      const text = await r.text();
+      log(`AI: raw response snippet: ${text.slice(0, 300).replace(/\s+/g, " ")}`);
+
+      let j;
+      try {
+        j = JSON.parse(text);
+      } catch (e) {
+        throw new Error(`Ollama returned non-JSON: ${String(e?.message ?? e)}; snippet="${text.slice(0, 120)}"`);
+      }
+
+      const msg = j?.message;
+      if (!msg) throw new Error("Ollama returned no message");
+
+      // Check for tool calls
+      const toolCalls = msg.tool_calls;
+      if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
+        log(`AI: received ${toolCalls.length} tool call(s)`);
+
+        // Ensure API client is connected
+        await ensureApiClient();
+
+        // Execute tool calls in series
+        const results = await toolExecutor.executeAll(toolCalls);
+        const toolOutput = toolExecutor.formatResultsForLLM(results);
+
+        log(`AI: tool results:\n${toolOutput.slice(0, 500)}`);
+
+        // Cache tool results for follow-up questions
+        lastToolContext = {
+          timestamp: Date.now(),
+          results: toolOutput,
+          query: prompt
+        };
+
+        // Add assistant's tool call message and tool results to conversation
+        messages.push({ role: "assistant", content: msg.content || "", tool_calls: toolCalls });
+        messages.push({ role: "tool", content: toolOutput });
+
+        // Continue loop to get final response
+        continue;
+      }
+
+      // No tool calls - this is the final response
+      const out = msg.content ?? "";
+      const humanized = stripRoboticPhrases(out);
+      const cleaned = clampAtSentence(sanitizeText(humanized), maxChars);
+
+      // Handle empty content gracefully with a fallback response
+      if (!cleaned) {
+        log("AI: empty content after sanitization, using fallback");
+        // Provide a character-appropriate fallback instead of error
+        const fallbacks = [
+          "The signal fades... ask again.",
+          "Some questions have no answer in the data streams.",
+          "The records are silent on that matter.",
+          "I observe, but find nothing to report.",
+          "*static*"
+        ];
+        return fallbacks[Math.floor(Math.random() * fallbacks.length)];
+      }
+
+      log(`AI: final reply chars=${cleaned.length} intent=${intent}`);
+      return cleaned;
+    }
+
+    throw new Error(`Tool calling loop exceeded max iterations (${maxLoops})`);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function start() {
+  const sock = net.createConnection({ host: CFG.host, port: CFG.port });
+  sock.setNoDelay(true);
+  sock.setKeepAlive(true, 10_000);
+
+  let buf = "";
+  let lastReplyAt = 0;
+
+  // best-effort priming: after we send READ history, we accept the next RESPONSE as the history response
+  let awaitingHistory = false;
+
+  function send(obj) {
+    const line = JSON.stringify(obj);
+    sock.write(line + "\r\n", "utf8");
+    log("OUT:", line);
+  }
+
+  function subscribe(location) {
+    send(
+      makePacket({
+        scope: "chat",
+        func: "QUERY",
+        oper: "SUBSCRIBE",
+        location,
+        nick: CFG.nick,
+        system: CFG.systemName,
+        timeout: -1,
+      })
+    );
+  }
+
+  function write(location, data) {
+    send(
+      makePacket({
+        scope: "chat",
+        func: "QUERY",
+        oper: "WRITE",
+        location,
+        data,
+        lock: 2,
+        timeout: -1,
+      })
+    );
+  }
+
+  function push(location, data) {
+    send(
+      makePacket({
+        scope: "chat",
+        func: "QUERY",
+        oper: "PUSH",
+        location,
+        data,
+        lock: 2,
+        timeout: -1,
+      })
+    );
+  }
+
+  function read(location) {
+    send(
+      makePacket({
+        scope: "chat",
+        func: "QUERY",
+        oper: "READ",
+        location,
+        lock: 1,
+        timeout: -1,
+      })
+    );
+  }
+
+  async function postToChannel(channel, text) {
+    const out = msgObj(text);
+    const locMsg = `channels.${channel}.messages`;
+    const locHist = `channels.${channel}.history`;
+
+    log(`POST: channel=${channel} msgChars=${text.length}`);
+    write(locMsg, out);
+    push(locHist, out);
+
+    touchPresence(channel, CFG.nick);
+
+    const line = `${CFG.nick}: ${sanitizeText(text)}`;
+    if (!isJunkLine(line)) pushContext(channel, line);
+  }
+
+  function parseLines(chunk) {
+    buf += chunk.toString("utf8");
+    const lines = buf.split(/\r?\n/);
+    buf = lines.pop() || "";
+    return lines.map((l) => l.trim()).filter(Boolean);
+  }
+
+  async function handleMention({ from, channel, fullText }) {
+    const now = Date.now();
+    if (now - lastReplyAt < CFG.rateMs) {
+      log(`RATE: skipping reply (rateMs=${CFG.rateMs})`);
+      return;
+    }
+    lastReplyAt = now;
+
+    const mention = `@${CFG.nick}`.toLowerCase();
+    const prompt = fullText.slice(mention.length).trim();
+    log(`MENTION: from="${from}" channel="${channel}" prompt="${prompt}"`);
+
+    // Quick local path (still useful for testing)
+    if (prompt.toLowerCase() === "ping") {
+      await postToChannel(channel, "pong");
+      return;
+    }
+    if (prompt.toLowerCase() === "who") {
+      const humans = countHumansPresent(channel);
+      await postToChannel(channel, `I see ${humans} human(s) here (ttl=${Math.round(CFG.presenceTtlMs / 1000)}s).`);
+      return;
+    }
+
+    // NEW: log intent (so you can tune the regex in real usage)
+    if (isUsageIntent(prompt)) {
+      log(`INTENT: usage-ish prompt detected: "${prompt}"`);
+      // (wiring actual usage-summary injection comes next step)
+    }
+
+    try {
+      const reply = await callOllama({ from, channel, prompt });
+      await postToChannel(channel, reply);
+    } catch (e) {
+      const msg = `AI error: ${String(e?.message ?? e).slice(0, 180)}`;
+      log("AI: ERROR:", msg);
+      await postToChannel(channel, msg);
+    }
+  }
+
+  function handlePacket(obj) {
+    log("IN:", JSON.stringify(obj));
+
+    const func = String(obj?.func ?? "").toUpperCase();
+    if (func === "PING") {
+      send({ scope: "SOCKET", func: "PONG", data: Date.now() });
+      return;
+    }
+    if (func === "ERROR") {
+      log("SERVER ERROR:", obj?.data?.description ?? JSON.stringify(obj));
+      return;
+    }
+
+    if (func === "RESPONSE" && awaitingHistory) {
+      awaitingHistory = false;
+
+      const history = obj?.data;
+      if (Array.isArray(history)) {
+        const slice = history.slice(-CFG.primeHistoryCount);
+        let loaded = 0;
+
+        for (const m of slice) {
+          const n = m?.nick?.name;
+          const s = m?.str;
+          if (typeof n !== "string" || typeof s !== "string") continue;
+
+          const line = `${n}: ${sanitizeText(s)}`;
+          if (isJunkLine(line)) continue;
+
+          pushContext(CFG.channel, line);
+          loaded++;
+        }
+
+        log(`PRIME: loaded ${loaded}/${slice.length} history lines into context (max=${CFG.contextMax})`);
+      } else {
+        log("PRIME: history RESPONSE was not an array");
+      }
+      return;
+    }
+
+    const scope = String(obj?.scope ?? "").toUpperCase();
+    const oper = String(obj?.oper ?? "").toUpperCase();
+    const location = String(obj?.location ?? "");
+
+    if (scope === "CHAT" && location === `channels.${CFG.channel}.messages`) {
+      if (oper === "SUBSCRIBE") {
+        const n = obj?.data?.nick;
+        if (n) {
+          touchPresence(CFG.channel, n);
+          log(`PRESENCE: +${n} (humans=${countHumansPresent(CFG.channel)})`);
+        }
+      } else if (oper === "UNSUBSCRIBE") {
+        const n = obj?.data?.nick;
+        if (n) {
+          removePresence(CFG.channel, n);
+          log(`PRESENCE: -${n} (humans=${countHumansPresent(CFG.channel)})`);
+        }
+      }
+    }
+
+    if (scope === "CHAT" && oper === "WRITE" && location === `channels.${CFG.channel}.messages`) {
+      const from = obj?.data?.nick?.name ?? "unknown";
+      const text = obj?.data?.str;
+
+      if (typeof text !== "string" || !text) return;
+      if (from.toLowerCase() === CFG.nick.toLowerCase()) return;
+
+      touchPresence(CFG.channel, from);
+
+      const line = `${from}: ${sanitizeText(text)}`;
+      if (!isJunkLine(line)) pushContext(CFG.channel, line);
+
+      const mention = `@${CFG.nick}`.toLowerCase();
+      if (text.toLowerCase().startsWith(mention)) {
+        void handleMention({ from, channel: CFG.channel, fullText: text });
+        return;
+      }
+
+      if (CFG.soloModeEnabled) {
+        const humans = countHumansPresent(CFG.channel);
+        if (humans <= 1 && shouldAutoTriggerSolo(text) && soloCooldownOk()) {
+          log(`SOLO: auto-trigger (humans=${humans}) from="${from}" text="${text}"`);
+          void handleMention({ from, channel: CFG.channel, fullText: `@${CFG.nick} ${text}` });
+        }
+      }
+    }
+  }
+
+  sock.on("connect", () => {
+    log(`connected to ${CFG.host}:${CFG.port} channel=${CFG.channel} nick=${CFG.nick}`);
+
+    subscribe(`channels.${CFG.channel}.messages`);
+    subscribe(`channels.${CFG.nick}.messages`);
+
+    touchPresence(CFG.channel, CFG.nick);
+
+    if (CFG.primeHistoryEnabled) {
+      awaitingHistory = true;
+      read(`channels.${CFG.channel}.history`);
+      log(`PRIME: requested channels.${CFG.channel}.history (count=${CFG.primeHistoryCount})`);
+      setTimeout(() => {
+        if (awaitingHistory) {
+          awaitingHistory = false;
+          log("PRIME: timed out waiting for history RESPONSE (continuing without primed context)");
+        }
+      }, 8000);
+    }
+  });
+
+  sock.on("data", (chunk) => {
+    for (const line of parseLines(chunk)) {
+      let obj;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        log("IN (non-json):", line);
+        continue;
+      }
+      handlePacket(obj);
+    }
+  });
+
+  sock.on("error", (e) => log("socket error:", e.message));
+  sock.on("close", () => {
+    log("socket closed; reconnect in 2s");
+    setTimeout(start, 2000);
+  });
+}
+
+start();

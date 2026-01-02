@@ -359,11 +359,12 @@ MRCService.prototype._handleIncoming = function (msg, opts) {
         return;
     }
     var epoch = (typeof msg.ts === 'number') ? msg.ts : Date.now();
-    var display = format('\x01n\x01h[%s]\x01n %s%s\x01n%s',
+    // Note: msg.body already contains the formatted alias as first word (e.g., "|03<|05User|03> message")
+    // So we just display the body directly, not prepending from_user again
+    var display = format('\x01n\x01h[%s]\x01n %s%s',
         nowTimestamp(),
         mention ? '\x01h\x01r! ' : '',
-        ctrlA(msg.from_user || 'System'),
-        ctrlA(': ' + (msg.body || ''))
+        ctrlA(msg.body || '')
     );
     var payload = {
         id: ++this._messageSeq,
@@ -1053,7 +1054,7 @@ MRC.prototype.onServiceSnapshot = function (snapshot) {
 
 MRC.prototype.onServiceMessage = function (payload) {
     if (typeof log === 'function') {
-        try { log('[MRC] onServiceMessage from ' + (payload ? payload.from : 'unknown')); } catch (_) { }
+        try { dbug('[MRC] onServiceMessage from ' + (payload ? payload.from : 'unknown'), 'mrc'); } catch (_) { }
     }
     this._messageLines.push(payload);
     this._messageLines = truncateLines(this._messageLines, this._maxLines);

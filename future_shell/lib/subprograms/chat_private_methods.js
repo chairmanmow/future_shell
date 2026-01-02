@@ -337,7 +337,23 @@ Chat.prototype._cleanup = function(){
 }
 
 Chat.prototype._refresh = function(){
-	this.jsonchat.cycle();
+	// Defensive: check connection health and wrap in try/catch to prevent blocking shell
+	if (this.jsonchat && this.jsonchat.client && this.jsonchat.client.connected) {
+		var client = this.jsonchat.client;
+		// Skip if no data waiting - prevents blocking on partial data
+		if (client.socket && !client.socket.data_waiting) {
+			// No data to read, skip cycle
+		} else {
+			var cycleStart = Date.now();
+			try { this.jsonchat.cycle(); } catch (e) {
+				try { dbug('[Chat._refresh] jsonchat cycle error: ' + e, 'chat'); } catch (_) { }
+			}
+			var cycleDuration = Date.now() - cycleStart;
+			if (cycleDuration > 2000) {
+				try { dbug('[Chat._refresh] jsonchat cycle took ' + cycleDuration + 'ms - potential blocking!', 'chat'); } catch (_) { }
+			}
+		}
+	}
 	this.draw();
 };
 Chat.prototype._renderMessages = function(messages, maxRows, maxMsgWidth, centerWidth, senderGroups) {

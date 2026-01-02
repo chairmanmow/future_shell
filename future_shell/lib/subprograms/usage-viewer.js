@@ -320,7 +320,7 @@ UsageViewer.prototype.ensureFrames = function () {
     var height = host.height;
     // Defensive guard: if host not yet opened or has invalid dimensions, skip this cycle
     if (typeof width !== 'number' || typeof height !== 'number' || width <= 0 || height <= 0) {
-        try { log('[usage-viewer] ensureFrames skipped (host dims invalid w=' + width + ' h=' + height + ')'); } catch (_) { }
+        try { dbug('[usage-viewer] ensureFrames skipped (host dims invalid w=' + width + ' h=' + height + ')', 'usage'); } catch (_) { }
         return;
     }
     if (height < 2) height = 2;
@@ -653,7 +653,7 @@ UsageViewer.prototype._sortPrograms = function (list) {
         return 0;
     });
     if (mode === 'unique') {
-        try { log('[usage-viewer] sorted by unique, first item: ' + (list[0] ? list[0].id + ' (' + list[0].uniqueUsers + ')' : 'none')); } catch (_) { }
+        try { dbug('[usage-viewer] sorted by unique, first item: ' + (list[0] ? list[0].id + ' (' + list[0].uniqueUsers + ')' : 'none'), 'usage'); } catch (_) { }
     }
 };
 
@@ -686,7 +686,7 @@ UsageViewer.prototype.handleKey = function (key) {
     try {
         if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG) {
             var code = (typeof key === 'string' && key.length) ? key.charCodeAt(0) : key;
-            log('[usage-viewer] handleKey start key=' + JSON.stringify(key) + ' code=' + code + ' idx=' + this.programIndex + ' top=' + this.programTop);
+            dbug('[usage-viewer] handleKey start key=' + JSON.stringify(key) + ' code=' + code + ' idx=' + this.programIndex + ' top=' + this.programTop, 'usage');
         }
     } catch (_) { }
     var visible = (this._currentVisiblePrograms) ? this._currentVisiblePrograms() : [];

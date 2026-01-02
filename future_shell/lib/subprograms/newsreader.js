@@ -2023,7 +2023,7 @@ NewsReader.prototype._renderCategoryIcons = function () {
     }
 
     var metrics = this._getIconMetrics();
-    var topPadding = 2;
+    var topPadding = 3;
     var labelHeight = 1;
     var cellW = metrics.width + 4;
     var cellH = metrics.height + labelHeight + 2;
@@ -3266,8 +3266,13 @@ NewsReader.prototype.handleKey = function (key) {
                 this.draw();
             }.bind(this);
             if (this._hotspotMap && this._hotspotMap[key] !== undefined) {
+                var previousIndex = this.selectedIndex;
                 this.selectedIndex = this._hotspotMap[key];
                 this._adjustGridScroll(this._gridLayout, catLength);
+                // Update borders before dissolve
+                if (this._refreshGridSelectionHighlight(previousIndex, this.selectedIndex)) {
+                    this.listFrame && typeof this.listFrame.cycle === 'function' && this.listFrame.cycle();
+                }
                 activateCategory();
                 break;
             }
@@ -3332,8 +3337,13 @@ NewsReader.prototype.handleKey = function (key) {
                 break;
             }
             if (this._hotspotMap && this._hotspotMap[key] !== undefined) {
+                var previousIndex = this.selectedIndex;
                 this.selectedIndex = this._hotspotMap[key];
                 this._adjustGridScroll(this._gridLayout, feedLength);
+                // Update borders before dissolve
+                if (this._refreshGridSelectionHighlight(previousIndex, this.selectedIndex)) {
+                    this.listFrame && typeof this.listFrame.cycle === 'function' && this.listFrame.cycle();
+                }
                 activateFeed();
                 break;
             }

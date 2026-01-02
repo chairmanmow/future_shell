@@ -12,7 +12,7 @@ IconShell.prototype.runExternal = function (fn, opts) {
     var shouldResumeSub = !!(activeBefore && activeBefore.running);
     if (broadcastLaunch && LaunchQueue && typeof LaunchQueue.record === 'function' && programId && programId !== 'unknown') {
         try {
-            log('[launch_queue] recording launch programId=' + programId + ' label=' + (opts.label || programId) + ' icon=' + (opts.icon || ''));
+            dbug('[launch_queue] recording launch programId=' + programId + ' label=' + (opts.label || programId) + ' icon=' + (opts.icon || ''), 'launch');
             LaunchQueue.record({
                 programId: programId,
                 label: opts.label || programId,

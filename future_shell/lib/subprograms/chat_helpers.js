@@ -92,49 +92,79 @@ function getDividerString(side, width, currentMsgTime, lastMsgTime) {
     }
 }
 
-function packAvatars(placements, maxRows) {
+function packAvatars(placements, maxRows, opts) {
     var packed = [];
+    var desiredPadding = (opts && typeof opts.padding === 'number') ? opts.padding : 1;
+
+    function clamp(value, min, max) {
+        if (value < min) return min;
+        if (value > max) return max;
+        return value;
+    }
+
     for (var i = 0; i < placements.length; i++) {
         var req = placements[i];
-        var merged = false;
-        for (var j = 0; j < packed.length; j++) {
-            var p = packed[j];
-            if (p.user === req.user && !(req.y + req.height - 1 < p.y || req.y > p.y + p.height - 1)) {
-                var newStart = Math.min(p.y, req.y);
-                var newEnd = Math.max(p.y + p.height - 1, req.y + req.height - 1);
-                p.y = newStart;
-                p.height = newEnd - newStart + 1;
-                merged = true;
-                break;
-            }
+        if (!req || !req.user) continue;
+        var height = Math.max(1, req.height || 1);
+        var maxTop = Math.max(1, maxRows - height + 1);
+        var minY = (typeof req.minY === 'number') ? req.minY : req.y;
+        var maxY = (typeof req.maxY === 'number') ? req.maxY : req.y;
+        minY = clamp(minY, 1, maxTop);
+        maxY = clamp(maxY, 1, maxTop);
+        if (minY > maxY) {
+            var clamped = clamp(req.y, 1, maxTop);
+            minY = clamped;
+            maxY = clamped;
         }
-        if (!merged) {
-            var bestY = null;
+
+        var best = null;
+        var bestOverlap = null;
+
+        for (var tryY = minY; tryY <= maxY; tryY++) {
+            var curStart = tryY;
+            var curEnd = tryY + height - 1;
+            var overlapRows = 0;
             var minGap = null;
-            var maxY = Math.max(1, maxRows - req.height + 1);
-            for (var tryY = req.y - 3; tryY <= req.y + 3; tryY++) {
-                if (tryY < 1 || tryY > maxY) continue;
-                var overlap = false;
-                for (var j = 0; j < packed.length; j++) {
-                    var p = packed[j];
-                    if (p.user !== req.user && !(tryY + req.height - 1 < p.y || tryY > p.y + p.height - 1)) {
-                        overlap = true;
-                        break;
-                    }
-                }
-                if (!overlap) {
-                    var gap = Math.abs(tryY - req.y);
-                    if (minGap === null || gap < minGap || (gap === minGap && tryY < bestY)) {
-                        minGap = gap;
-                        bestY = tryY;
-                    }
+            var collision = false;
+
+            for (var j = 0; j < packed.length; j++) {
+                var p = packed[j];
+                var pStart = p.y;
+                var pEnd = p.y + p.height - 1;
+                if (curEnd < pStart) {
+                    var gap = pStart - curEnd - 1;
+                    if (minGap === null || gap < minGap) minGap = gap;
+                } else if (pEnd < curStart) {
+                    var gap2 = curStart - pEnd - 1;
+                    if (minGap === null || gap2 < minGap) minGap = gap2;
+                } else {
+                    collision = true;
+                    var overlap = Math.min(curEnd, pEnd) - Math.max(curStart, pStart) + 1;
+                    overlapRows += overlap;
+                    if (minGap === null || -1 < minGap) minGap = -1;
                 }
             }
-            if (bestY === null) {
-                bestY = req.y;
+
+            var dist = Math.abs(tryY - req.y);
+            if (!collision) {
+                var padPenalty = 0;
+                if (minGap !== null && minGap < desiredPadding) {
+                    padPenalty = (desiredPadding - minGap) * 5;
+                }
+                var score = dist * 2 + padPenalty;
+                if (!best || score < best.score || (score == best.score && tryY < best.y)) {
+                    best = { y: tryY, score: score };
+                }
+            } else {
+                var overlapScore = overlapRows * 10 + dist * 2;
+                if (!bestOverlap || overlapScore < bestOverlap.score || (overlapScore == bestOverlap.score && tryY < bestOverlap.y)) {
+                    bestOverlap = { y: tryY, score: overlapScore };
+                }
             }
-            packed.push({ user: req.user, y: bestY, height: req.height });
         }
+
+        var finalY = best ? best.y : (bestOverlap ? bestOverlap.y : clamp(req.y, 1, maxTop));
+        packed.push({ user: req.user, y: finalY, height: height, available: req.available });
     }
     packed.sort(function(a, b) { return a.y - b.y; });
     return packed;

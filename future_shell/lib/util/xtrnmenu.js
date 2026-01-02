@@ -24,7 +24,7 @@ var DYNAMIC_ICON_FILES = (function () {
 			}
 		}
 	} catch (e) {
-		log("[ERR] getting icons for icon dir" + JSON.stringify(e));
+		try { dbug("[ERR] getting icons for icon dir" + JSON.stringify(e), 'icons'); } catch (_) { }
 		// Swallow any FS errors silently; fallback logic will still work
 	}
 	return map;

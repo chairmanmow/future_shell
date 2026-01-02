@@ -21,7 +21,7 @@ var AVATAR_LIB = (function () {
 				return lib;
 			}
 		} catch (e) {
-			try { log('[AvatarsFloat] avatar_lib miss at ' + path + ': ' + e); } catch (_) { }
+			try { dbug('[AvatarsFloat] avatar_lib miss at ' + path + ': ' + e, 'avatar'); } catch (_) { }
 		}
 		return null;
 	}
@@ -32,11 +32,11 @@ var AVATAR_LIB = (function () {
 	for (var i = 0; i < candidates.length; i++) {
 		var lib = attempt(candidates[i], 'avatar_lib.float:' + i);
 		if (lib) {
-			try { log('[AvatarsFloat] avatar_lib loaded from ' + candidates[i]); } catch (_) { }
+			try { dbug('[AvatarsFloat] avatar_lib loaded from ' + candidates[i], 'avatar'); } catch (_) { }
 			return lib;
 		}
 	}
-	try { log('[AvatarsFloat] avatar_lib unavailable after attempts: ' + candidates.join(', ')); } catch (_) { }
+	try { dbug('[AvatarsFloat] avatar_lib unavailable after attempts: ' + candidates.join(', '), 'avatar'); } catch (_) { }
 	return null;
 })();
 

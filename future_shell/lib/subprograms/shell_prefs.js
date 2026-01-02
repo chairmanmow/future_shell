@@ -221,6 +221,52 @@ function _spDefaultScreensaverPrefs() {
     return cfg;
 }
 
+// ============================================================================
+// MRC Color Configuration
+// ============================================================================
+
+// Human-readable foreground color names (0-15)
+var MRC_FG_COLOR_NAMES = [
+    'Black', 'Blue', 'Green', 'Cyan', 'Red', 'Magenta', 'Brown', 'Gray',
+    'Dark Gray', 'Light Blue', 'Light Green', 'Light Cyan', 'Light Red', 'Light Magenta', 'Yellow', 'White'
+];
+
+// Background colors (only 0-7, no ICE/bright colors)
+var MRC_BG_COLOR_NAMES = ['Black', 'Blue', 'Green', 'Cyan', 'Red', 'Magenta', 'Brown', 'Gray'];
+
+// Valid message foreground colors (exclude 0=Black, 1=Blue - illegible on black bg)
+var MRC_MSG_FG_VALID = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+// All foreground colors for bracket/name (0-15)
+var MRC_ALL_FG = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+// Background colors (0-7)
+var MRC_ALL_BG = [0, 1, 2, 3, 4, 5, 6, 7];
+
+function _spDefaultMrcPrefs() {
+    return {
+        bracket_open: '<',      // Opening bracket character
+        bracket_close: '>',     // Closing bracket character
+        bracket_fg: 3,          // Bracket foreground (0-15, default cyan)
+        bracket_bg: 0,          // Bracket background (0-7, default black)
+        name_fg: 15,            // Name foreground (0-15, default white)
+        name_bg: 0,             // Name background (0-7, default black)
+        msg_fg: 7               // Message foreground (2-15, default gray, no black/blue)
+    };
+}
+
+function _mrcGetFgName(color) {
+    color = parseInt(color, 10) || 0;
+    if (color < 0 || color > 15) color = 0;
+    return MRC_FG_COLOR_NAMES[color];
+}
+
+function _mrcGetBgName(color) {
+    color = parseInt(color, 10) || 0;
+    if (color < 0 || color > 7) color = 0;
+    return MRC_BG_COLOR_NAMES[color];
+}
+
 function _spDefaultPrefs() {
     var prefs = {
         version: SHELL_PREFS_VERSION,
@@ -230,7 +276,8 @@ function _spDefaultPrefs() {
             categories: {},
             senders: {}
         },
-        screensaver: _spDefaultScreensaverPrefs()
+        screensaver: _spDefaultScreensaverPrefs(),
+        mrc: _spDefaultMrcPrefs()
     };
     for (var i = 0; i < SHELL_PREFS_DEFAULT_CATEGORIES.length; i++) {
         prefs.notifications.categories[SHELL_PREFS_DEFAULT_CATEGORIES[i]] = { state: 'on', updated: 0 };
@@ -607,6 +654,85 @@ ShellPrefs.prototype._refreshRows = function () {
             disabled: !!saver.disabled
         });
     }
+
+    // MRC Settings section
+    var mrcPrefs = this.preferences.mrc || _spDefaultMrcPrefs();
+    rows.push({
+        type: 'divider',
+        key: 'mrc_divider',
+        label: 'MRC Chat Settings',
+        selectable: false
+    });
+    
+    // Bracket characters
+    rows.push({
+        type: 'mrc_brackets',
+        key: 'mrc_brackets',
+        label: 'Bracket Characters',
+        open: mrcPrefs.bracket_open || '<',
+        close: mrcPrefs.bracket_close || '>',
+        selectable: true
+    });
+    
+    // Bracket foreground color
+    rows.push({
+        type: 'mrc_color_fg',
+        key: 'mrc_bracket_fg',
+        label: 'Bracket Foreground',
+        value: mrcPrefs.bracket_fg || 3,
+        colorList: MRC_ALL_FG,
+        selectable: true
+    });
+    
+    // Bracket background color
+    rows.push({
+        type: 'mrc_color_bg',
+        key: 'mrc_bracket_bg',
+        label: 'Bracket Background',
+        value: mrcPrefs.bracket_bg || 0,
+        colorList: MRC_ALL_BG,
+        selectable: true
+    });
+    
+    // Name foreground color
+    rows.push({
+        type: 'mrc_color_fg',
+        key: 'mrc_name_fg',
+        label: 'Name Foreground',
+        value: mrcPrefs.name_fg || 15,
+        colorList: MRC_ALL_FG,
+        selectable: true
+    });
+    
+    // Name background color
+    rows.push({
+        type: 'mrc_color_bg',
+        key: 'mrc_name_bg',
+        label: 'Name Background',
+        value: mrcPrefs.name_bg || 0,
+        colorList: MRC_ALL_BG,
+        selectable: true
+    });
+    
+    // Message foreground color (no black/blue)
+    rows.push({
+        type: 'mrc_color_fg',
+        key: 'mrc_msg_fg',
+        label: 'Message Foreground',
+        value: mrcPrefs.msg_fg || 7,
+        colorList: MRC_MSG_FG_VALID,
+        selectable: true
+    });
+    
+    // Preview of what the alias looks like
+    rows.push({
+        type: 'mrc_preview',
+        key: 'mrc_alias_preview',
+        label: 'Preview',
+        value: this._buildMrcAliasPreview(),
+        selectable: false
+    });
+
     if (!rows.length) {
         rows = [{ type: 'empty', key: 'empty', label: 'No preferences available', state: 'on', selectable: false }];
     }
@@ -741,6 +867,26 @@ ShellPrefs.prototype._formatRowText = function (row, isSelected) {
             if (textLabel.length > width) textLabel = textLabel.substr(0, width);
             return textLabel;
         }
+        case 'mrc_brackets': {
+            var bracketsVal = '[' + (row.open || '<') + ' ' + (row.close || '>') + ']';
+            if (row.editing) {
+                var bracketBuf = (row.editBuffer !== undefined && row.editBuffer !== null) ? String(row.editBuffer) : '';
+                bracketsVal = '> ' + bracketBuf + '_';
+            }
+            return _spFormatLabelValue(row.label || row.key || '', bracketsVal, width);
+        }
+        case 'mrc_color_fg': {
+            var fgName = _mrcGetFgName(row.value);
+            return _spFormatLabelValue(row.label || row.key || '', '[' + fgName + ']', width);
+        }
+        case 'mrc_color_bg': {
+            var bgName = _mrcGetBgName(row.value);
+            return _spFormatLabelValue(row.label || row.key || '', '[' + bgName + ']', width);
+        }
+        case 'mrc_preview': {
+            var previewVal = row.value || '(not set)';
+            return _spFormatLabelValue(row.label || row.key || '', previewVal, width);
+        }
         case 'empty':
             return row.label || '';
         case 'global':
@@ -767,6 +913,14 @@ ShellPrefs.prototype._resolveRowAttr = function (row, isSelected) {
             if (row.disabled) return this.paletteAttr('SAVER_ROW_DISABLED', base);
             if (isSelected) return this.paletteAttr('SAVER_ROW_ACTIVE', base);
             return this.paletteAttr(row.enabled ? 'SAVER_ROW_ENABLED' : 'SAVER_ROW_DISABLED', base);
+        case 'mrc_brackets':
+            if (row.editing) return this.paletteAttr('NUMBER_ROW_ACTIVE', base);
+            return this.paletteAttr(isSelected ? 'NUMBER_ROW_ACTIVE' : 'NUMBER_ROW', base);
+        case 'mrc_color_fg':
+        case 'mrc_color_bg':
+            return this.paletteAttr(isSelected ? 'TOGGLE_ROW_ACTIVE' : 'TOGGLE_ROW', base);
+        case 'mrc_preview':
+            return this.paletteAttr('ROW_NORMAL', base);
         case 'button_row':
         case 'button_spacer':
             return this.paletteAttr('BUTTON_ROW', base);
@@ -1177,6 +1331,118 @@ ShellPrefs.prototype._commitEditor = function () {
             this._updateStatus('Switch interval set to ' + interval + ' seconds.');
         }
     }
+    if (data.type === 'mrc_brackets') {
+        // Parse bracket input (expects "X Y" format where X is open, Y is close)
+        var parts = trimmed.split(/\s+/);
+        var openBracket = parts[0] || '<';
+        var closeBracket = parts[1] || '>';
+        // Only allow single characters
+        if (openBracket.length > 1) openBracket = openBracket.charAt(0);
+        if (closeBracket.length > 1) closeBracket = closeBracket.charAt(0);
+        this._setMrcPref('bracket_open', openBracket);
+        this._setMrcPref('bracket_close', closeBracket);
+        this._refreshRows();
+        this._focusRowByKey('mrc_brackets');
+        this._renderList();
+        this._updateStatus('Brackets set to ' + openBracket + ' ' + closeBracket);
+    }
+};
+
+/**
+ * Start editing bracket characters
+ */
+ShellPrefs.prototype._startMrcBracketsEditor = function (row) {
+    if (!row || row.type !== 'mrc_brackets') return;
+    var buffer = (row.open || '<') + ' ' + (row.close || '>');
+    row.editing = true;
+    row.editBuffer = buffer;
+    this._editor = {
+        type: 'mrc_brackets',
+        rowKey: row.key,
+        buffer: buffer,
+        allowNever: false
+    };
+    this._renderList();
+    this._updateStatus('Enter open and close bracket chars (e.g., "[ ]"), then Enter.');
+};
+
+/**
+ * Cycle through foreground colors for MRC settings
+ */
+ShellPrefs.prototype._cycleMrcColorFg = function (row) {
+    if (!row) return;
+    var colorList = row.colorList || MRC_ALL_FG;
+    var currentValue = row.value || 0;
+    var currentIdx = colorList.indexOf(currentValue);
+    if (currentIdx === -1) currentIdx = 0;
+    var nextIdx = (currentIdx + 1) % colorList.length;
+    var newColor = colorList[nextIdx];
+    
+    // Map row key to pref key
+    var prefKey = null;
+    switch (row.key) {
+        case 'mrc_bracket_fg': prefKey = 'bracket_fg'; break;
+        case 'mrc_name_fg': prefKey = 'name_fg'; break;
+        case 'mrc_msg_fg': prefKey = 'msg_fg'; break;
+    }
+    if (!prefKey) return;
+    
+    this._setMrcPref(prefKey, newColor);
+    this._refreshRows();
+    this._focusRowByKey(row.key);
+    this._renderList();
+    this._updateStatus(row.label + ' -> ' + _mrcGetFgName(newColor));
+};
+
+/**
+ * Cycle through background colors for MRC settings
+ */
+ShellPrefs.prototype._cycleMrcColorBg = function (row) {
+    if (!row) return;
+    var colorList = row.colorList || MRC_ALL_BG;
+    var currentValue = row.value || 0;
+    var currentIdx = colorList.indexOf(currentValue);
+    if (currentIdx === -1) currentIdx = 0;
+    var nextIdx = (currentIdx + 1) % colorList.length;
+    var newColor = colorList[nextIdx];
+    
+    // Map row key to pref key
+    var prefKey = null;
+    switch (row.key) {
+        case 'mrc_bracket_bg': prefKey = 'bracket_bg'; break;
+        case 'mrc_name_bg': prefKey = 'name_bg'; break;
+    }
+    if (!prefKey) return;
+    
+    this._setMrcPref(prefKey, newColor);
+    this._refreshRows();
+    this._focusRowByKey(row.key);
+    this._renderList();
+    this._updateStatus(row.label + ' -> ' + _mrcGetBgName(newColor));
+};
+
+/**
+ * Set a single MRC preference value
+ */
+ShellPrefs.prototype._setMrcPref = function (key, value) {
+    if (!this.preferences.mrc) {
+        this.preferences.mrc = _spDefaultMrcPrefs();
+    }
+    this.preferences.mrc[key] = value;
+    this._touch();
+    this.save();
+};
+
+/**
+ * Build a preview string showing what the alias will look like
+ */
+ShellPrefs.prototype._buildMrcAliasPreview = function () {
+    var prefs = this.preferences.mrc || _spDefaultMrcPrefs();
+    var username = this.userAlias || 'YourName';
+    var open = prefs.bracket_open || '<';
+    var close = prefs.bracket_close || '>';
+    // Just show a text representation, not actual color codes
+    return open + username + close;
 };
 
 ShellPrefs.prototype._handleEditorKey = function (key) {
@@ -1193,7 +1459,10 @@ ShellPrefs.prototype._handleEditorKey = function (key) {
         var buff = this._editor.buffer || '';
         this._editor.buffer = buff.length ? buff.substr(0, buff.length - 1) : '';
     } else if (typeof key === 'string' && key.length === 1) {
-        if (/[0-9]/.test(key)) {
+        // For bracket editor, allow any printable character
+        if (this._editor.type === 'mrc_brackets') {
+            this._editor.buffer = (this._editor.buffer || '') + key;
+        } else if (/[0-9]/.test(key)) {
             this._editor.buffer = (this._editor.buffer || '') + key;
         } else if (this._editor.allowNever && /[nN]/.test(key)) {
             this._editor.buffer = '';
@@ -1204,7 +1473,7 @@ ShellPrefs.prototype._handleEditorKey = function (key) {
         return false;
     }
     var row = this._currentRow();
-    if (row && row.type === 'number') {
+    if (row && (row.type === 'number' || row.type === 'mrc_brackets')) {
         row.editBuffer = this._editor.buffer;
     }
     this._renderList();
@@ -1282,6 +1551,15 @@ ShellPrefs.prototype._toggleSelection = function () {
                 break;
             }
             this._toggleSaver(row.key);
+            break;
+        case 'mrc_brackets':
+            this._startMrcBracketsEditor(row);
+            break;
+        case 'mrc_color_fg':
+            this._cycleMrcColorFg(row);
+            break;
+        case 'mrc_color_bg':
+            this._cycleMrcColorBg(row);
             break;
         default:
             this._updateStatus('No action available for this item.');
@@ -1555,6 +1833,95 @@ ShellPrefs.prototype._cleanup = function () {
 ShellPrefs.loadForUser = function (details) {
     details = details || {};
     return new ShellPrefs(details);
+};
+
+// ============================================================================
+// MRC Preferences API
+// ============================================================================
+
+/**
+ * Get MRC preferences object
+ * @returns {object} { bracket_open, bracket_close, bracket_fg, bracket_bg, name_fg, name_bg, msg_fg }
+ */
+ShellPrefs.prototype.getMrcPrefs = function () {
+    if (!this.preferences.mrc) {
+        this.preferences.mrc = _spDefaultMrcPrefs();
+    }
+    return _spDeepClone(this.preferences.mrc);
+};
+
+/**
+ * Get the user's formatted MRC alias (with color codes).
+ * Generated from current preferences - NOT stored directly.
+ * Format: |BB|FFopen|BB|FFusername|BB|FFclose
+ * Where BB is background (16+bg) and FF is foreground
+ * @returns {string} Formatted alias like |16|03<|16|15Username|16|03>
+ */
+ShellPrefs.prototype.getMrcAlias = function () {
+    if (!this.preferences.mrc) {
+        this.preferences.mrc = _spDefaultMrcPrefs();
+    }
+    return this._generateMrcAlias();
+};
+
+/**
+ * Get the user's MRC message color
+ * @returns {number} Color code 2-15 (default 7, excludes black/blue)
+ */
+ShellPrefs.prototype.getMrcMsgColor = function () {
+    if (!this.preferences.mrc) {
+        this.preferences.mrc = _spDefaultMrcPrefs();
+    }
+    var color = this.preferences.mrc.msg_fg;
+    if (typeof color !== 'number' || color < 2 || color > 15 || color === 1) {
+        return 7; // default gray
+    }
+    return color;
+};
+
+/**
+ * Set the user's MRC message foreground color
+ * @param {number} color - Color code 2-15 (no black/blue)
+ */
+ShellPrefs.prototype.setMrcMsgColor = function (color) {
+    if (!this.preferences.mrc) {
+        this.preferences.mrc = _spDefaultMrcPrefs();
+    }
+    color = parseInt(color, 10) || 7;
+    // Exclude black (0) and blue (1) - illegible on black background
+    if (color < 2) color = 2;
+    if (color > 15) color = 15;
+    this.preferences.mrc.msg_fg = color;
+    this._touch();
+    this.save();
+};
+
+/**
+ * Internal: Generate formatted MRC alias from current preferences.
+ * Uses pipe codes: |XX for foreground (00-15), |XX for background (16-23)
+ * @returns {string} Formatted alias with color codes
+ */
+ShellPrefs.prototype._generateMrcAlias = function () {
+    var prefs = this.preferences.mrc || _spDefaultMrcPrefs();
+    var username = (this.userAlias || 'guest').replace(/\s/g, '_');
+    
+    var bracketOpen = prefs.bracket_open || '<';
+    var bracketClose = prefs.bracket_close || '>';
+    var bracketFg = prefs.bracket_fg || 3;
+    var bracketBg = prefs.bracket_bg || 0;
+    var nameFg = prefs.name_fg || 15;
+    var nameBg = prefs.name_bg || 0;
+    
+    // Pipe codes: 00-15 = foreground, 16-23 = background (16 + bg color)
+    var bracketBgCode = 16 + bracketBg;
+    var nameBgCode = 16 + nameBg;
+    
+    // Format: |bg|fg<|bg|fgUsername|bg|fg>
+    return format('|%02d|%02d%s|%02d|%02d%s|%02d|%02d%s',
+        bracketBgCode, bracketFg, bracketOpen,
+        nameBgCode, nameFg, username,
+        bracketBgCode, bracketFg, bracketClose
+    );
 };
 
 if (typeof registerModuleExports === 'function') {

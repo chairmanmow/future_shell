@@ -80,15 +80,15 @@ function Chat(jsonchat, opts) {
                     try { if (typeof bbs !== 'undefined') { if (!bbs.mods) bbs.mods = {}; if (!bbs.mods.avatar_lib) bbs.mods.avatar_lib = lib; } } catch (_) { }
                     return lib;
                 }
-            } catch (e) { try { log('[Chat] avatar_lib miss ' + path + ': ' + e); } catch (_) { } }
+            } catch (e) { try { dbug('[Chat] avatar_lib miss ' + path + ': ' + e, 'chat'); } catch (_) { } }
             return null;
         }
         var candidates = ['avatar_lib.js', '../exec/load/avatar_lib.js', '../../exec/load/avatar_lib.js'];
         for (var i = 0; i < candidates.length; i++) {
             var lib = attempt(candidates[i], 'avatar_lib.chat:' + i);
-            if (lib) { try { log('[Chat] avatar_lib loaded from ' + candidates[i]); } catch (_) { } return lib; }
+            if (lib) { try { dbug('[Chat] avatar_lib loaded from ' + candidates[i], 'chat'); } catch (_) { } return lib; }
         }
-        try { log('[Chat] avatar_lib unavailable after attempts: ' + candidates.join(', ')); } catch (_) { }
+        try { dbug('[Chat] avatar_lib unavailable after attempts: ' + candidates.join(', '), 'chat'); } catch (_) { }
         return null;
     })();
     if (typeof this.registerColors === 'function') {
@@ -409,7 +409,7 @@ Chat.prototype.handleKey = function (key) {
 
     if (key === 'F2' || key === '\x02' || (rosterKey && key === rosterKey)) {
         if (typeof log === 'function') {
-            try { log('[Chat] handleKey roster trigger via F2 combo', 'chat'); } catch (_) { }
+            try { dbug('[Chat] handleKey roster trigger via F2 combo', 'chat'); } catch (_) { }
         }
         this._showRosterModal();
         return;
@@ -535,7 +535,7 @@ Chat.prototype.restoreHotspots = function () {
         if (typeof this.draw === 'function') this.draw();
     } catch (err) {
         if (typeof log === 'function') {
-            try { log('[Chat] restoreHotspots error: ' + err); } catch (_) { }
+            try { dbug('[Chat] restoreHotspots error: ' + err, 'chat'); } catch (_) { }
         }
     }
 };
@@ -720,7 +720,7 @@ Chat.prototype._fetchJsonChatRoster = function () {
             if (results.length) break;
         } catch (whoErr) {
             if (typeof log === 'function') {
-                try { log('[Chat] jsonchat who failed for ' + location + ': ' + whoErr, 'chat'); } catch (_) { }
+                try { dbug('[Chat] jsonchat who failed for ' + location + ': ' + whoErr, 'chat'); } catch (_) { }
             }
         }
     }
@@ -774,7 +774,7 @@ Chat.prototype._getRosterEntries = function () {
         jsonRoster = this._fetchJsonChatRoster();
     } catch (_jsonErr) {
         if (typeof log === 'function') {
-            try { log('[Chat] _fetchJsonChatRoster threw: ' + _jsonErr, 'chat'); } catch (_) { }
+            try { dbug('[Chat] _fetchJsonChatRoster threw: ' + _jsonErr, 'chat'); } catch (_) { }
         }
         jsonRoster = [];
     }
@@ -791,7 +791,7 @@ Chat.prototype._getRosterEntries = function () {
                 if (!Object.prototype.hasOwnProperty.call(sourceCounts, key)) continue;
                 breakdown.push(key + ':' + sourceCounts[key]);
             }
-            log('[Chat] roster sources => ' + (breakdown.length ? breakdown.join(', ') : 'none') + ' total=' + entries.length, 'chat');
+            dbug('[Chat] roster sources => ' + (breakdown.length ? breakdown.join(', ') : 'none') + ' total=' + entries.length, 'chat');
         } catch (_) { }
     }
 
@@ -805,11 +805,11 @@ Chat.prototype._getRosterEntries = function () {
 
 Chat.prototype._showRosterModal = function () {
     if (typeof log === 'function') {
-        try { log('[Chat] _showRosterModal invoked', 'chat'); } catch (_) { }
+        try { dbug('[Chat] _showRosterModal invoked', 'chat'); } catch (_) { }
     }
     if (typeof Modal !== 'function') {
         if (typeof log === 'function') {
-            try { log('[Chat] Modal constructor unavailable; falling back to status text', 'chat'); } catch (_) { }
+            try { dbug('[Chat] Modal constructor unavailable; falling back to status text', 'chat'); } catch (_) { }
         }
         this._statusText = 'Feature unavailable';
         this._lastStatusUpdateTs = Date.now();
@@ -823,13 +823,13 @@ Chat.prototype._showRosterModal = function () {
         roster = this._getRosterEntries();
     } catch (err) {
         if (typeof log === 'function') {
-            try { log('[Chat] roster gather failed: ' + err, 'chat'); } catch (_) { }
+            try { dbug('[Chat] roster gather failed: ' + err, 'chat'); } catch (_) { }
         }
         roster = [];
     }
 
     if (typeof log === 'function') {
-        try { log('[Chat] roster entry count => ' + roster.length, 'chat'); } catch (_) { }
+        try { dbug('[Chat] roster entry count => ' + roster.length, 'chat'); } catch (_) { }
     }
 
     var body;
@@ -872,7 +872,7 @@ Chat.prototype._showRosterModal = function () {
             ],
             onClose: function () {
                 if (typeof log === 'function') {
-                    try { log('[Chat] roster modal closed', 'chat'); } catch (_) { }
+                    try { dbug('[Chat] roster modal closed', 'chat'); } catch (_) { }
                 }
                 self._activeRosterModal = null;
                 self._needsRedraw = true;
@@ -885,12 +885,12 @@ Chat.prototype._showRosterModal = function () {
             }
         });
         if (typeof log === 'function') {
-            try { log('[Chat] roster modal created', 'chat'); } catch (_) { }
+            try { dbug('[Chat] roster modal created', 'chat'); } catch (_) { }
         }
     } catch (modalErr) {
         if (typeof log === 'function') {
             var detail = modalErr && modalErr.stack ? modalErr.stack : modalErr;
-            try { log('[Chat] roster modal creation failed: ' + detail, 'chat'); } catch (_) { }
+            try { dbug('[Chat] roster modal creation failed: ' + detail, 'chat'); } catch (_) { }
         }
         this._activeRosterModal = null;
         this._registerControlHotspots();
@@ -903,7 +903,7 @@ Chat.prototype._showRosterModal = function () {
 
 Chat.prototype._clearControlHotspots = function (opts) {
     if (typeof log === 'function') {
-        try { log('[Chat] clearing control hotspots', 'chat'); } catch (_) { }
+        try { dbug('[Chat] clearing control hotspots', 'chat'); } catch (_) { }
     }
     if (this.hotspots) {
         if (opts && opts.hard) this.hotspots.clear();
@@ -967,14 +967,14 @@ Chat.prototype._registerControlHotspots = function () {
     }
     if (this.hotspots) this.hotspots.set(defs);
     if (typeof log === 'function') {
-        try { log('[Chat] registered control hotspots => ' + registered, 'chat'); } catch (_) { }
+        try { dbug('[Chat] registered control hotspots => ' + registered, 'chat'); } catch (_) { }
     }
     this._controlHotspotsDirty = false;
 };
 
 Chat.prototype._activateControlAction = function (action) {
     if (typeof log === 'function') {
-        try { log('[Chat] _activateControlAction action=' + action, 'chat'); } catch (_) { }
+        try { dbug('[Chat] _activateControlAction action=' + action, 'chat'); } catch (_) { }
     }
     if (!action) return false;
     switch (action) {
@@ -991,7 +991,7 @@ Chat.prototype._activateControlAction = function (action) {
 
 Chat.prototype._handleControlHotkey = function (key) {
     if (typeof log === 'function') {
-        try { log('[Chat] _handleControlHotkey key=' + JSON.stringify(key) + ' mapHit=' + (this._controlButtonHotkeyMap && Object.prototype.hasOwnProperty.call(this._controlButtonHotkeyMap, key)), 'chat'); } catch (_) { }
+        try { dbug('[Chat] _handleControlHotkey key=' + JSON.stringify(key) + ' mapHit=' + (this._controlButtonHotkeyMap && Object.prototype.hasOwnProperty.call(this._controlButtonHotkeyMap, key)), 'chat'); } catch (_) { }
     }
     if (!key || !this._controlButtonHotkeyMap) return false;
     if (!Object.prototype.hasOwnProperty.call(this._controlButtonHotkeyMap, key)) return false;
@@ -1054,7 +1054,7 @@ Chat.prototype.cycle = function () {
         if (actualAttr !== this._expectedHeaderAttr) {
             if (this._lastHeaderAttrLog !== actualAttr) {
                 if (typeof log === 'function') {
-                    try { log('[Chat] header attr drift: expected=' + this._expectedHeaderAttr + ' actual=' + actualAttr, 'chat'); } catch (_) { }
+                    try { dbug('[Chat] header attr drift: expected=' + this._expectedHeaderAttr + ' actual=' + actualAttr, 'chat'); } catch (_) { }
                 }
                 this._lastHeaderAttrLog = actualAttr;
             }
@@ -1063,8 +1063,24 @@ Chat.prototype.cycle = function () {
         }
     }
     this._ensureFrames();
+    // Defensive: check connection health before cycling to avoid 30s blocking socket reads
     if (this.jsonchat && typeof this.jsonchat.cycle === 'function') {
-        this.jsonchat.cycle();
+        var client = this.jsonchat.client;
+        if (client && client.connected) {
+            // Skip if no data waiting - prevents blocking on partial data
+            if (client.socket && !client.socket.data_waiting) {
+                // No data to read, skip cycle
+            } else {
+                var cycleStart = Date.now();
+                try { this.jsonchat.cycle(); } catch (e) {
+                    try { log(LOG_WARNING, '[Chat.cycle] jsonchat cycle error: ' + e); } catch (_) { }
+                }
+                var cycleDuration = Date.now() - cycleStart;
+                if (cycleDuration > 2000) {
+                    try { log(LOG_WARNING, '[Chat.cycle] jsonchat cycle took ' + cycleDuration + 'ms - potential blocking!'); } catch (_) { }
+                }
+            }
+        }
     }
     var now = Date.now();
     if (!this.input || !this.input.length) {
@@ -1726,86 +1742,51 @@ Chat.prototype._writeCrumbMessage = function (text) {
 Chat.prototype._renderAvatars = function (groups) {
     if (!this.leftAvatarFrame || !this.rightAvatarFrame || groups.length === 0) return;
 
-    var aggregated = { left: {}, right: {} };
-
+    var placements = { left: [], right: [] };
     for (var g = 0; g < groups.length; g++) {
         var group = groups[g];
         if (!group || !group.sender || group.renderEnd < group.renderStart) continue;
 
-        var side = group.side === 'left' ? 'left' : 'right';
-        var frame = (side === 'left') ? this.leftAvatarFrame : this.rightAvatarFrame;
-        if (!frame || frame.height <= 0) continue;
-
-        var frameHeight = frame.height;
-        var startY = Math.max(1, Math.min(group.renderStart || 1, frameHeight));
-        var endY = Math.max(startY, Math.min(group.renderEnd || startY, frameHeight));
-        var height = Math.max(1, endY - startY + 1);
-        var center = startY + ((height - 1) / 2);
-
-        if (!aggregated[side][group.sender]) {
-            aggregated[side][group.sender] = {
-                rangeStart: startY,
-                rangeEnd: endY,
-                weightSum: 0,
-                weightTotal: 0
-            };
-        }
-
-        var bucket = aggregated[side][group.sender];
-        bucket.rangeStart = Math.min(bucket.rangeStart, startY);
-        bucket.rangeEnd = Math.max(bucket.rangeEnd, endY);
-        bucket.weightSum += center * height;
-        bucket.weightTotal += height;
-    }
-
-    var placements = { left: [], right: [] };
-    var sides = ['left', 'right'];
-    for (var s = 0; s < sides.length; s++) {
-        var sideKey = sides[s];
+        var sideKey = group.side === 'left' ? 'left' : 'right';
         var frameRef = (sideKey === 'left') ? this.leftAvatarFrame : this.rightAvatarFrame;
         if (!frameRef || frameRef.height <= 0) continue;
 
         var frameHeightRef = frameRef.height;
-        var users = Object.keys(aggregated[sideKey]);
-        users.sort(function (a, b) {
-            return aggregated[sideKey][a].rangeStart - aggregated[sideKey][b].rangeStart;
-        });
+        var rangeStart = Math.max(1, Math.min(group.renderStart || 1, frameHeightRef));
+        var rangeEnd = Math.max(rangeStart, Math.min(group.renderEnd || rangeStart, frameHeightRef));
+        var rangeHeight = Math.max(1, rangeEnd - rangeStart + 1);
+        var weightedCenter = rangeStart + ((rangeHeight - 1) / 2);
 
-        for (var u = 0; u < users.length; u++) {
-            var user = users[u];
-            var info = aggregated[sideKey][user];
-            var rangeStart = Math.max(1, Math.min(info.rangeStart, frameHeightRef));
-            var rangeEnd = Math.max(rangeStart, Math.min(info.rangeEnd, frameHeightRef));
-            var rangeHeight = Math.max(1, rangeEnd - rangeStart + 1);
-            var weightedCenter = info.weightTotal
-                ? (info.weightSum / info.weightTotal)
-                : rangeStart + ((rangeHeight - 1) / 2);
+        var avatarMaxHeight = this.avatarHeight || rangeHeight;
+        var targetHeight = Math.max(1, Math.min(avatarMaxHeight, frameHeightRef));
 
-            if (weightedCenter < rangeStart) weightedCenter = rangeStart;
-            if (weightedCenter > rangeEnd) weightedCenter = rangeEnd;
-
-            var avatarMaxHeight = this.avatarHeight || rangeHeight;
-            var targetHeight = Math.max(1, Math.min(rangeHeight, avatarMaxHeight));
-            targetHeight = Math.min(targetHeight, frameHeightRef);
-
-            var minTop = Math.max(1, Math.min(rangeStart, frameHeightRef - targetHeight + 1));
-            var maxTop = Math.max(minTop, Math.min(rangeEnd - targetHeight + 1, frameHeightRef - targetHeight + 1));
-            var desiredTop = Math.round(weightedCenter - ((targetHeight - 1) / 2));
-            if (desiredTop < minTop) desiredTop = minTop;
-            if (desiredTop > maxTop) desiredTop = maxTop;
-
-            placements[sideKey].push({
-                user: user,
-                y: desiredTop,
-                height: targetHeight,
-                available: rangeHeight
-            });
+        var minTop = rangeStart - targetHeight + 1;
+        var maxTop = rangeEnd;
+        minTop = Math.max(1, Math.min(minTop, frameHeightRef - targetHeight + 1));
+        maxTop = Math.min(frameHeightRef - targetHeight + 1, maxTop);
+        if (minTop > maxTop) {
+            minTop = Math.max(1, Math.min(rangeStart, frameHeightRef - targetHeight + 1));
+            maxTop = Math.max(minTop, Math.min(frameHeightRef - targetHeight + 1, rangeEnd));
         }
+
+        var desiredTop = Math.round(weightedCenter - ((targetHeight - 1) / 2));
+        if (desiredTop < minTop) desiredTop = minTop;
+        if (desiredTop > maxTop) desiredTop = maxTop;
+
+        placements[sideKey].push({
+            key: sideKey + ':' + g,
+            user: group.sender,
+            y: desiredTop,
+            height: targetHeight,
+            minY: minTop,
+            maxY: maxTop,
+            available: frameHeightRef
+        });
     }
 
     var avatarLib = this._avatarLib; // reuse shared instance
-    var leftPacked = packAvatars(placements.left, this.leftAvatarFrame.height);
-    var rightPacked = packAvatars(placements.right, this.rightAvatarFrame.height);
+    var leftPacked = packAvatars(placements.left, this.leftAvatarFrame.height, { padding: 1 });
+    var rightPacked = packAvatars(placements.right, this.rightAvatarFrame.height, { padding: 1 });
 
     this._drawAvatarSet(this.leftAvatarFrame, leftPacked, avatarLib);
     this._drawAvatarSet(this.rightAvatarFrame, rightPacked, avatarLib);
@@ -1814,14 +1795,16 @@ Chat.prototype._renderAvatars = function (groups) {
 Chat.prototype._drawAvatarSet = function (frame, avatarList, avatarLib) {
     if (!frame || !Array.isArray(avatarList)) return;
 
-    var drawnUsers = {};
+    var drawnKeys = {};
     var frameWidth = frame.width;
     var artWidth = Math.min(this.avatarWidth || frameWidth, frameWidth);
     var artHeight = this.avatarHeight || frame.height;
 
     for (var i = 0; i < avatarList.length; i++) {
         var placement = avatarList[i];
-        if (!placement || !placement.user || drawnUsers[placement.user]) continue;
+        if (!placement || !placement.user) continue;
+        var placementKey = placement.key || (placement.user + ':' + i);
+        if (drawnKeys[placementKey]) continue;
 
         var availableHeight = placement.available || placement.height;
         var frameRemaining = Math.max(1, frame.height - placement.y + 1);
@@ -1859,7 +1842,7 @@ Chat.prototype._drawAvatarSet = function (frame, avatarList, avatarLib) {
             frame.putmsg(label.substr(0, frameWidth));
         }
 
-        drawnUsers[placement.user] = true;
+        drawnKeys[placementKey] = true;
     }
 };
 

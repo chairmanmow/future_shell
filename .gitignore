@@ -1,7 +1,6 @@
 # Ignore config, text, and ini files
 *.cfg
 *.txt
-*.ini
 
 # Ignore specific JS files (add more as needed)
 customlogin.js
@@ -19,3 +18,8 @@ future_signup/*
 customlogoff.js
 customlogin.js
 customlogon.js
+doorparty.js
+rlogin-proxy.js
+rloginhack.js
+future_shell/lib/3rdp/mrc/*.ini
+!future_shell/lib/3rdp/mrc/*.example.ini

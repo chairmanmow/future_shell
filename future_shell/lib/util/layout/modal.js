@@ -207,7 +207,7 @@ Modal.prototype._recomputeGeometry = function () {
     var opts = this.options;
     if (!this.parentFrame || typeof this.parentFrame.width !== 'number' || this.parentFrame.width < 5) {
         // Fallback to full screen safe parent if current invalid
-        try { if (ICSH_MODAL_DEBUG) log('[MODAL GEO] invalid parent, using fullscreen fallback'); } catch (_) { }
+    try { if (ICSH_MODAL_DEBUG && typeof dbug === 'function') dbug('[MODAL GEO] invalid parent, using fullscreen fallback', 'modal'); } catch (_) { }
         this.parentFrame = new Frame(1, 1, console.screen_columns, console.screen_rows, this.attr);
         try { this.parentFrame.open(); } catch (_) { }
         this._ownsParent = true;
@@ -230,7 +230,7 @@ Modal.prototype._recomputeGeometry = function () {
     if (coords.y > maxY) coords.y = Math.max(this.parentFrame.y, maxY);
     this.x = coords.x;
     this.y = coords.y;
-    try { if (ICSH_MODAL_DEBUG) log('[MODAL GEO] parent ' + this.parentFrame.x + ',' + this.parentFrame.y + ' ' + this.parentFrame.width + 'x' + this.parentFrame.height + ' -> modal ' + this.x + ',' + this.y + ' ' + this.width + 'x' + this.height); } catch (_) { }
+    try { if (ICSH_MODAL_DEBUG && typeof dbug === 'function') dbug('[MODAL GEO] parent ' + this.parentFrame.x + ',' + this.parentFrame.y + ' ' + this.parentFrame.width + 'x' + this.parentFrame.height + ' -> modal ' + this.x + ',' + this.y + ' ' + this.width + 'x' + this.height, 'modal'); } catch (_) { }
 };
 
 Modal.prototype._autoWidth = function () {
@@ -1046,7 +1046,7 @@ Modal.prototype._emit = function (value) {
 
 Modal.prototype.close = function (result) {
     if (this._closed) return;
-    try { if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG) log('[MODAL close] type=' + this.type + ' title=' + (this.options && this.options.title) + ' result=' + result); } catch (_) { }
+    try { if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG && typeof dbug === 'function') dbug('[MODAL close] type=' + this.type + ' title=' + (this.options && this.options.title) + ' result=' + result, 'modal'); } catch (_) { }
     this._closed = true;
     this._open = false;
     if (this._autoCloseTimer) {
@@ -1141,8 +1141,8 @@ Modal.getActive = function () {
 };
 
 Modal.handleGlobalKey = function (key) {
-    log('[MODAL handleGlobalKey] key=' + JSON.stringify(key));
-    try { if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG) log('[MODAL dispatch] key=' + JSON.stringify(key)); } catch (_) { }
+    try { if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG && typeof dbug === 'function') dbug('[MODAL handleGlobalKey] key=' + JSON.stringify(key), 'modal'); } catch (_) { }
+    try { if (typeof ICSH_MODAL_DEBUG !== 'undefined' && ICSH_MODAL_DEBUG && typeof dbug === 'function') dbug('[MODAL dispatch] key=' + JSON.stringify(key), 'modal'); } catch (_) { }
     var active = Modal.getActive();
     if (!active) return false;
     return active.handleKey(key);
@@ -1295,7 +1295,7 @@ Modal.createChooser = function (opts) {
                             hexes += (iHex ? ' ' : '') + h;
                         }
                     }
-                    log('[CHOOSER key raw] len=' + (k && k.length ? k.length : 0) + ' hex=' + hexes + ' repr=' + JSON.stringify(k));
+                    if (typeof dbug === 'function') dbug('[CHOOSER key raw] len=' + (k && k.length ? k.length : 0) + ' hex=' + hexes + ' repr=' + JSON.stringify(k), 'modal');
                 }
             } catch (_) { }
             var vc = visibleCount(m);

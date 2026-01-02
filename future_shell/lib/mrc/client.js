@@ -5,7 +5,7 @@ load('future_shell/lib/mrc/session.js');
 
 /**
  * MrcClient - Wraps MRC_Session and emits normalized events
- * @param {object} opts - { host, port, user, pass, alias }
+ * @param {object} opts - { host, port, user, pass, alias, msg_color }
  */
 function MrcClient(opts) {
     opts = opts || {};
@@ -14,6 +14,7 @@ function MrcClient(opts) {
     this.user = opts.user || '';
     this.pass = opts.pass || '';
     this.alias = opts.alias || this.user;
+    this.msg_color = opts.msg_color || 7;
 
     this.session = null;
     this.listeners = {};
@@ -33,6 +34,12 @@ MrcClient.prototype.connect = function () {
 
     this._debugLog('Creating MRC_Session:', this.host, this.port, this.user);
     this.session = new MRC_Session(this.host, this.port, this.user, this.pass, this.alias);
+    
+    // Set message color preference on session
+    if (this.msg_color && typeof this.session.msg_color !== 'undefined') {
+        this.session.msg_color = this.msg_color;
+        this._debugLog('Set msg_color to:', this.msg_color);
+    }
 
     this._bindSessionEvents();
 

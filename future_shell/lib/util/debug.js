@@ -25,22 +25,29 @@ var DEBUG_CONFIG = {
     icons: { active: false, log_color: ANSI_COLORS.CYAN },
     config: { active: false, log_color: ANSI_COLORS.CYAN },
     settings: { active: false, log_color: ANSI_COLORS.CYAN },
-    view: { active: true, log_color: ANSI_COLORS.CYAN },
+    view: { active: false, log_color: ANSI_COLORS.CYAN },
     messageboard: { active: false, log_color: ANSI_COLORS.CYAN },
     toast: { active: false, log_color: ANSI_COLORS.YELLOW },
     icon: { active: false, log_color: ANSI_COLORS.CYAN },
+    modal: { active: false, log_color: ANSI_COLORS.MAGENTA },
+    launch: { active: false, log_color: ANSI_COLORS.YELLOW },
+    mrc: { active: false, log_color: ANSI_COLORS.GREEN },
+    usage: { active: false, log_color: ANSI_COLORS.CYAN },
+    avatar: { active: false, log_color: ANSI_COLORS.MAGENTA },
+    folder: { active: false, log_color: ANSI_COLORS.GREEN },
+    theme: { active: false, log_color: ANSI_COLORS.BLUE },
+    hotspot: { active: false, log_color: ANSI_COLORS.CYAN },
+    resize: { active: false, log_color: ANSI_COLORS.YELLOW },
+    screensaver: { active: false, log_color: ANSI_COLORS.BLUE },
+    ambient: { active: false, log_color: ANSI_COLORS.BLUE },
+    users: { active: false, log_color: ANSI_COLORS.CYAN },
 };
 
-
-
 function dbug(msg, type) {
+    var cfg = DEBUG_CONFIG[type];
+    if (!cfg || !cfg.active) return;
     try {
-        var shouldLog = DEBUG_CONFIG[type].active;
-        if (shouldLog) {
-            log("[" + type + "] : " + msg);
-        }
+        log("[" + type + "] : " + msg);
     } catch (err) {
-        log("ERROR: [" + type + "] is not handled in DEBUG_CONFIG.  \r\n msg: " + msg);
     }
-
 }
