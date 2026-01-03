@@ -150,3 +150,73 @@ IconShell.prototype.moveSelection = function(dx, dy) {
     dbug('[moveSelection] final selection=' + this.selection + ' total=' + total + ' scrollOffset=' + this.scrollOffset, 'nav');
     }
 }
+
+IconShell.prototype._setSelectionAbsolute = function (nextSelection) {
+    var grid = this.grid;
+    if (!grid || !grid.cells) {
+        this.selection = (typeof nextSelection === 'number') ? nextSelection : 0;
+        return false;
+    }
+    var cols = grid.cols;
+    var rows = grid.rows || 1;
+    var node = this.stack[this.stack.length - 1];
+    var baseChildren = node._cachedChildren ? node._cachedChildren.slice() : (node.children ? node.children.slice() : []);
+    if (!node._cachedChildren) {
+        node._cachedChildren = baseChildren.slice();
+        dbug('[cache] snapshot (setSelection) children for ' + (node.label || '') + ' count=' + baseChildren.length, 'nav');
+    }
+    var items = baseChildren.slice();
+    var hasUp = this.stack.length > 1;
+    if (hasUp) items.unshift({ label: "..", type: "item" });
+    var total = items.length;
+    if (!total) return false;
+    var target = (typeof nextSelection === 'number' && !isNaN(nextSelection)) ? nextSelection : 0;
+    if (target < 0) target = 0;
+    if (target >= total) target = total - 1;
+
+    var oldSelection = this.selection;
+    var oldScrollOffset = this.scrollOffset;
+    if (target === oldSelection && oldScrollOffset === this.scrollOffset) return false;
+
+    this.selection = target;
+    var maxIcons = cols * rows;
+    if (this.selection < this.scrollOffset) {
+        this.scrollOffset = Math.floor(this.selection / cols) * cols;
+    } else if (this.selection >= this.scrollOffset + maxIcons) {
+        this.scrollOffset = Math.floor(this.selection / cols) * cols;
+    }
+
+    if (this.scrollOffset > total - maxIcons) this.scrollOffset = Math.max(0, total - maxIcons);
+    if (this.scrollOffset < 0) this.scrollOffset = 0;
+
+    if (this.scrollOffset !== oldScrollOffset) {
+        this.drawFolder({ skipHeaderRefresh: true });
+        return true;
+    }
+
+    if (this.selection !== oldSelection) {
+        var oldIdx = oldSelection - this.scrollOffset;
+        var newIdx = this.selection - this.scrollOffset;
+        if (grid.cells[oldIdx]) {
+            this.paintIcon(grid.cells[oldIdx], false, false);
+            this.clearCellBorder(grid.cells[oldIdx]);
+        }
+        if (grid.cells[newIdx]) {
+            this.paintIcon(grid.cells[newIdx], true, false);
+            this.drawCellBorder(grid.cells[newIdx]);
+        }
+        if (typeof this.crumb !== 'undefined' && this.crumb) {
+            var names = [];
+            for (var i = 0; i < this.stack.length; i++) names.push(this.stack[i].label || "Untitled");
+            var selectedNum = this.selection + 1;
+            if (typeof this._drawBreadcrumb === 'function') {
+                this.crumb.clear(ICSH_ATTR('STATUS_BAR'));
+                this.crumb.home();
+                this._drawBreadcrumb(names, selectedNum, total);
+            }
+        }
+        this.root.cycle();
+        return true;
+    }
+    return false;
+};

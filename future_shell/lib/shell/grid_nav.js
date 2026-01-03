@@ -251,7 +251,7 @@ IconShell.prototype.drawFolder = function (options) {
             label: "..",
             type: "item",
             iconFile: "back",
-            hotkey: '\x1B',
+            action: function () { this.changeFolder(null, { direction: 'up' }); }.bind(this)
         });
     }
     this.assignViewHotkeys(items);

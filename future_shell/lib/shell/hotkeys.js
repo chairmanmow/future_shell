@@ -10,26 +10,31 @@ IconShell.prototype.assignViewHotkeys = function(items, logit) {
 IconShell.prototype.assignHotkeys = function (items, used, logit, viewId) {
     used = used || {};
     viewId = viewId || (this.currentView || "root");
-    var hotkeyPool = [];
-    for (var k = 0; k < 26; k++) hotkeyPool.push(String.fromCharCode(65 + k));
-    for (var k = 0; k < 10; k++) hotkeyPool.push(String.fromCharCode(48 + k));
-    for (var k = 0; k < 26; k++) hotkeyPool.push(String.fromCharCode(97 + k));
 
     var fallbackCount = 1;
     for (var i = 0; i < items.length; i++) {
         var item = items[i];
         if (item.type === 'placeholder') continue;
-        if (!item.hotkey) {
-            var label = item.label || "";
-            var found = this._assignHotkeyFromLabel(item, label, hotkeyPool, used, logit);
-            if (!found) found = this._assignAnyUnusedHotkey(item, hotkeyPool, used, logit);
-            if (!found) {
-                this._assignFallbackHotkey(item, fallbackCount, used);
-                fallbackCount++;
-            }
-        } else {
+        if (typeof this._nextGridHotspotToken === 'function') {
+            item.hotkey = this._nextGridHotspotToken();
             used[item.hotkey] = true;
-            if(logit) dbug(item.label + " Assign hotkey " + JSON.stringify(item.hotkey), "hotkeys");
+        } else {
+            if (!item.hotkey) {
+                var label = item.label || "";
+                var hotkeyPool = [];
+                for (var k = 0; k < 26; k++) hotkeyPool.push(String.fromCharCode(65 + k));
+                for (var k = 0; k < 10; k++) hotkeyPool.push(String.fromCharCode(48 + k));
+                for (var k = 0; k < 26; k++) hotkeyPool.push(String.fromCharCode(97 + k));
+                var found = this._assignHotkeyFromLabel(item, label, hotkeyPool, used, logit);
+                if (!found) found = this._assignAnyUnusedHotkey(item, hotkeyPool, used, logit);
+                if (!found) {
+                    this._assignFallbackHotkey(item, fallbackCount, used);
+                    fallbackCount++;
+                }
+            } else {
+                used[item.hotkey] = true;
+                if(logit) dbug(item.label + " Assign hotkey " + JSON.stringify(item.hotkey), "hotkeys");
+            }
         }
         if (!this.viewHotkeys[viewId]) this.viewHotkeys[viewId] = {};
         if (item.hotkey && typeof item.action === 'function') {

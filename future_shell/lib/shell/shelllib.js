@@ -215,6 +215,12 @@ IconShell.prototype.init = function () {
     this._lastWasCR = false;
     this._lastKeyTimestamp = 0;
     this.keyStrokeTimeoutMs = 1000;
+    this._gridHotspotTokenCounter = 0;
+    this._gridHotspotBuffer = '';
+    this._typeaheadBuffer = '';
+    this._typeaheadLastGood = '';
+    this._typeaheadLastTs = 0;
+    this._typeaheadTimeoutMs = 800;
     this._chatPollEvent = null;
     this._subprogramCycleEvent = null;
     this._inactivityEvent = null;
@@ -680,6 +686,7 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         if (toast && typeof toast.dismiss === 'function') toast.dismiss();
         return true;
     }
+    if (this._handleGridHotspotKey && this._handleGridHotspotKey(ch)) return true;
     if (this.activeSubprogram) {
         if (typeof dbug === 'function') {
             try { dbug('processKey:forward-to-sub key=' + JSON.stringify(ch) + ' sub=' + (this.activeSubprogram.id || this.activeSubprogram.name || 'unknown'), 'keylog'); } catch (_) { }
@@ -688,6 +695,7 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         return;
     }
     if (this._handleNavigationKey(ch)) return true;
+    if (this._handleTypeaheadKey(ch)) return true;
     if (this._handleHotkeyAction(ch)) return true;
     if (this._handleHotkeyItemSelection(ch)) return true;
     return false;
@@ -1346,6 +1354,18 @@ IconShell.prototype._reserveHotspotCmd = function (preferred) {
     return preferred;
 };
 
+IconShell.prototype._nextGridHotspotToken = function () {
+    this._gridHotspotTokenCounter = (this._gridHotspotTokenCounter || 0) + 1;
+    var token = '~g' + this._gridHotspotTokenCounter.toString(36) + '~';
+    while (this._reservedHotspotCommands && this._reservedHotspotCommands[token]) {
+        this._gridHotspotTokenCounter += 1;
+        token = '~g' + this._gridHotspotTokenCounter.toString(36) + '~';
+    }
+    if (!this._reservedHotspotCommands) this._reservedHotspotCommands = {};
+    this._reservedHotspotCommands[token] = true;
+    return token;
+};
+
 IconShell.prototype._handleSubprogramKey = function (ch) {
     dbug("received key " + ch + " to proxy to active subprogram", "subprogram");
     if (typeof this.activeSubprogram.handleKey === 'function') {
@@ -1367,23 +1387,26 @@ IconShell.prototype._handleNavigationKey = function (ch) {
         if (this.selection >= items.length) this.selection = items.length ? items.length - 1 : 0;
     } catch (e) { }
     switch (ch) {
-        case KEY_LEFT: this.moveSelection(-1, 0); logFile.close(); return true;
-        case KEY_RIGHT: this.moveSelection(1, 0); logFile.close(); return true;
-        case KEY_UP: this.moveSelection(0, -1); logFile.close(); return true;
+        case KEY_LEFT: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(-1, 0); logFile.close(); return true;
+        case KEY_RIGHT: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(1, 0); logFile.close(); return true;
+        case KEY_UP: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(0, -1); logFile.close(); return true;
         case KEY_DOWN:
         case "\u000a":
             log('key down detected as navigation');
             logFile.writeln('[_handleNavigationKey] DOWN/LF pressed, moving selection');
+            if (this._resetTypeahead) this._resetTypeahead();
             this.moveSelection(0, 1);
             logFile.close();
             return true;
         case '\r': // ENTER
             logFile.writeln('[_handleNavigationKey] ENTER pressed, calling openSelection');
             logFile.close();
+            if (this._resetTypeahead) this._resetTypeahead();
             this.openSelection();
             return true;
         case '\x1B': // ESC: up a level (if possible)
             if (this.stack.length > 1) {
+                if (this._resetTypeahead) this._resetTypeahead();
                 this.changeFolder(null, { direction: 'up' });
                 if (this.folderChanged) {
                     this.folderChanged = false;
@@ -1398,6 +1421,132 @@ IconShell.prototype._handleNavigationKey = function (ch) {
     }
 };
 
+IconShell.prototype._resetTypeahead = function () {
+    this._typeaheadBuffer = '';
+    this._typeaheadLastGood = '';
+    this._typeaheadLastTs = 0;
+};
+
+IconShell.prototype._normalizeTypeaheadLabel = function (label) {
+    var text = (label || '').toString();
+    if (!text) return '';
+    text = text.replace(/\x01./g, '');
+    text = text.replace(/\|[0-9]{2}/g, '');
+    return text.toLowerCase().replace(/^\s+|\s+$/g, '');
+};
+
+IconShell.prototype._findTypeaheadMatch = function (prefix, items) {
+    if (!prefix || !items || !items.length) return -1;
+    var total = items.length;
+    if (this.selection >= 0 && this.selection < total) {
+        var current = items[this.selection];
+        if (current && current.type !== 'placeholder') {
+            var currentLabel = this._normalizeTypeaheadLabel(current.label || '');
+            if (currentLabel && currentLabel.indexOf(prefix) === 0) return this.selection;
+        }
+    }
+    for (var i = 0; i < total; i++) {
+        var item = items[i];
+        if (!item || item.type === 'placeholder') continue;
+        var label = this._normalizeTypeaheadLabel(item.label || '');
+        if (!label) continue;
+        if (label.indexOf(prefix) === 0) return i;
+    }
+    return -1;
+};
+
+IconShell.prototype._handleGridHotspotKey = function (ch) {
+    if (!ch || typeof ch !== 'string') return false;
+    if (!this.grid || !this.grid.cells || !this.grid.cells.length) return false;
+    var tokens = [];
+    for (var i = 0; i < this.grid.cells.length; i++) {
+        var cell = this.grid.cells[i];
+        var token = cell && cell.item ? cell.item.hotkey : null;
+        if (token && token.charAt(0) === '~' && token.charAt(token.length - 1) === '~') {
+            tokens.push(token);
+        }
+    }
+    if (!tokens.length) return false;
+
+    this._gridHotspotBuffer = (this._gridHotspotBuffer || '') + ch;
+    if (this._gridHotspotBuffer.length > 16) {
+        this._gridHotspotBuffer = this._gridHotspotBuffer.substr(this._gridHotspotBuffer.length - 16);
+    }
+
+    var matchedToken = null;
+    var pendingPrefix = false;
+    for (var i = 0; i < tokens.length; i++) {
+        var token = tokens[i];
+        if (!token) continue;
+        if (this._gridHotspotBuffer.indexOf(token) !== -1) {
+            matchedToken = token;
+            break;
+        }
+        var sliceLen = Math.min(token.length, this._gridHotspotBuffer.length);
+        if (sliceLen > 0) {
+            var suffix = this._gridHotspotBuffer.slice(-sliceLen);
+            if (token.substring(0, sliceLen) === suffix) pendingPrefix = true;
+        }
+    }
+
+    if (matchedToken) {
+        this._gridHotspotBuffer = '';
+        if (this._resetTypeahead) this._resetTypeahead();
+        if (this._handleHotkeyItemSelection && this._handleHotkeyItemSelection(matchedToken)) return true;
+        if (this._handleHotkeyAction && this._handleHotkeyAction(matchedToken)) return true;
+        return true;
+    }
+    if (pendingPrefix) return true;
+    this._gridHotspotBuffer = '';
+    return false;
+};
+
+IconShell.prototype._handleTypeaheadKey = function (ch) {
+    if (!ch || typeof ch !== 'string' || ch.length !== 1) return false;
+    if (!/[A-Za-z0-9]/.test(ch)) return false;
+    if (!this.grid || !this.grid.cells || !this.stack || !this.stack.length) return false;
+
+    var now = Date.now();
+    var timeoutMs = (typeof this._typeaheadTimeoutMs === 'number') ? this._typeaheadTimeoutMs : 800;
+    if (!this._typeaheadLastTs || (now - this._typeaheadLastTs) > timeoutMs) {
+        this._typeaheadBuffer = '';
+        this._typeaheadLastGood = '';
+    }
+
+    var nextBuffer = (this._typeaheadBuffer || '') + ch.toLowerCase();
+    var node = this.stack[this.stack.length - 1];
+    if (!node._cachedChildren) {
+        try {
+            var rawChildren = node.children ? node.children.slice() : [];
+            node._cachedChildren = rawChildren;
+        } catch (e) { node._cachedChildren = []; }
+    }
+    var hasUp = this.stack.length > 1;
+    var items = this._getCurrentItemsWithUp({ children: node._cachedChildren }, hasUp);
+    if (!items || !items.length) return true;
+
+    var matchIdx = this._findTypeaheadMatch(nextBuffer, items);
+    if (matchIdx >= 0) {
+        this._typeaheadBuffer = nextBuffer;
+        this._typeaheadLastGood = nextBuffer;
+        this._typeaheadLastTs = now;
+        if (typeof this._setSelectionAbsolute === 'function') {
+            this._setSelectionAbsolute(matchIdx);
+        } else {
+            this.selection = matchIdx;
+        }
+        return true;
+    }
+
+    if (this._typeaheadLastGood) {
+        this._typeaheadBuffer = this._typeaheadLastGood;
+    } else {
+        this._typeaheadBuffer = '';
+    }
+    this._typeaheadLastTs = now;
+    return true;
+};
+
 IconShell.prototype._handleHotkeyAction = function (ch) {
     var viewId = this.currentView || (this.generateViewId ? this.generateViewId() : "root");
     var hotkeyMap = this.viewHotkeys[viewId] || {};
@@ -1405,6 +1554,7 @@ IconShell.prototype._handleHotkeyAction = function (ch) {
     var action = hotkeyMap[ch];
     if (typeof action === 'function') {
         dbug("Executing hotkey action for " + ch + " in view " + viewId, "hotkeys");
+        if (this._resetTypeahead) this._resetTypeahead();
 
         // Before executing, try to update selection to match the clicked/pressed item
         // This is important for mouse clicks which don't automatically update selection
@@ -1464,6 +1614,7 @@ IconShell.prototype._handleHotkeyItemSelection = function (ch) {
         if (item.hotkey && ch === item.hotkey) {
             logFile.writeln('[_handleHotkeyItemSelection] MATCH FOUND: label=' + (item.label || '') + ' hotkey=' + JSON.stringify(item.hotkey));
             dbug(item.hotkey + ":" + item.label, "hotkeys");
+            if (this._resetTypeahead) this._resetTypeahead();
             // Clear border from previous selection if it's different
             if (this.previousSelectedIndex >= 0 && this.previousSelectedIndex !== (this.scrollOffset + i)) {
                 var prevVisibleIdx = this.previousSelectedIndex - this.scrollOffset;

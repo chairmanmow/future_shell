@@ -47,6 +47,9 @@ IconShell.prototype.runExternal = function (fn, opts) {
         var endTs = Date.now();
         console.clear();
         this.recreateFramesIfNeeded();
+        if (typeof console !== 'undefined' && typeof console.mouse_mode !== 'undefined') {
+            console.mouse_mode = !!this.mouseActive;
+        }
         var handledBySubprogram = false;
         var activeAfter = this.activeSubprogram || null;
         if (shouldResumeSub && activeBefore && activeBefore === activeAfter) {
@@ -70,6 +73,11 @@ IconShell.prototype.runExternal = function (fn, opts) {
                     this.assignViewHotkeys(node.children);
                 }
                 this.drawFolder();
+                this._gridHotspotBuffer = '';
+                if (this.grid && this.grid.cells && this.grid.cells.length) {
+                    if (typeof this._clearHotspots === 'function') this._clearHotspots();
+                    if (typeof this._addMouseHotspots === 'function') this._addMouseHotspots();
+                }
             } else {
                 var sub = this.activeSubprogram;
                 if (typeof sub.setParentFrame === 'function') {
