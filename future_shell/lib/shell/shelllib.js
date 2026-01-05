@@ -299,7 +299,7 @@ IconShell.prototype.init = function () {
                     return;
                 }
                 dbug("Showing toast: " + trimmed, "toast");
-                self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, height: 6, timeout: 8000 });
+                self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, height: 6, timeout: 8000, category: 'node' });
             } catch (e) { dbug('node toast error: ' + e, 'toast'); }
         });
         this._chatPollEvent = this.timer.addEvent(1000, true, function () {
@@ -1849,6 +1849,51 @@ IconShell.prototype._enforceToastCapForType = function (typeKey) {
     }
 };
 
+/**
+ * Get themed toast colors for a given category
+ * Categories: 'json-chat', 'mrc-chat', 'node', 'launch_notice', 'mail', or null for default
+ * Returns: { msg, border, title } color attributes
+ */
+IconShell.prototype._getToastColors = function (category) {
+    var BG = (typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0;
+    var defaultMsg = BG | ((typeof LIGHTGREEN !== 'undefined') ? LIGHTGREEN : 10);
+    var defaultBorder = BG | ((typeof YELLOW !== 'undefined') ? YELLOW : 14);
+    var defaultTitle = BG | ((typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : 11);
+    
+    // Map category to theme namespace
+    var themeNS = null;
+    if (category === 'json-chat') themeNS = 'toast-chat';
+    else if (category === 'mrc-chat') themeNS = 'mrc';  // MRC has its own namespace
+    else if (category === 'node' || category === 'telegram') themeNS = 'toast-node';
+    else if (category === 'launch_notice') themeNS = 'toast-launch';
+    else if (category === 'mail') themeNS = 'toast-mail';
+    
+    // If no specific namespace, use defaults
+    if (!themeNS) {
+        return { msg: defaultMsg, border: defaultBorder, title: defaultTitle };
+    }
+    
+    // Try to get colors from ThemeRegistry
+    if (typeof ThemeRegistry !== 'undefined' && typeof ThemeRegistry.get === 'function') {
+        var getAttr = function (key, fallback) {
+            var entry = ThemeRegistry.get(themeNS, key, null);
+            if (!entry) return fallback;
+            if (typeof entry === 'number') return entry;
+            var bg = entry.BG || 0;
+            var fg = entry.FG || entry.COLOR || 0;
+            return bg | fg;
+        };
+        return {
+            msg: getAttr('TOAST_MSG', defaultMsg),
+            border: getAttr('TOAST_BORDER', defaultBorder),
+            title: getAttr('TOAST_TITLE', defaultTitle)
+        };
+    }
+    
+    // Fall back to defaults
+    return { msg: defaultMsg, border: defaultBorder, title: defaultTitle };
+};
+
 IconShell.prototype.showToast = function (params) {
     var self = this;
     var opts = params || {};
@@ -1884,6 +1929,12 @@ IconShell.prototype.showToast = function (params) {
     }
     var toastTypeKey = this._getToastTypeKey(opts, category, launch);
     this._enforceToastCapForType(toastTypeKey);
+    
+    // Apply themed colors based on category if not already specified
+    if (!opts.colors) {
+        opts.colors = this._getToastColors(category);
+    }
+    
     dbug('[toast] showToast title=' + (opts.title || '') + ' launch=' + (launch || '') + ' category=' + (category || ''), 'toast');
     var position = opts.position || 'bottom-right';
     var userOnDone = opts.onDone;
@@ -2231,6 +2282,10 @@ IconShell.prototype._reflowAllToasts = function () {
             this._reflowToastsForPosition(pos);
         }
     }
+    // Cycle the root frame to ensure all toast repositioning is rendered
+    if (this.root && typeof this.root.cycle === 'function') {
+        try { this.root.cycle(); } catch (_) { }
+    }
 };
 
 IconShell.prototype._reflowToastsForPosition = function (position) {
@@ -2246,6 +2301,7 @@ IconShell.prototype._reflowToastsForPosition = function (position) {
     var gap = 1;
     var isBottom = position.indexOf('bottom') === 0;
     var isTop = position.indexOf('top') === 0 || position === 'center';
+    dbug('[toast] reflow position=' + position + ' stack.length=' + stack.length + ' screenRows=' + screenRows, 'toast');
     if (isBottom) {
         var baseline = screenRows - gap + 1;
         for (var idx = stack.length - 1; idx >= 0; idx--) {
@@ -2253,6 +2309,7 @@ IconShell.prototype._reflowToastsForPosition = function (position) {
             var height = t.toastFrame.height;
             baseline -= height;
             if (baseline < 1) baseline = 1;
+            dbug('[toast] reflow idx=' + idx + ' height=' + height + ' baseline=' + baseline + ' moving to y=' + baseline, 'toast');
             t.toastFrame.moveTo(t.toastFrame.x, baseline);
             if (typeof t.toastFrame.top === 'function') { try { t.toastFrame.top(); } catch (_) { } }
             if (typeof t.toastFrame.cycle === 'function') { try { t.toastFrame.cycle(); } catch (_) { } }

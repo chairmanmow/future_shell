@@ -633,6 +633,9 @@ IconShell.prototype._calculateGridDimensions = function (parentFrame) {
     var usableHeight = Math.max(0, parentFrame.height - topMargin - offsetY);
     var cols = Math.max(1, Math.floor(parentFrame.width / cellW));
     var maxRows = Math.max(1, Math.floor(usableHeight / cellH));
+    var usedWidth = cols * cellW;
+    var extraWidth = parentFrame.width - usedWidth;
+    var offsetX = Math.max(0, Math.floor(extraWidth / 2));
     return {
         iconW: iconW,
         iconH: iconH,
@@ -642,14 +645,15 @@ IconShell.prototype._calculateGridDimensions = function (parentFrame) {
         cols: cols,
         maxRows: maxRows,
         topMargin: topMargin,
-        offsetY: offsetY
+        offsetY: offsetY,
+        offsetX: offsetX
     };
 };
 
 IconShell.prototype._createIconCell = function (i, dims, items, parentFrame, Icon) {
     var col = i % dims.cols;
     var row = Math.floor(i / dims.cols);
-    var x = (col * dims.cellW) + 2;
+    var x = (col * dims.cellW) + 2 + (dims.offsetX || 0);
     var y = (row * dims.cellH) + 1 + (dims.topMargin || 0) + (dims.offsetY || 0);
     // If this is a placeholder (padding cell), don't create visible frames.
     // Preserve a cell object so selection math & hotspots (which skip placeholders) still work.

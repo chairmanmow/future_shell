@@ -271,6 +271,9 @@ TelnetGateway.prototype._renderGrid = function () {
     var cellH = ICON_H + labelH + 2;
     var usableH = Math.max(1, frame.height - paddingTop);
     var cols = Math.max(1, Math.floor(frame.width / cellW));
+    var usedWidth = cols * cellW;
+    var extraWidth = frame.width - usedWidth;
+    var offsetX = Math.max(0, Math.floor(extraWidth / 2));
     var visibleRows = Math.max(1, Math.floor(usableH / cellH));
     var total = this.displayGateways.length;
     var rows = Math.max(1, Math.ceil(total / cols));
@@ -288,7 +291,7 @@ TelnetGateway.prototype._renderGrid = function () {
     if (curRow < this.scrollOffset) this.scrollOffset = curRow;
     if (curRow >= this.scrollOffset + visibleRows) this.scrollOffset = Math.max(0, curRow - visibleRows + 1);
     if (!needRebuild && oldOffset !== this.scrollOffset) needRebuild = true;
-    this._gridLayout = { cols: cols, visibleRows: visibleRows, rows: rows, cellW: cellW, cellH: cellH, scrollOffset: this.scrollOffset };
+    this._gridLayout = { cols: cols, visibleRows: visibleRows, rows: rows, cellW: cellW, cellH: cellH, scrollOffset: this.scrollOffset, offsetX: offsetX };
     try { frame.clear((typeof ICSH_ATTR === 'function') ? ICSH_ATTR('FRAME_STANDARD') : (BG_BLACK | LIGHTGRAY)); } catch (_) { }
     if (needRebuild) {
         this._destroyIconCells();
@@ -298,7 +301,7 @@ TelnetGateway.prototype._renderGrid = function () {
             for (var col = 0; col < cols; col++) {
                 var i = row * cols + col;
                 if (i >= total) break;
-                var x = 2 + (col * cellW);
+                var x = 2 + (col * cellW) + offsetX;
                 var y = 1 + paddingTop + ((row - startRow) * cellH);
                 if (y + ICON_H + labelH - 1 > frame.height) break;
                 var gateway = this.displayGateways[i];

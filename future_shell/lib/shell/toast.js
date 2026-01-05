@@ -4,11 +4,83 @@ if (typeof lazyLoadModule !== 'function') {
 if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
-var MAX_TOAST_WIDTH = 40;
+var MIN_TOAST_WIDTH = 40;
+var TARGET_TOAST_WIDTH = 60;
 var DEFAULT_TOAST_TIMEOUT = 30000; // 30 seconds
 var TOAST_PIPE_RE = /\|[0-9A-Za-z]{2}/g;
 var TOAST_CTRL_A_RE = /\x01./g;
 var TOAST_ANSI_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
+
+function normalizeToastAttr(val, key, fallback) {
+    if (val === null || val === undefined) return toastAttr(key, fallback);
+    if (typeof val === 'number') return val | 0;
+    if (typeof val === 'string' && val.trim().length) {
+        var parsed = toastParseAttrString(val.trim());
+        if (parsed !== null && parsed !== undefined) return parsed;
+        var themed = toastAttr(val.trim(), null);
+        if (themed !== null && themed !== undefined) return themed;
+    }
+    return toastAttr(key, fallback);
+}
+
+function normalizeToastColors(input) {
+    var src = (input && typeof input === 'object') ? input : {};
+    var colors = {
+        frame: normalizeToastAttr(src.frame, 'TOAST_FRAME', ((typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0) | ((typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : 7)),
+        msg: normalizeToastAttr(src.msg, 'TOAST_MSG', ((typeof BG_MAGENTA !== 'undefined') ? BG_MAGENTA : 0) | ((typeof WHITE !== 'undefined') ? WHITE : 7)),
+        border: normalizeToastAttr(src.border, 'TOAST_BORDER', (typeof BG_BLUE !== 'undefined') ? BG_BLUE : 0),
+        title: normalizeToastAttr(src.title, 'TOAST_TITLE', (typeof WHITE !== 'undefined' && typeof BG_GREEN !== 'undefined') ? (WHITE | BG_GREEN) : (((typeof BG_MAGENTA !== 'undefined') ? BG_MAGENTA : 0) | ((typeof WHITE !== 'undefined') ? WHITE : 7))),
+        avatar: normalizeToastAttr(src.avatar, 'TOAST_AVATAR', (((typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0) | ((typeof WHITE !== 'undefined') ? WHITE : 7)))
+    };
+    return colors;
+}
+
+function toastParseAttrString(str) {
+    if (!str || typeof str !== 'string') return null;
+    var parts = str.split('|');
+    var acc = 0; var seen = false;
+    for (var i = 0; i < parts.length; i++) {
+        var token = parts[i];
+        if (!token) continue;
+        var t = token.trim();
+        if (!t.length) continue;
+        var val = null;
+        if (/^0x[0-9a-f]+$/i.test(t)) val = parseInt(t, 16);
+        else if (/^[0-9]+$/.test(t)) val = parseInt(t, 10);
+        else {
+            try { if (eval('typeof ' + t + ' !== "undefined"')) { var ev = eval(t); if (typeof ev === 'number') val = ev; } } catch (_) { }
+        }
+        if (val !== null && val !== undefined) { acc |= val; seen = true; }
+    }
+    return seen ? acc : null;
+}
+
+function toastAttr(key, fallback) {
+    if (typeof ICSH_ATTR === 'function') {
+        try { return ICSH_ATTR(key); } catch (_) { }
+    }
+    if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS && ICSH_VALS[key] !== undefined) {
+        var val = ICSH_VALS[key];
+        if (typeof val === 'number') return val;
+        if (val && typeof val === 'object') return (val.BG || 0) | (val.FG || 0);
+    }
+    var parsed = toastParseAttrString(key);
+    if (parsed !== null) return parsed;
+    return fallback;
+}
+
+function resolveToastAttr(optVal, key, fallback) {
+    if (optVal !== undefined && optVal !== null) {
+        if (typeof optVal === 'number') return optVal | 0;
+        if (typeof optVal === 'string' && optVal.trim().length) {
+            var parsed = toastParseAttrString(optVal.trim());
+            if (parsed !== null && parsed !== undefined) return parsed;
+            var themed = toastAttr(optVal.trim(), null);
+            if (themed !== null && themed !== undefined) return themed;
+        }
+    }
+    return toastAttr(key, fallback);
+}
 
 function toastStripColors(str) {
     if (!str) return '';
@@ -107,28 +179,56 @@ function Toast(options) {
     }
     var hasProgramIcon = !!programIconName && !hasAvatar;
     this._programIconName = hasProgramIcon ? programIconName : null;
+    this._colorOverrides = (options && typeof options.colors === 'object' && options.colors !== null) ? options.colors : {};
+    this._colors = normalizeToastColors(this._colorOverrides);
+    var graphicWidth = hasAvatar ? 10 : (hasProgramIcon ? 12 : 0);
+    var msgOffset = graphicWidth ? graphicWidth + 2 : 0;
     var rawMessage = options.message;
     if (rawMessage === undefined || rawMessage === null) rawMessage = '';
     rawMessage = String(rawMessage);
     var cleanMessage = toastStripColors(rawMessage);
     var longestWord = toastLongestWord(cleanMessage);
     var titleText = this.title ? toastStripColors(String(this.title)) : '';
-    var minWidth = Math.max(12, longestWord + 4);
+    var minWidth = Math.max(MIN_TOAST_WIDTH, 12, longestWord + 4);
     if (titleText.length) minWidth = Math.max(minWidth, titleText.length + 4);
     if (hasAvatar || hasProgramIcon) minWidth = Math.max(minWidth, 20);
     if (typeof options.width === 'number' && options.width > 0) minWidth = Math.max(minWidth, options.width);
-    var width = Math.min(MAX_TOAST_WIDTH, minWidth);
-    var messageWrapWidth = Math.max(10, width - ((hasAvatar || hasProgramIcon) ? 8 : 2));
-    var wrappedLines = toastWrapText(cleanMessage, messageWrapWidth);
-    if (!wrappedLines || !wrappedLines.length) wrappedLines = [''];
-    var contentHeight = wrappedLines.length;
-    var minHeight = (hasAvatar || hasProgramIcon) ? 6 : 3;
-    var height = Math.max(minHeight, contentHeight + 2);
-    if (typeof options.height === 'number' && options.height > height) height = options.height;
-    if (height < 1) height = 1;
-    if (height > console.screen_rows) height = console.screen_rows;
-    var pos = options.position || 'bottom-right';
+    var targetWidth = Math.max(TARGET_TOAST_WIDTH, minWidth);
     var scrW = console.screen_columns || 80;
+    var maxWidth = Math.max(10, scrW - ((hasAvatar || hasProgramIcon) ? 2 : 0));
+    function computeLayout(widthCandidate) {
+        var messageWrapWidthCandidate = Math.max(10, widthCandidate - (msgOffset + 2));
+        var linesCandidate = toastWrapText(cleanMessage, messageWrapWidthCandidate);
+        if (!linesCandidate || !linesCandidate.length) linesCandidate = [''];
+        var contentHeightCandidate = linesCandidate.length;
+        var minHeightCandidate = (hasAvatar || hasProgramIcon) ? 6 : 3;
+        var heightCandidate = Math.max(minHeightCandidate, contentHeightCandidate + 2);
+        if (typeof options.height === 'number' && options.height > heightCandidate) heightCandidate = options.height;
+        if (heightCandidate < 1) heightCandidate = 1;
+        if (heightCandidate > console.screen_rows) heightCandidate = console.screen_rows;
+        return {
+            width: widthCandidate,
+            wrapWidth: messageWrapWidthCandidate,
+            lines: linesCandidate,
+            height: heightCandidate
+        };
+    }
+    var initialWidth = Math.min(maxWidth, targetWidth);
+    var layout = computeLayout(initialWidth);
+    if (layout.height >= 7 && maxWidth > layout.width) {
+        var best = layout;
+        for (var w = Math.min(maxWidth, Math.max(layout.width + 2, TARGET_TOAST_WIDTH)); w <= maxWidth; w += 2) {
+            var candidate = computeLayout(w);
+            if (candidate.height < best.height || (candidate.height === best.height && candidate.width > best.width)) best = candidate;
+            if (candidate.height <= 6) { best = candidate; break; }
+        }
+        layout = best;
+    }
+    var width = layout.width;
+    var messageWrapWidth = layout.wrapWidth;
+    var wrappedLines = layout.lines;
+    var height = layout.height;
+    var pos = options.position || 'bottom-right';
     var scrH = console.screen_rows || 24;
     var x = 1, y = 1;
     function clamp(v, min, max) { return v < min ? min : (v > max ? max : v); }
@@ -139,9 +239,6 @@ function Toast(options) {
             x = 1; y = scrH - height; break; // leave last line for crumb
         case 'bottom-right':
             x = scrW - width + 1; y = scrH - height;
-            if (hasAvatar || hasProgramIcon) {
-                x = x - 7; // left graphic width + padding offset frame to left;
-            }
             break;
         case 'center':
             x = Math.max(1, Math.floor((scrW - width) / 2) + 1);
@@ -155,19 +252,26 @@ function Toast(options) {
     y = clamp(y, 1, Math.max(1, scrH - height + 1));
     this.avatarFrame = null;
     this.parentFrame = options.parentFrame || undefined;
-    this.toastFrame = new Frame(x, y, width, height, ICSH_VALS.TOAST_FRAME.BG | ICSH_VALS.TOAST_FRAME.FG, this.parentFrame);
-    var msgX = (hasAvatar || hasProgramIcon) ? 6 : 0;
-    this.msgContainer = new Frame((2 * msgX) + this.toastFrame.x, this.toastFrame.y, this.toastFrame.width - msgX, this.toastFrame.height, ICSH_ATTR('TOAST_MSG'), this.toastFrame);
-    this.msgFrame = new Frame(this.msgContainer.x + 1, this.msgContainer.y + 1, this.msgContainer.width - 2, this.msgContainer.height - 2, ICSH_ATTR('TOAST_MSG'), this.msgContainer);
+    var frameAttr = this._colors.frame;
+    this.toastFrame = new Frame(x, y, width, height, frameAttr, this.parentFrame);
+    var msgAttr = this._colors.msg;
+    this.msgContainer = new Frame(this.toastFrame.x + msgOffset, this.toastFrame.y, this.toastFrame.width - msgOffset, this.toastFrame.height, msgAttr, this.toastFrame);
+    this.msgFrame = new Frame(this.msgContainer.x + 1, this.msgContainer.y + 1, this.msgContainer.width - 2, this.msgContainer.height - 2, msgAttr, this.msgContainer);
+    if (typeof this.msgFrame.word_wrap !== 'undefined') this.msgFrame.word_wrap = true;
     this.toastFrame.transparent = true;
+    var borderAttr = (typeof options.borderAttr === 'number') ? options.borderAttr : this._colors.border;
+    var titleAttr = this._colors.title || msgAttr;
     if (typeof this.msgContainer.drawBorder === 'function') {
-        this.msgContainer.drawBorder(BG_BLUE, !!this.title ? { x: 1, y: 1, attr: WHITE | BG_GREEN, text: this.title } : null);
+        this.msgContainer.drawBorder(borderAttr, !!this.title ? { x: 1, y: 1, attr: titleAttr, text: this.title } : null);
     }
+    var avatarAttrInit = this._colors.avatar || msgAttr;
     if (this.avatarData) {
-        this.avatarFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 10, Math.min(6, this.toastFrame.height), ICSH_ATTR('TOAST_AVATAR'), this.toastFrame);
+        // Position avatar one column to the left; width 11 to accommodate 10-col avatar with dstX offset
+        this.avatarFrame = new Frame(this.toastFrame.x, this.toastFrame.y, 11, Math.min(6, this.toastFrame.height), avatarAttrInit, this.toastFrame);
         this.insertAvatarData();
     } else if (hasProgramIcon) {
-        this.programIconFrame = new Frame(this.toastFrame.x + 1, this.toastFrame.y, 12, Math.min(6, this.toastFrame.height), ICSH_ATTR('TOAST_AVATAR'), this.toastFrame);
+        // Position program icon one column to the left to avoid being cut off by frame border
+        this.programIconFrame = new Frame(this.toastFrame.x, this.toastFrame.y, 12, Math.min(6, this.toastFrame.height), avatarAttrInit, this.toastFrame);
         this._renderProgramIcon(programIconName);
     }
     this.toastFrame.draw();
@@ -194,7 +298,7 @@ function Toast(options) {
     this._wrapWidth = messageWrapWidth;
     this._rawMessage = rawMessage;
     this._cleanMessage = cleanMessage;
-    this._messageBorderAttr = (typeof BG_BLUE !== 'undefined') ? BG_BLUE : 0;
+    this._messageBorderAttr = borderAttr;
 
     this.dismiss = function (parentFrame) {
         if (self._dismissed) return;
@@ -243,30 +347,19 @@ Toast.prototype.cycle = function () {
 };
 
 Toast.prototype.refreshTheme = function () {
-    var frameAttr;
-    if (typeof ICSH_ATTR === 'function') frameAttr = ICSH_ATTR('TOAST_FRAME');
-    else if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS && ICSH_VALS.TOAST_FRAME && typeof ICSH_VALS.TOAST_FRAME.BG === 'number' && typeof ICSH_VALS.TOAST_FRAME.FG === 'number') {
-        frameAttr = ICSH_VALS.TOAST_FRAME.BG | ICSH_VALS.TOAST_FRAME.FG;
-    } else {
-        frameAttr = ((typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0) | ((typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : 7);
-    }
-    var msgAttr;
-    if (typeof ICSH_ATTR === 'function') msgAttr = ICSH_ATTR('TOAST_MSG');
-    else if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS && ICSH_VALS.TOAST_MSG) {
-        var msgVal = ICSH_VALS.TOAST_MSG;
-        if (typeof msgVal === 'number') msgAttr = msgVal;
-        else msgAttr = (msgVal.BG || 0) | (msgVal.FG || 0);
-    } else {
-        msgAttr = ((typeof BG_MAGENTA !== 'undefined') ? BG_MAGENTA : 0) | ((typeof WHITE !== 'undefined') ? WHITE : 7);
-    }
-    var avatarAttr;
-    if (typeof ICSH_ATTR === 'function') avatarAttr = ICSH_ATTR('TOAST_AVATAR');
-    else if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS && ICSH_VALS.TOAST_AVATAR) {
-        var avVal = ICSH_VALS.TOAST_AVATAR;
-        if (typeof avVal === 'number') avatarAttr = avVal;
-        else avatarAttr = (avVal.BG || 0) | (avVal.FG || 0);
-    } else {
-        avatarAttr = msgAttr;
+    if (!this._colorOverrides || typeof this._colorOverrides !== 'object') this._colorOverrides = {};
+    var frameAttr = resolveToastAttr(this._colorOverrides.frame, 'TOAST_FRAME', ((typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0) | ((typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : 7));
+    var msgAttr = resolveToastAttr(this._colorOverrides.msg, 'TOAST_MSG', ((typeof BG_MAGENTA !== 'undefined') ? BG_MAGENTA : 0) | ((typeof WHITE !== 'undefined') ? WHITE : 7));
+    var avatarAttr = resolveToastAttr(this._colorOverrides.avatar, 'TOAST_AVATAR', null);
+    if (avatarAttr === null || avatarAttr === undefined) {
+        if (typeof ICSH_ATTR === 'function') avatarAttr = ICSH_ATTR('TOAST_AVATAR');
+        else if (typeof ICSH_VALS !== 'undefined' && ICSH_VALS && ICSH_VALS.TOAST_AVATAR) {
+            var avVal = ICSH_VALS.TOAST_AVATAR;
+            if (typeof avVal === 'number') avatarAttr = avVal;
+            else avatarAttr = (avVal.BG || 0) | (avVal.FG || 0);
+        } else {
+            avatarAttr = msgAttr;
+        }
     }
     if (this.toastFrame) {
         this.toastFrame.attr = frameAttr;
@@ -274,8 +367,8 @@ Toast.prototype.refreshTheme = function () {
         try { if (typeof this.toastFrame.top === 'function') this.toastFrame.top(); } catch (_) { }
         try { if (typeof this.toastFrame.cycle === 'function') this.toastFrame.cycle(); } catch (_) { }
     }
-    var borderAttr = (this._messageBorderAttr !== undefined && this._messageBorderAttr !== null) ? this._messageBorderAttr : ((typeof BG_BLUE !== 'undefined') ? BG_BLUE : (frameAttr & 0xF0));
-    var titleAttr = (typeof WHITE !== 'undefined' && typeof BG_GREEN !== 'undefined') ? (WHITE | BG_GREEN) : msgAttr;
+    var borderAttr = (this._messageBorderAttr !== undefined && this._messageBorderAttr !== null) ? this._messageBorderAttr : resolveToastAttr(this._colorOverrides.border, 'TOAST_BORDER', (typeof BG_BLUE !== 'undefined') ? BG_BLUE : (frameAttr & 0xF0));
+    var titleAttr = resolveToastAttr(this._colorOverrides.title, 'TOAST_TITLE', (typeof WHITE !== 'undefined' && typeof BG_GREEN !== 'undefined') ? (WHITE | BG_GREEN) : msgAttr);
     if (this.msgContainer) {
         this.msgContainer.attr = msgAttr;
         try { this.msgContainer.clear(msgAttr); } catch (_) { }

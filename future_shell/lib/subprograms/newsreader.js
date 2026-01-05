@@ -2031,6 +2031,9 @@ NewsReader.prototype._renderCategoryIcons = function () {
     var frameHeight = this.listFrame.height || (metrics.height + labelHeight + 2);
     var usableHeight = Math.max(1, frameHeight - topPadding);
     var cols = Math.max(1, Math.floor(frameWidth / cellW));
+    var usedWidth = cols * cellW;
+    var extraWidth = frameWidth - usedWidth;
+    var offsetX = Math.max(0, Math.floor(extraWidth / 2));
     var visibleRows = Math.max(1, Math.floor(usableHeight / cellH));
     var total = items.length;
     var totalRows = Math.max(1, Math.ceil(total / cols));
@@ -2057,7 +2060,7 @@ NewsReader.prototype._renderCategoryIcons = function () {
             var index = row * cols + col;
             if (index >= total) break;
             var item = items[index];
-            var x = 2 + col * cellW;
+            var x = 2 + col * cellW + offsetX;
             var y = 1 + topPadding + (row - startRow) * cellH;
             if (y + metrics.height + labelHeight - 1 > frameHeight) continue;
 
@@ -2140,6 +2143,9 @@ NewsReader.prototype._renderFeedIcons = function () {
     var frameHeight = this.listFrame.height || (metrics.height + labelHeight + 2);
     var usableHeight = Math.max(1, frameHeight - topPadding);
     var cols = Math.max(1, Math.floor(frameWidth / cellW));
+    var usedWidth = cols * cellW;
+    var extraWidth = frameWidth - usedWidth;
+    var offsetX = Math.max(0, Math.floor(extraWidth / 2));
     var visibleRows = Math.max(1, Math.floor(usableHeight / cellH));
     var total = items.length;
     var totalRows = Math.max(1, Math.ceil(total / cols));
@@ -2166,7 +2172,7 @@ NewsReader.prototype._renderFeedIcons = function () {
             var index = row * cols + col;
             if (index >= total) break;
             var item = items[index];
-            var x = 2 + col * cellW;
+            var x = 2 + col * cellW + offsetX;
             var y = 1 + topPadding + (row - startRow) * cellH;
             if (y + metrics.height + labelHeight - 1 > frameHeight) continue;
 

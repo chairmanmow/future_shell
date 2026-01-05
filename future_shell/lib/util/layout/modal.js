@@ -375,7 +375,9 @@ Modal.prototype._buildStructure = function () {
     this._buttonDefs = cfg.defs;
     var overlayParent = this.parentFrame;
     if (this.overlayEnabled) {
-        this.overlay = new Frame(overlayParent.x, overlayParent.y, overlayParent.width, overlayParent.height, this.overlayAttr, overlayParent.parent || undefined);
+        // Use parentFrame as the overlay's parent (not grandparent) to avoid coordinate conflicts
+        // Overlay fills the parentFrame, positioned at 1,1 relative to it
+        this.overlay = new Frame(overlayParent.x, overlayParent.y, overlayParent.width, overlayParent.height, this.overlayAttr, overlayParent);
         this.overlay.open();
         this.overlay.transparent = false;
         try {
@@ -391,7 +393,9 @@ Modal.prototype._buildStructure = function () {
         } catch (_) { }
         this.overlay.transparent = false;
     }
-    this.frame = new Frame(this.x, this.y, this.width, this.height, this.attr, overlayParent);
+    // Modal frame is child of the overlay if present, otherwise of the parentFrame
+    var modalParent = this.overlay || overlayParent;
+    this.frame = new Frame(this.x, this.y, this.width, this.height, this.attr, modalParent);
     this.frame.open();
     this.frame.transparent = false;
     this._renderChrome();

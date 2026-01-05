@@ -470,6 +470,9 @@ FileArea.prototype._renderGrid = function (items, type) {
     var fw = this.listFrame.width, fh = this.listFrame.height;
     var usableH = Math.max(1, fh - paddingTop);
     var cols = Math.max(1, Math.floor(fw / cellW));
+    var usedWidth = cols * cellW;
+    var extraWidth = fw - usedWidth;
+    var offsetX = Math.max(0, Math.floor(extraWidth / 2));
     var visibleRows = Math.max(1, Math.floor(usableH / cellH));
     var total = tiles.length;
     var rows = Math.max(1, Math.ceil(total / cols));
@@ -496,7 +499,7 @@ FileArea.prototype._renderGrid = function (items, type) {
             var index = row * cols + col;
             if (index >= total) break;
             var item = tiles[index];
-            var x = 2 + col * cellW;
+            var x = 2 + col * cellW + offsetX;
             var y = 1 + paddingTop + (row - startRow) * cellH;
             if (y + metrics.height + labelH - 1 > fh) continue;
 

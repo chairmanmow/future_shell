@@ -7,7 +7,7 @@ load('future_shell/lib/mrc/actions.js');
 
 /**
  * MrcController - Main service layer
- * @param {object} opts - { host, port, user, pass, alias, msg_color, nodeId }
+ * @param {object} opts - { host, port, user, pass, alias, msg_color, msg_bg, nodeId }
  */
 function MrcController(opts) {
     opts = opts || {};
@@ -19,6 +19,7 @@ function MrcController(opts) {
     this.pass = opts.pass || (typeof user !== 'undefined' ? user.security.password : '');
     this.alias = opts.alias || this.user;
     this.msg_color = opts.msg_color || 7;
+    this.msg_bg = opts.msg_bg || 0;
     this.defaultRoom = opts.room || 'futureland';
     this.shell = opts.shell || null;
 
@@ -29,7 +30,8 @@ function MrcController(opts) {
         user: this.user,
         pass: this.pass,
         alias: this.alias,
-        msg_color: this.msg_color
+        msg_color: this.msg_color,
+        msg_bg: this.msg_bg
     });
 
     this.listeners = [];
@@ -547,6 +549,10 @@ MrcController.prototype._showToastForMessage = function (payload) {
     if (payload.plain && payload.plain.indexOf('[FSXTRN]') !== -1) return;
 
     var self = this;
+    
+    // Get themed colors for MRC toast, with sensible defaults
+    var toastColors = this._getToastColors();
+    
     this.shell.showToast({
         title: payload.from || 'MRC',
         message: (payload.plainMessage || payload.plain || '').substr(0, 120),
@@ -554,8 +560,53 @@ MrcController.prototype._showToastForMessage = function (payload) {
         category: 'mrc-chat',
         sender: payload.from || 'MRC',
         programIcon: 'mrc',
-        timeout: 8000
+        timeout: 8000,
+        colors: toastColors
     });
+};
+
+/**
+ * Get toast colors from theme configuration
+ * Falls back to sensible defaults if theme not available
+ */
+MrcController.prototype._getToastColors = function () {
+    var BG = (typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0;
+    var defaultMsg = BG | ((typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : 11);
+    var defaultBorder = BG | ((typeof LIGHTMAGENTA !== 'undefined') ? LIGHTMAGENTA : 13);
+    var defaultTitle = BG | ((typeof CYAN !== 'undefined') ? CYAN : 3);
+    
+    // Try to get colors from theme via shell.paletteAttr (if shell has it)
+    if (this.shell && typeof this.shell.paletteAttr === 'function') {
+        return {
+            msg: this.shell.paletteAttr('mrc', 'TOAST_MSG', defaultMsg),
+            border: this.shell.paletteAttr('mrc', 'TOAST_BORDER', defaultBorder),
+            title: this.shell.paletteAttr('mrc', 'TOAST_TITLE', defaultTitle)
+        };
+    }
+    
+    // Try ThemeRegistry directly as fallback
+    if (typeof ThemeRegistry !== 'undefined' && typeof ThemeRegistry.get === 'function') {
+        var getAttr = function (key, fallback) {
+            var entry = ThemeRegistry.get('mrc', key, null);
+            if (!entry) return fallback;
+            if (typeof entry === 'number') return entry;
+            var bg = entry.BG || 0;
+            var fg = entry.FG || entry.COLOR || 0;
+            return bg | fg;
+        };
+        return {
+            msg: getAttr('TOAST_MSG', defaultMsg),
+            border: getAttr('TOAST_BORDER', defaultBorder),
+            title: getAttr('TOAST_TITLE', defaultTitle)
+        };
+    }
+    
+    // Fall back to defaults
+    return {
+        msg: defaultMsg,
+        border: defaultBorder,
+        title: defaultTitle
+    };
 };
 
 MrcController.prototype._formatDisplay = function (msg, mention) {

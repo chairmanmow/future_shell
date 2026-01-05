@@ -251,7 +251,8 @@ function _spDefaultMrcPrefs() {
         bracket_bg: 0,          // Bracket background (0-7, default black)
         name_fg: 15,            // Name foreground (0-15, default white)
         name_bg: 0,             // Name background (0-7, default black)
-        msg_fg: 7               // Message foreground (2-15, default gray, no black/blue)
+        msg_fg: 7,              // Message foreground (2-15, default gray, no black/blue)
+        msg_bg: 0               // Message background (0-7, default black)
     };
 }
 
@@ -724,6 +725,16 @@ ShellPrefs.prototype._refreshRows = function () {
         selectable: true
     });
     
+    // Message background color
+    rows.push({
+        type: 'mrc_color_bg',
+        key: 'mrc_msg_bg',
+        label: 'Message Background',
+        value: mrcPrefs.msg_bg || 0,
+        colorList: MRC_ALL_BG,
+        selectable: true
+    });
+    
     // Preview of what the alias looks like
     rows.push({
         type: 'mrc_preview',
@@ -1138,8 +1149,8 @@ ShellPrefs.prototype._updateHotspots = function () {
             key: key,
             x1: baseX,
             x2: baseX + frameWidth - 1,
-            y1: baseY + meta.y - 1,
-            y2: baseY + meta.y - 1,
+            y1: baseY + meta.y - 2,
+            y2: baseY + meta.y - 2,
             swallow: false,
             owner: 'shell-prefs:row',
             data: { type: row.type, key: row.key }
@@ -1841,7 +1852,7 @@ ShellPrefs.loadForUser = function (details) {
 
 /**
  * Get MRC preferences object
- * @returns {object} { bracket_open, bracket_close, bracket_fg, bracket_bg, name_fg, name_bg, msg_fg }
+ * @returns {object} { bracket_open, bracket_close, bracket_fg, bracket_bg, name_fg, name_bg, msg_fg, msg_bg }
  */
 ShellPrefs.prototype.getMrcPrefs = function () {
     if (!this.preferences.mrc) {
@@ -1892,6 +1903,37 @@ ShellPrefs.prototype.setMrcMsgColor = function (color) {
     if (color < 2) color = 2;
     if (color > 15) color = 15;
     this.preferences.mrc.msg_fg = color;
+    this._touch();
+    this.save();
+};
+
+/**
+ * Get the user's MRC message background color
+ * @returns {number} Color code 0-7 (default 0 = black)
+ */
+ShellPrefs.prototype.getMrcMsgBg = function () {
+    if (!this.preferences.mrc) {
+        this.preferences.mrc = _spDefaultMrcPrefs();
+    }
+    var color = this.preferences.mrc.msg_bg;
+    if (typeof color !== 'number' || color < 0 || color > 7) {
+        return 0; // default black
+    }
+    return color;
+};
+
+/**
+ * Set the user's MRC message background color
+ * @param {number} color - Color code 0-7
+ */
+ShellPrefs.prototype.setMrcMsgBg = function (color) {
+    if (!this.preferences.mrc) {
+        this.preferences.mrc = _spDefaultMrcPrefs();
+    }
+    color = parseInt(color, 10) || 0;
+    if (color < 0) color = 0;
+    if (color > 7) color = 7;
+    this.preferences.mrc.msg_bg = color;
     this._touch();
     this.save();
 };

@@ -332,6 +332,9 @@ Users.prototype._recomputeLayout = function () {
     var horizontalGap = 1;
 
     var cols = Math.max(1, Math.floor((this.listFrame.width + horizontalGap) / (tileW + horizontalGap)));
+    var usedWidth = cols * (tileW + horizontalGap) - horizontalGap;
+    var extraWidth = this.listFrame.width - usedWidth;
+    var offsetX = Math.max(0, Math.floor(extraWidth / 2));
     var usableHeight = Math.max(0, this.listFrame.height - topMargin - bottomMargin);
     var stepHeight = contentHeight + rowGap;
     var rows = Math.max(1, Math.floor((usableHeight + rowGap) / (stepHeight || 1)));
@@ -353,7 +356,8 @@ Users.prototype._recomputeLayout = function () {
         bodyHeight: bodyHeight,
         footerHeight: footerHeight,
         innerTop: innerTop,
-        innerBottom: innerBottom
+        innerBottom: innerBottom,
+        offsetX: offsetX
     };
     this.pageSize = Math.max(0, slots - 1);
 };
@@ -410,7 +414,7 @@ Users.prototype._drawTile = function (index, tile, hotspotDefs) {
     var meta = this._tileMeta; if (!meta) return;
     var lf = this.listFrame; if (!lf) return;
     var col = index % meta.cols; var row = Math.floor(index / meta.cols);
-    var x = 1 + col * (meta.tileW + meta.gap);
+    var x = 1 + col * (meta.tileW + meta.gap) + (meta.offsetX || 0);
     var yBase = 1 + (meta.topMargin || 0) + row * (meta.stepHeight || meta.tileHeight || 0);
     var contentHeight = meta.tileHeight || 0;
     if (contentHeight < 1) contentHeight = 1;

@@ -680,14 +680,63 @@ MRCService.prototype._showToastForMessage = function (payload) {
     if (this._toastHistory.length >= this._toastHistoryMax) this._toastHistory.shift();
     this._toastHistory.push(signature);
     var self = this;
+    
+    // Get themed colors for MRC toast
+    var toastColors = this._getToastColors();
+    
     this.shell.showToast({
         title: payload.from || 'MRC',
         message: (payload.from || 'MRC') + ': ' + (payload.plain || '').substr(0, 120),
         launch: 'mrc',
         category: 'mrc',
         sender: payload.from || 'mrc',
-        programIcon: 'mrc'
+        programIcon: 'mrc',
+        colors: toastColors
     });
+};
+
+/**
+ * Get toast colors from theme configuration
+ * Falls back to sensible defaults if theme not available
+ */
+MRCService.prototype._getToastColors = function () {
+    var BG = (typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0;
+    var defaultMsg = BG | ((typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : 11);
+    var defaultBorder = BG | ((typeof LIGHTMAGENTA !== 'undefined') ? LIGHTMAGENTA : 13);
+    var defaultTitle = BG | ((typeof CYAN !== 'undefined') ? CYAN : 3);
+    
+    // Try to get colors from theme via shell.paletteAttr (if shell has it)
+    if (this.shell && typeof this.shell.paletteAttr === 'function') {
+        return {
+            msg: this.shell.paletteAttr('mrc', 'TOAST_MSG', defaultMsg),
+            border: this.shell.paletteAttr('mrc', 'TOAST_BORDER', defaultBorder),
+            title: this.shell.paletteAttr('mrc', 'TOAST_TITLE', defaultTitle)
+        };
+    }
+    
+    // Try ThemeRegistry directly as fallback
+    if (typeof ThemeRegistry !== 'undefined' && typeof ThemeRegistry.get === 'function') {
+        var getAttr = function (key, fallback) {
+            var entry = ThemeRegistry.get('mrc', key, null);
+            if (!entry) return fallback;
+            if (typeof entry === 'number') return entry;
+            var bg = entry.BG || 0;
+            var fg = entry.FG || entry.COLOR || 0;
+            return bg | fg;
+        };
+        return {
+            msg: getAttr('TOAST_MSG', defaultMsg),
+            border: getAttr('TOAST_BORDER', defaultBorder),
+            title: getAttr('TOAST_TITLE', defaultTitle)
+        };
+    }
+    
+    // Fall back to defaults
+    return {
+        msg: defaultMsg,
+        border: defaultBorder,
+        title: defaultTitle
+    };
 };
 
 MRCService.prototype.addListener = function (listener) {

@@ -441,7 +441,7 @@ Mail.prototype._toastSent = function (dest) {
 	try {
 		if (!dest) return;
 		// Use unified subprogram helper; falls back to console if shell not available
-		this._showToast({ message: 'Sent mail to ' + dest, timeout: 5000, position: 'top-left' });
+		this._showToast({ message: 'Sent mail to ' + dest, timeout: 5000, position: 'top-left', category: 'mail' });
 	} catch (e) { }
 };
 
@@ -759,6 +759,9 @@ Mail.prototype.drawIconGrid = function (o) {
 	var cellH = ICON_H + labelH + 1; // top/bottom padding
 	var topPadding = 1; // leave an extra blank row above the icon grid
 	var cols = Math.max(1, Math.floor((o.width - 2) / cellW));
+	var usedWidth = cols * cellW;
+	var extraWidth = (o.width - 2) - usedWidth;
+	var offsetX = Math.max(0, Math.floor(extraWidth / 2));
 	var availableHeight = Math.max(0, o.height - (topPadding + 2));
 	var usableRows = Math.max(1, Math.floor(availableHeight / cellH));
 	var maxIcons = cols * usableRows;
@@ -782,7 +785,7 @@ Mail.prototype.drawIconGrid = function (o) {
 		for (var i = 0; i < this.menuOptions.length && i < maxIcons; i++) {
 			var col = i % cols;
 			var row = Math.floor(i / cols);
-			var x = (col * cellW) + 2;
+			var x = (col * cellW) + 2 + offsetX;
 			var y = topPadding + (row * cellH) + 1;
 			if (y + ICON_H + labelH > o.height) break;
 			var opt = this.menuOptions[i];

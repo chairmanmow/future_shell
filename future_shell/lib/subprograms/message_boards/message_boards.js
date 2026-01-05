@@ -656,10 +656,26 @@ function MessageBoard(opts) {
     this.id = "message_board";
     this._threadPaletteLogged = false;
     this.registerColors({
-        TITLE_FRAME: { BG: BG_BROWN, FG: WHITE },
+        TITLE_FRAME: { BG: BG_BLACK, FG: LIGHTBLUE },
         OUTPUT_FRAME: { BG: BG_BLACK, FG: LIGHTGRAY },
         INPUT_FRAME: { BG: BG_BROWN, FG: WHITE },
         READ_HEADER: { BG: BG_BLUE, FG: WHITE },
+        READ_HEADER_SUB: { BG: BG_BLUE, FG: LIGHTGREEN },
+        READ_HEADER_DATE: { BG: BG_BLUE, FG: WHITE },
+        READ_HEADER_FROM: { BG: BG_BLUE, FG: LIGHTRED },
+        READ_HEADER_TO: { BG: BG_BLUE, FG: LIGHTMAGENTA },
+        READ_HEADER_REPLYTO: { BG: BG_BLUE, FG: WHITE },
+        READ_HEADER_SUBJECT: { BG: BG_BLUE, FG: YELLOW },
+        READ_HEADER_LABEL: { BG: BG_BLUE, FG: LIGHTCYAN },
+        READ_HEADER_SEPARATOR: { BG: BG_BLACK, FG: CYAN },
+        ICON_LABEL: { BG: BG_BLACK, FG: LIGHTGRAY },
+        ICON_LABEL_SELECTED: { BG: BG_LIGHTGRAY, FG: BLACK },
+        ICON_TITLE: { BG: BG_BLACK, FG: LIGHTCYAN },
+        ICON_TITLE_SELECTED: { BG: BG_BLACK, FG: WHITE },
+        SEARCH_HEADER_LABEL: { BG: BG_BLACK, FG: LIGHTCYAN },
+        SEARCH_HEADER_QUERY: { BG: BG_BLACK, FG: YELLOW },
+        SEARCH_ROW: { BG: BG_BLACK, FG: LIGHTGRAY },
+        SEARCH_ROW_SELECTED: { BG: BG_BLACK, FG: WHITE },
         THREAD_CONTROLS: { BG: BG_MAGENTA, FG: LIGHTGRAY },
         THREAD_LIST: { BG: BG_BLACK, FG: LIGHTGRAY },
         THREAD_SEARCH_BUTTON: { BG: BG_BLACK, FG: LIGHTGRAY },
@@ -886,8 +902,8 @@ MessageBoard.prototype._ensureFrames = function () {
     var y = pf ? pf.y : 1;
     var w = pf ? pf.width : console.screen_columns;
     var h = pf ? pf.height : console.screen_rows;
-    this.titleFrame = new Frame(1, 1, w, 1, this.paletteAttr('TITLE_FRAME'), pf);
-    this.outputFrame = new Frame(x, 2, w, h - 2, this.paletteAttr('OUTPUT_FRAME'), pf);
+    this.titleFrame = new Frame(x, y, w, 1, this.paletteAttr('TITLE_FRAME'), pf);
+    this.outputFrame = new Frame(x, y + 1, w, h - 2, this.paletteAttr('OUTPUT_FRAME'), pf);
     this.setBackgroundFrame(this.outputFrame);
     this.inputFrame = new Frame(x, y + h - 1, w, 1, this.paletteAttr('INPUT_FRAME'), pf);
     this.titleFrame.center("Message Boards")
@@ -979,6 +995,15 @@ MessageBoard.prototype.exit = function () {
 };
 
 MessageBoard.prototype._handleKey = function (key) {
+    // Route keys to active Modal first (search prompt, etc.)
+    if (typeof Modal !== 'undefined' && typeof Modal.getActive === 'function') {
+        var activeModal = Modal.getActive();
+        if (activeModal && activeModal._open) {
+            if (typeof dbug === 'function') { try { dbug('MB:_handleKey routing to Modal key=' + JSON.stringify(key), 'messageboard'); } catch (_em) { } }
+            Modal.handleGlobalKey(key);
+            return false;
+        }
+    }
     if (this.overlay && this.overlay.isActive()) {
         if (typeof dbug === 'function') { try { dbug('MB:_handleKey blocked by overlay key=' + JSON.stringify(key), 'messageboard'); } catch (_e1) { } }
         return false;
@@ -1336,6 +1361,7 @@ MessageBoard.prototype._resetState = function () {
     this._searchScrollOffset = 0;
     this._searchQuery = '';
     this._searchReturnView = null;
+    this._searchInProgress = false;
     this._navSearchActive = false;
     this._navSearchBuffer = '';
     this._navSearchCode = null;
@@ -1479,6 +1505,7 @@ MessageBoard.prototype._init = function (reentry) {
     this._searchScrollOffset = 0;
     this._searchQuery = '';
     this._searchReturnView = null;
+    this._searchInProgress = false;
     this._navSearchActive = false;
     this._navSearchBuffer = '';
     this._navSearchCode = null;
@@ -1587,11 +1614,21 @@ MessageBoard.prototype._renderTitleFrame = function () {
                     if (ctx.numberIndexMap && typeof ctx.numberIndexMap[ctx.currentNumber] === 'number') idx = ctx.numberIndexMap[ctx.currentNumber];
                     if (idx === -1) idx = ctx.numbers.indexOf(ctx.currentNumber);
                 }
-                var label = (this.lastReadMsg && this.lastReadMsg.subject) ? this.lastReadMsg.subject : '(thread)';
+                var label = (this.lastReadMsg && this.lastReadMsg.subject) ? this.lastReadMsg.subject : '(thread)';  
                 if (idx >= 0) viewLabel = 'THREAD ' + (idx + 1) + '/' + total + ' - ' + label + msgNum;
                 else viewLabel = 'THREAD (' + total + ' messages) - ' + label + msgNum;
             } else {
-                viewLabel = 'READING IN ORDER' + msgNum;
+                // Flat/ordered mode - show position/total from flatSelection
+                var flatTotal = (this.flatHeaders && this.flatHeaders.length) ? this.flatHeaders.length : 0;
+                if (flatTotal > 0 && typeof this.flatSelection === 'number' && this.flatSelection >= 0) {
+                    // Use flatSelection directly - it's the 0-indexed position in the list
+                    var flatPos = this.flatSelection + 1; // 1-indexed for display
+                    viewLabel = 'READING IN ORDER #' + flatPos + '/' + flatTotal;
+                } else if (flatTotal > 0) {
+                    viewLabel = 'READING IN ORDER (' + flatTotal + ' total)';
+                } else {
+                    viewLabel = 'READING IN ORDER' + msgNum;
+                }
             }
         }
         this.titleFrame.center('Message Boards - ' + viewLabel);
@@ -1664,7 +1701,7 @@ MessageBoard.prototype._openSubReader = function (subCode, options) {
                 break;
             }
             try {
-                header = mb.get_msg_header(false, candidate, true);
+                header = mb.get_msg_header(false, candidate, true);  // by_offset=false, candidate is message NUMBER
             } catch (_hdrErr) {
                 header = null;
             }
@@ -1700,7 +1737,27 @@ MessageBoard.prototype._openSubReader = function (subCode, options) {
     this._readReturnView = returnView;
     this._readReturnAnchor = (header && typeof header.number === 'number') ? header.number : null;
     if (typeof this._setReadMode === 'function') this._setReadMode(returnView === 'flat' ? 'flat' : 'thread');
-    if (returnView === 'flat') this._readThreadContext = null;
+    if (returnView === 'flat') {
+        this._readThreadContext = null;
+        // Initialize flatHeaders and set flatSelection to the position of this message
+        if (typeof this._ensureFlatHeaders === 'function') this._ensureFlatHeaders();
+        if (this.flatHeaders && this.flatHeaders.length && header && typeof header.number === 'number') {
+            var foundIdx = -1;
+            for (var fi = 0; fi < this.flatHeaders.length; fi++) {
+                if (this.flatHeaders[fi] && this.flatHeaders[fi].number === header.number) {
+                    foundIdx = fi;
+                    break;
+                }
+            }
+            if (foundIdx >= 0) {
+                this.flatSelection = foundIdx;
+            } else {
+                this.flatSelection = 0;
+            }
+        } else {
+            this.flatSelection = 0;
+        }
+    }
 
     this._renderReadView(header);
     if (typeof this._ensureReadThreadData === 'function') this._ensureReadThreadData(true);
@@ -2395,6 +2452,28 @@ MessageBoard.prototype._handleReadKey = function (key) {
         }
         return false; // consumed
     }
+    if (key === 'L' || key === 'l') {
+        // L: Jump to last message in flat/ordered mode
+        var readModeL = this._getReadMode ? this._getReadMode() : 'thread';
+        if (readModeL === 'flat') {
+            if (this._ensureFlatHeaders) {
+                var headersL = this._ensureFlatHeaders();
+                if (headersL && headersL.length > 0) {
+                    var lastIdx = headersL.length - 1;
+                    this.flatSelection = lastIdx;
+                    if (this.flatSelection >= this.flatScrollOffset + (this._threadContentFrame ? Math.max(1, this._threadContentFrame.height - 2) : headersL.length)) {
+                        this.flatScrollOffset = Math.max(0, this.flatSelection - (this._threadContentFrame ? Math.max(1, this._threadContentFrame.height - 2) : headersL.length) + 1);
+                    }
+                    var lastHdr = headersL[lastIdx];
+                    if (lastHdr) {
+                        this._renderReadView(lastHdr);
+                    }
+                    return false; // consumed
+                }
+            }
+        }
+        return true; // not consumed if not in flat mode
+    }
     if (key === 'J' || key === 'j') {
         // J: Jump to message number in flat/ordered mode
         var readMode = this._getReadMode ? this._getReadMode() : 'thread';
@@ -2418,54 +2497,23 @@ MessageBoard.prototype._handleReadKey = function (key) {
                             overlay: false,
                             type: 'prompt',
                             title: 'Jump to Message',
-                            message: 'Enter message number (1-' + headers.length + ')',
+                            message: 'Enter position (1-' + headers.length + ')',
                             okLabel: 'Jump',
                             cancelLabel: 'Cancel',
                             defaultValue: '',
                             onSubmit: function (value) {
                                 var input = (value || '').trim();
                                 if (!input.length) {
-                                    self._writeStatus('JUMP: Enter a message number');
+                                    self._writeStatus('JUMP: Enter a position number');
                                     return;
                                 }
-                                var msgNum = parseInt(input, 10);
-                                if (isNaN(msgNum) || msgNum < 1 || msgNum > 65535) {
-                                    self._writeStatus('JUMP: Invalid message number');
+                                var pos = parseInt(input, 10);
+                                if (isNaN(pos) || pos < 1 || pos > headers.length) {
+                                    self._writeStatus('JUMP: Invalid position (1-' + headers.length + ')');
                                     return;
                                 }
-                                // First, look for exact match
-                                var idx = -1;
-                                for (var i = 0; i < headers.length; i++) {
-                                    if (headers[i] && headers[i].number === msgNum) {
-                                        idx = i;
-                                        break;
-                                    }
-                                }
-                                // If not found, search forward for next available message
-                                if (idx === -1) {
-                                    for (var i = 0; i < headers.length; i++) {
-                                        if (headers[i] && headers[i].number > msgNum) {
-                                            idx = i;
-                                            msgNum = headers[i].number; // update to show which one we're jumping to
-                                            break;
-                                        }
-                                    }
-                                }
-                                // If still not found, search backward for previous available message
-                                if (idx === -1) {
-                                    for (var i = headers.length - 1; i >= 0; i--) {
-                                        if (headers[i] && headers[i].number < msgNum) {
-                                            idx = i;
-                                            msgNum = headers[i].number; // update to show which one we're jumping to
-                                            break;
-                                        }
-                                    }
-                                }
-                                // Still nothing found
-                                if (idx === -1) {
-                                    self._writeStatus('JUMP: No messages near number ' + input);
-                                    return;
-                                }
+                                // Convert 1-indexed position to 0-indexed array index
+                                var idx = pos - 1;
                                 self.flatSelection = idx;
                                 if (self.flatSelection < self.flatScrollOffset) self.flatScrollOffset = self.flatSelection;
                                 var usable = self._threadContentFrame ? Math.max(1, self._threadContentFrame.height - 2) : headers.length;
@@ -2580,7 +2628,7 @@ MessageBoard.prototype._openAdjacentThread = function (delta) {
         var num = startNum + step;
         while (num >= first && num <= last) {
             var hdr = null;
-            try { hdr = mb.get_msg_header(false, num, true); } catch (_hdrFetch) { hdr = null; }
+            try { hdr = mb.get_msg_header(false, num, true); } catch (_hdrFetch) { hdr = null; }  // by_offset=false, num is message NUMBER
             if (hdr) {
                 if (typeof hdr.number !== 'number') hdr.number = num;
                 if (!hdr.sub) hdr.sub = code;
@@ -2718,7 +2766,7 @@ MessageBoard.prototype._openRelativeInThread = function (dir) {
                     var step = dir > 0 ? 1 : -1;
                     for (var num = currentMsgNum + step; num >= range.first && num <= range.last; num += step) {
                         var hdr = null;
-                        try { hdr = mbScan.get_msg_header(false, num, true); } catch (_hdrScan) { hdr = null; }
+                        try { hdr = mbScan.get_msg_header(false, num, true); } catch (_hdrScan) { hdr = null; }  // by_offset=false, num is message NUMBER
                         if (!hdr) continue;
                         if (typeof hdr.number !== 'number') hdr.number = num;
                         if (!hdr.sub) hdr.sub = code;
@@ -2889,7 +2937,7 @@ MessageBoard.prototype._renderPostViewCore = function (postOptions) {
             try {
                 var mbFetch = new MsgBase(sub);
                 if (mbFetch.open()) {
-                    fullHeader = mbFetch.get_msg_header(false, replyNum, true) || null;
+                    fullHeader = mbFetch.get_msg_header(false, replyNum, true) || null;  // by_offset=false, replyNum is message NUMBER
                     if (fullHeader) fullHeader.number = replyNum;
                     if (!activeRawBody || !activeRawBody.length) {
                         // Only fetch body if we have no cached raw body
@@ -2963,7 +3011,8 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
     if (!this._readHeaderFrame || !msg) return;
     var self = this;
     var hf = this._readHeaderFrame;
-    hf.clear(BG_BLUE | WHITE);
+    var headerAttr = this.paletteAttr('READ_HEADER');
+    hf.clear(headerAttr);
     if (this._readGroupIconFrame) { try { this._readGroupIconFrame.close(); } catch (e0) { } }
     this._readGroupIconFrame = null;
     if (this._readSubIconFrame) { try { this._readSubIconFrame.close(); } catch (e1) { } }
@@ -3047,7 +3096,8 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
     var from = (msg.from || msg.from_net || 'unknown');
     var toField = msg.to || msg.to_net || msg.to_net_addr || msg.replyto || msg.reply_to || '';
     var subj = (msg.subject || '(no subject)');
-    var when = msg.when_written_time || msg.when_written || msg.when_imported_time || 0;
+    // Check msg.when (from flatHeaders summary) as well as full header date fields
+    var when = msg.when_written_time || msg.when_written || msg.when_imported_time || msg.when || 0;
     var dateStr = 'Unknown';
     try { if (when) dateStr = strftime('%Y-%m-%d %H:%M', when); } catch (e) { }
     var avatarWidth = (this._avatarLib && this._avatarLib.defs && this._avatarLib.defs.width) || 10;
@@ -3064,21 +3114,33 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
         textEndX = Math.max(textStartX, avatarStartX - 2);
     }
     var lines = [];
-    lines.push({ label: null, value: '\x01h\x01g' + subDisplayName.toUpperCase() });
-    lines.push({ label: 'Date', value: dateStr });
-    lines.push({ label: 'From', value: '\x01h\x01r' + from });
-    if (toField && toField.length) lines.push({ label: 'To', value: '\x01h\x01m' + toField });
+    lines.push({ label: null, value: subDisplayName.toUpperCase(), colorKey: 'READ_HEADER_SUB' });
+    lines.push({ label: 'Date', value: dateStr, colorKey: 'READ_HEADER_DATE' });
+    lines.push({ label: 'From', value: from, colorKey: 'READ_HEADER_FROM' });
+    if (toField && toField.length) lines.push({ label: 'To', value: toField, colorKey: 'READ_HEADER_TO' });
     if (msg.replyto && msg.replyto.length && (!toField || toField.toLowerCase() !== msg.replyto.toLowerCase())) {
-        lines.push({ label: 'Reply-To', value: msg.replyto });
+        lines.push({ label: 'Reply-To', value: msg.replyto, colorKey: 'READ_HEADER_REPLYTO' });
     }
-    lines.push({ label: 'Subj', value: '\x01h\x01y' + subj });
+    lines.push({ label: 'Subj', value: subj, colorKey: 'READ_HEADER_SUBJECT' });
     var textWidth = Math.max(1, textEndX - textStartX + 1);
     for (var i = 0; i < lines.length && i < hf.height; i++) {
         var info = lines[i];
-        var label = !!info.label ? '\x01h\x01c' + info.label + ':\x01n ' : '';
-        var value = info.value || '';
-        var text = label + value;
-        if (text.length > textWidth) text = text.substr(0, textWidth);
+        var labelText = !!info.label ? info.label + ': ' : '';
+        var labelColored = !!info.label ? this.colorize('READ_HEADER_LABEL', info.label + ':') + ' ' : '';
+        var valueColored = this.colorize(info.colorKey, info.value || '', { reset: true });
+        var text = labelColored + valueColored;
+        var plainLen = labelText.length + (info.value || '').length;
+        if (plainLen > textWidth) {
+            // Truncate the value if needed
+            var maxValLen = textWidth - labelText.length;
+            if (maxValLen > 0) {
+                var truncVal = (info.value || '').substr(0, maxValLen);
+                valueColored = this.colorize(info.colorKey, truncVal, { reset: true });
+                text = labelColored + valueColored;
+            } else {
+                text = labelColored.substr(0, textWidth);
+            }
+        }
         try { hf.gotoxy(textStartX, i + 1); hf.putmsg(text); } catch (e) { }
     }
     if (haveAvatar) {
@@ -3141,6 +3203,21 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
             }
         }
     }
+    // Draw horizontal separator line on last row with 2 columns padding on each side
+    var separatorRow = hf.height;
+    if (separatorRow >= 1) {
+        var sepAttr = this.paletteAttr('READ_HEADER_SEPARATOR');
+        var sepChar = '\xC4';  // CP437 horizontal line character (─)
+        var padding = 2;
+        var lineLen = Math.max(0, hf.width - (padding * 2));
+        if (lineLen > 0) {
+            try {
+                hf.gotoxy(1, separatorRow);
+                hf.attr = sepAttr;
+                hf.putmsg(new Array(padding + 1).join(' ') + new Array(lineLen + 1).join(sepChar) + new Array(padding + 1).join(' '));
+            } catch (_sepErr) { }
+        }
+    }
     try { hf.cycle(); } catch (e) { }
     this._applyPendingHotspots();
 };
@@ -3150,7 +3227,7 @@ MessageBoard.prototype._fetchAvatarForMessage = function (msg) {
     if (!this._avatarLib || !msg) return null; var full = msg;
     // Re-fetch full header if needed
     if (!full.from_net_addr && full.number && this.cursub) {
-        try { var mb = new MsgBase(this.cursub); if (mb.open()) { var fh = mb.get_msg_header(false, full.number, true); if (fh) { fh.number = full.number; full = fh; } mb.close(); } } catch (e) { log('avatar refetch header error: ' + e); }
+        try { var mb = new MsgBase(this.cursub); if (mb.open()) { var fh = mb.get_msg_header(false, full.number, true); if (fh) { fh.number = full.number; full = fh; } mb.close(); } } catch (e) { log('avatar refetch header error: ' + e); }  // by_offset=false, full.number is message NUMBER
     }
     if (!this._deriveAvatarCandidates) {
         this._deriveAvatarCandidates = function (h) {
@@ -3650,6 +3727,9 @@ MessageBoard.prototype._calcGridMetrics = function () {
     var usableHeight = Math.max(0, h - topPadding);
     var cols = Math.max(1, Math.floor(w / cellW));
     var rows = Math.max(1, Math.floor(usableHeight / cellH));
+    var usedWidth = cols * cellW;
+    var extraWidth = w - usedWidth;
+    var offsetX = Math.max(0, Math.floor(extraWidth / 2));
     return {
         iconW: iconW,
         iconH: iconH,
@@ -3657,7 +3737,8 @@ MessageBoard.prototype._calcGridMetrics = function () {
         rows: rows,
         cellW: cellW,
         cellH: cellH,
-        topPadding: topPadding
+        topPadding: topPadding,
+        offsetX: offsetX
     };
 };
 
@@ -3835,18 +3916,25 @@ MessageBoard.prototype._promptSearch = function (preferredCode, returnView, sear
                     return;
                 }
                 self._searchReturnView = returnView || self.view;
+                self._searchInProgress = true;
                 self._writeStatus('SEARCH: searching...');
                 try { modal.close(); } catch (_eModalClose) { }
                 self._executeSearch(code, term, searchScope);
+                self._searchInProgress = false;
             },
             onCancel: function () {
                 self._searchReturnView = null;
+                self._searchInProgress = false;
                 self._writeStatus('SEARCH cancelled');
                 try { self._rebuildActiveHotspots(); } catch (_eReHotspot) { try { self.draw(); } catch (_eRedraw) { } }
             },
             onClose: function () {
                 self._activeSearchModal = null;
-                try { self._rebuildActiveHotspots(); } catch (_eReHotspot) { try { self.draw(); } catch (_eRedraw) { } }
+                // Only rebuild hotspots/draw if search is not in progress
+                // (search execution handles its own view rendering)
+                if (!self._searchInProgress) {
+                    try { self._rebuildActiveHotspots(); } catch (_eReHotspot) { try { self.draw(); } catch (_eRedraw) { } }
+                }
             }
         });
         this._activeSearchModal = modal;
@@ -3906,6 +3994,12 @@ MessageBoard.prototype._executeSearch = function (code, query, searchScope) {
     var codes = [];
     var self = this;
 
+    // Ensure curgrp is set from current sub if needed
+    if (typeof this.curgrp !== 'number' || isNaN(this.curgrp)) {
+        var derived = this._syncSubState ? this._syncSubState(this.cursub || this._lastActiveSubCode || null) : null;
+        if (derived && typeof derived.groupIndex === 'number') this.curgrp = derived.groupIndex;
+    }
+
     // Determine which sub codes to search
     if (searchScope === 'all' && msg_area && msg_area.grp_list) {
         // Search all groups and subs
@@ -3932,6 +4026,18 @@ MessageBoard.prototype._executeSearch = function (code, query, searchScope) {
         if (code) codes.push(code);
     }
 
+    // If no codes to search, show error and return to previous view
+    if (!codes.length) {
+        this._writeStatus('SEARCH: No message areas to search');
+        var ret = this._searchReturnView || 'group';
+        this._searchReturnView = null;
+        if (ret === 'sub') this._renderSubView(this.curgrp);
+        else if (ret === 'read' && this.lastReadMsg) this._renderReadView(this.lastReadMsg);
+        else if (ret === 'threads' && this.cursub) this._renderThreadsView(this.cursub);
+        else this._renderGroupView();
+        return;
+    }
+
     // Search all applicable codes
     for (var ci = 0; ci < codes.length; ci++) {
         var searchCode = codes[ci];
@@ -3943,8 +4049,9 @@ MessageBoard.prototype._executeSearch = function (code, query, searchScope) {
 
         try {
             var total = mb.total_msgs || 0;
-            for (var n = 1; n <= total; n++) {
-                var hdr = mb.get_msg_header(false, n, true);
+            // Use 0-based index iteration with by_offset=true for reliable enumeration
+            for (var idx = 0; idx < total; idx++) {
+                var hdr = mb.get_msg_header(true, idx, true);  // by_offset=true
                 if (!hdr) continue;
                 var matched = false;
                 var fields = [hdr.subject, hdr.from, hdr.to, hdr.from_net, hdr.to_net, hdr.id, hdr.reply_id];
@@ -4151,7 +4258,7 @@ MessageBoard.prototype._paintIconGrid = function () {
         var globalIndex = this.scrollOffset + v;
         var col = idx % metrics.cols; var row = Math.floor(idx / metrics.cols);
         var topPad = metrics.topPadding || 0;
-        var x = (col * metrics.cellW) + 2;
+        var x = (col * metrics.cellW) + 2 + (metrics.offsetX || 0);
         var y = topPad + (row * metrics.cellH) + 1;
         var itemData = visible[v];
         var inSubView = (this.view === 'sub');
@@ -4162,13 +4269,13 @@ MessageBoard.prototype._paintIconGrid = function () {
         var iconYOffset = inSubView ? 1 : 0;
         var iconFrame = new Frame(baseX, baseY + iconYOffset, metrics.iconW, metrics.iconH, (itemData.iconBg || 0) | (itemData.iconFg || 0), this.outputFrame);
         if (typeof ICSH_PERF_TAG !== 'undefined') { try { iconFrame.__perfTag = 'mb-icon'; } catch (_ptI) { } }
-        var labelFrame = new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, BG_BLACK | LIGHTGRAY, this.outputFrame);
+        var labelFrame = new Frame(iconFrame.x, iconFrame.y + metrics.iconH, metrics.iconW, 1, this.paletteAttr('ICON_LABEL'), this.outputFrame);
         if (typeof ICSH_PERF_TAG !== 'undefined') { try { labelFrame.__perfTag = 'mb-icon-label'; } catch (_ptIL) { } }
 
         var iconTitleFrame = null;
         if (inSubView) {
-            var titleColor = (typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : (typeof CYAN !== 'undefined' ? CYAN : WHITE);
-            iconTitleFrame = new Frame(iconFrame.x, iconFrame.y - 1, metrics.iconW, 1, BG_BLACK | titleColor, this.outputFrame);
+            var titleAttrInit = this.paletteAttr('ICON_TITLE');
+            iconTitleFrame = new Frame(iconFrame.x, iconFrame.y - 1, metrics.iconW, 1, titleAttrInit, this.outputFrame);
             if (typeof ICSH_PERF_TAG !== 'undefined') { try { iconTitleFrame.__perfTag = 'mb-icon-title'; } catch (_ptIT) { } }
             iconTitleFrame.transparent = false;
             if (typeof iconTitleFrame.word_wrap !== 'undefined') iconTitleFrame.word_wrap = false;
@@ -4198,20 +4305,20 @@ MessageBoard.prototype._paintIconGrid = function () {
         if (iconTitleFrame) {
             try {
                 var titleAttr = isSelected
-                    ? ((typeof WHITE !== 'undefined') ? WHITE : ((typeof LIGHTGRAY !== 'undefined') ? LIGHTGRAY : LIGHTCYAN))
-                    : ((typeof LIGHTCYAN !== 'undefined') ? LIGHTCYAN : ((typeof CYAN !== 'undefined') ? CYAN : WHITE));
+                    ? this.paletteAttr('ICON_TITLE_SELECTED')
+                    : this.paletteAttr('ICON_TITLE');
                 var titleText = '';
                 if (itemData.type === 'sub') titleText = itemData._labelBase || itemData.title || itemData.label || '';
                 else titleText = itemData.title || itemData.label || '';
-                iconTitleFrame.clear(BG_BLACK | titleAttr);
-                iconTitleFrame.attr = BG_BLACK | titleAttr;
+                iconTitleFrame.clear(titleAttr);
+                iconTitleFrame.attr = titleAttr;
                 iconTitleFrame.gotoxy(1, 1);
                 if (this._center) titleText = this._center(titleText, iconTitleFrame.width);
                 else if (titleText.length > iconTitleFrame.width) titleText = titleText.substr(0, iconTitleFrame.width);
                 var colorSeq = isSelected
-                    ? '\x01n\x01h\x01w'
-                    : '\x01n\x01h\x01c';
-                iconTitleFrame.putmsg(colorSeq + titleText + '\x01n');
+                    ? this.colorCode('ICON_TITLE_SELECTED')
+                    : this.colorCode('ICON_TITLE');
+                iconTitleFrame.putmsg((colorSeq || '') + titleText + '\x01n');
                 try { iconTitleFrame.cycle(); } catch (_ignoredCycle) { }
             } catch (_ignoredTitle) { }
         }
@@ -4354,17 +4461,19 @@ MessageBoard.prototype._loadThreadHeaders = function (limit) {
             }
             return;
         }
-        var start = 1;
-        var endNum = total;
-        if (limit && limit > 0) {
-            start = Math.max(1, total - limit + 1);
+        // Use 0-based index iteration with by_offset=true for reliable enumeration
+        // (message numbers can have gaps from deletions, but indices are contiguous)
+        var startIdx = 0;
+        var endIdx = total - 1;
+        if (limit && limit > 0 && total > limit) {
+            startIdx = total - limit;
         }
-        for (var n = start; n <= endNum; n++) {
-            var hdr = mb.get_msg_header(false, n, true);
+        for (var idx = startIdx; idx <= endIdx; idx++) {
+            var hdr = mb.get_msg_header(true, idx, true);  // by_offset=true, idx is 0-based index
             if (!hdr) continue;
             this._storeFullHeader(hdr);
             this.threadHeaders.push({
-                number: n,
+                number: hdr.number,
                 id: hdr.id,
                 reply_id: hdr.reply_id,
                 subject: hdr.subject || '(no subject)',
@@ -4374,7 +4483,7 @@ MessageBoard.prototype._loadThreadHeaders = function (limit) {
         }
     } catch (e) { /* swallow */ }
     finally { try { mb.close(); } catch (e2) { } }
-    // Basic chronological sort (oldest first). For threads we might group later.
+    // Sort by message number (which represents chronological order in msgbase)
     this.threadHeaders.sort(function (a, b) { return a.number - b.number; });
     // Cache headers and associated full header details for reuse
     var cacheHeaders = this.threadHeaders.slice();
@@ -4660,38 +4769,46 @@ MessageBoard.prototype._toggleThreadFlatView = function () {
 };
 
 MessageBoard.prototype._advanceFlatRead = function (dir) {
-    if (!this.lastReadMsg || typeof this.lastReadMsg.number !== 'number') return false;
     if (typeof dir !== 'number' || !dir) dir = 1;
-    var code = this.cursub || this._lastActiveSubCode || this._cachedSubCode || (bbs && bbs.cursub_code) || this.lastReadMsg.sub || this.lastReadMsg.sub_code || null;
-    if (!code || typeof MsgBase !== 'function') return false;
-    var range = this._getSubMessageRange ? this._getSubMessageRange(code) : { first: 1, last: 0 };
-    if (!range || typeof range.first !== 'number' || typeof range.last !== 'number') return false;
-    var mb = new MsgBase(code);
-    if (!mb.open()) return false;
-    var step = dir > 0 ? 1 : -1;
-    var start = this.lastReadMsg.number + step;
-    try {
-        for (var num = start; dir > 0 ? num <= range.last : num >= range.first; num += step) {
-            var hdr = null;
-            try { hdr = mb.get_msg_header(false, num, true); } catch (_hdrErr) { hdr = null; }
-            if (!hdr) continue;
-            if (typeof hdr.number !== 'number') hdr.number = num;
-            if (!hdr.sub) hdr.sub = code;
-            if (typeof this._storeFullHeader === 'function') this._storeFullHeader(hdr);
-            this._setReadMode('flat');
-            this._readThreadContext = null;
-            this._readReturnView = 'flat';
-            this._readReturnAnchor = hdr.number || null;
-            if (typeof this._ensureFlatHeaders === 'function') this._ensureFlatHeaders();
-            this._updateFlatSelectionFromNumber(hdr.number);
-            this._renderReadView(hdr);
-            if (typeof this._showReadNotice === 'function') this._showReadNotice(dir > 0 ? 'next-message' : 'prev-message');
-            return true;
-        }
-    } finally {
-        try { mb.close(); } catch (_closeErr) { }
+    
+    // Ensure flatHeaders is populated
+    var headers = this._ensureFlatHeaders ? this._ensureFlatHeaders() : this.flatHeaders;
+    if (!headers || !headers.length) return false;
+    
+    // Initialize flatSelection if needed
+    if (typeof this.flatSelection !== 'number' || this.flatSelection < 0) {
+        this.flatSelection = 0;
     }
-    return false;
+    
+    // Calculate new position
+    var newIdx = this.flatSelection + dir;
+    
+    // Bounds check
+    if (newIdx < 0 || newIdx >= headers.length) return false;
+    
+    // Get the header at the new position
+    var hdr = headers[newIdx];
+    if (!hdr) return false;
+    
+    // Update flatSelection
+    this.flatSelection = newIdx;
+    
+    // Update scroll offset
+    var frame = this._threadContentFrame || this.outputFrame;
+    var usable = frame ? Math.max(1, frame.height - 2) : headers.length;
+    if (this.flatSelection < this.flatScrollOffset) this.flatScrollOffset = this.flatSelection;
+    if (this.flatSelection >= this.flatScrollOffset + usable) this.flatScrollOffset = Math.max(0, this.flatSelection - usable + 1);
+    
+    // Set up read context
+    this._setReadMode('flat');
+    this._readThreadContext = null;
+    this._readReturnView = 'flat';
+    this._readReturnAnchor = hdr.number || null;
+    
+    // Render the message
+    this._renderReadView(hdr);
+    if (typeof this._showReadNotice === 'function') this._showReadNotice(dir > 0 ? 'next-message' : 'prev-message');
+    return true;
 };
 
 MessageBoard.prototype._toggleFlatSortOrder = function () {
@@ -5042,7 +5159,7 @@ MessageBoard.prototype._buildThreadTree = function () {
         try {
             var mb = new MsgBase(code);
             if (!mb.open()) return null;
-            var hdr = mb.get_msg_header(false, num, true);
+            var hdr = mb.get_msg_header(false, num, true);  // by_offset=false, num is message NUMBER
             try { mb.close(); } catch (e) { }
             if (hdr) { self._storeFullHeader(hdr); return hdr; }
         } catch (e) { }
@@ -5135,7 +5252,7 @@ MessageBoard.prototype._buildThreadSequence = function (rootId) {
                     return null;
                 }
             }
-            var hdr = mb.get_msg_header(false, num, true);
+            var hdr = mb.get_msg_header(false, num, true);  // by_offset=false, num is message NUMBER
             if (hdr) {
                 self._storeFullHeader(hdr);
                 return hdr;
@@ -5474,7 +5591,7 @@ MessageBoard.prototype._handleSubKey = function (key) {
 
 MessageBoard.prototype._renderIconLabel = function (frame, item, isSelected, widthOverride) {
     if (!frame) return;
-    var baseAttr = isSelected ? (BG_LIGHTGRAY | BLACK) : (BG_BLACK | LIGHTGRAY);
+    var baseAttr = isSelected ? this.paletteAttr('ICON_LABEL_SELECTED') : this.paletteAttr('ICON_LABEL');
     try { frame.clear(baseAttr); frame.home(); } catch (e) { }
     var width = widthOverride || frame.width || 0;
     if (width <= 0) return;
@@ -5578,26 +5695,17 @@ MessageBoard.prototype._getSubUnreadCount = function (code, totalHint) {
     if (cached && (now - cached.ts) < 5000) return cached.unread;
     var stats = this._getSubPointers(code);
     var pointer = stats.pointer || 0;
-    var total = (typeof totalHint === 'number') ? totalHint : (stats.total || this._getSubMessageCount(code));
     var unread = 0;
+    var total = 0;
     var mb = new MsgBase(code);
     if (mb.open()) {
         try {
-            var last = (typeof mb.last_msg === 'number') ? mb.last_msg : 0;
-            if (pointer < last) {
-                var start = pointer + 1;
-                var limit = last;
-                var maxLoop = 2000;
-                var iter = 0;
-                for (var num = start; num <= limit; num++) {
-                    var hdr = mb.get_msg_header(false, num, false);
-                    if (hdr) unread++;
-                    iter++;
-                    if (iter >= maxLoop) {
-                        unread += Math.max(0, (limit - pointer) - iter);
-                        break;
-                    }
-                }
+            total = mb.total_msgs || 0;
+            // Use index-based iteration (same as _loadThreadHeaders) for consistent counting
+            // This counts actual messages, not message number ranges which may have gaps
+            for (var idx = 0; idx < total; idx++) {
+                var hdr = mb.get_msg_header(true, idx, false);  // by_offset=true, idx is 0-based INDEX
+                if (hdr && hdr.number > pointer) unread++;
             }
         } catch (e) {
             unread = Math.max(0, total - (pointer || 0));
@@ -5605,7 +5713,8 @@ MessageBoard.prototype._getSubUnreadCount = function (code, totalHint) {
             try { mb.close(); } catch (_ignored) { }
         }
     } else {
-        unread = Math.max(0, total - (pointer || 0));
+        var fallbackTotal = (typeof totalHint === 'number') ? totalHint : (stats.total || this._getSubMessageCount(code));
+        unread = Math.max(0, fallbackTotal - (pointer || 0));
     }
     if (unread < 0 || !isFinite(unread)) unread = 0;
     this._subUnreadCounts[code] = { unread: unread, ts: now };

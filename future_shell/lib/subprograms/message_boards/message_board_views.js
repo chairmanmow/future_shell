@@ -689,7 +689,7 @@ if (typeof lazyLoadModule !== 'function') {
             }
             board._avatarLib = bbs.mods.avatar_lib || null;
             var avh = (board._avatarLib && board._avatarLib.defs && board._avatarLib.defs.height) || 6;
-            var headerH = Math.min(avh, f ? f.height - 1 : avh);
+            var headerH = Math.min(avh + 1, f ? f.height - 1 : avh + 1);  // +1 for separator row
             var headerAttr = (board && typeof board.paletteAttr === 'function')
                 ? board.paletteAttr('READ_HEADER', BG_BLUE | WHITE)
                 : (BG_BLUE | WHITE);
@@ -721,11 +721,13 @@ if (typeof lazyLoadModule !== 'function') {
                     try {
                         var cached = (board._fullHeaders && board._fullHeaders[msg.number]) || null;
                         if (!cached) {
-                            try { cached = mb.get_msg_header(false, msg.number, true); } catch (_e3) { cached = null; }
+                            try { cached = mb.get_msg_header(false, msg.number, true); } catch (_e3) { cached = null; }  // by_offset=false, msg.number is message NUMBER
                             if (cached && board._storeFullHeader) board._storeFullHeader(cached);
                         }
                         if (cached) fullHeader = cached;
                         if (fullHeader && board._storeFullHeader) board._storeFullHeader(fullHeader);
+                        // Repaint header with full header data (includes proper date fields)
+                        if (fullHeader && board._paintReadHeader) board._paintReadHeader(fullHeader);
                         if (board._readMessageBody) bodyText = board._readMessageBody(mb, fullHeader) || '';
                         board.currentMessageRawBody = bodyText; // capture unmodified raw body
                     } finally {
@@ -960,7 +962,34 @@ if (typeof lazyLoadModule !== 'function') {
     function paintSearchResults(board) {
         var f = board.outputFrame; if (!f) return;
         try { f.clear(); } catch (_e) { }
-        var header = '\x01h\x01cSearch \x01h\x01y"' + board._searchQuery + '"\x01h\x01c in \x01h\x01y' + (board._getCurrentSubName ? board._getCurrentSubName() : '') + '\x01h\x01c (' + board._searchResults.length + ' results)\x01n';
+        
+        // Determine scope label for header (check if results span multiple subs)
+        var scopeLabel = '';
+        var resultCodes = {};
+        if (board._searchResults && board._searchResults.length > 0) {
+            for (var j = 0; j < board._searchResults.length; j++) {
+                var r = board._searchResults[j];
+                if (r && r.code) resultCodes[r.code] = true;
+            }
+        }
+        var numSubs = Object.keys(resultCodes).length;
+        if (numSubs > 1) {
+            // Results from multiple subs - try to determine if all in same group
+            var grpName = (msg_area && msg_area.grp_list && typeof board.curgrp === 'number' && msg_area.grp_list[board.curgrp]) 
+                ? msg_area.grp_list[board.curgrp].name 
+                : null;
+            scopeLabel = grpName ? (grpName + ' (' + numSubs + ' subs)') : (numSubs + ' subs');
+        } else {
+            scopeLabel = board._getCurrentSubName ? board._getCurrentSubName() : '';
+        }
+        
+        // Build header using theme colors
+        var searchLabel = (typeof board.colorize === 'function') ? board.colorize('SEARCH_HEADER_LABEL', 'Search ') : '\x01h\x01cSearch ';
+        var queryText = (typeof board.colorize === 'function') ? board.colorize('SEARCH_HEADER_QUERY', '"' + board._searchQuery + '"') : '\x01h\x01y"' + board._searchQuery + '"';
+        var inLabel = (typeof board.colorize === 'function') ? board.colorize('SEARCH_HEADER_LABEL', ' in ') : '\x01h\x01c in ';
+        var subName = (typeof board.colorize === 'function') ? board.colorize('SEARCH_HEADER_QUERY', scopeLabel) : '\x01h\x01y' + scopeLabel;
+        var countLabel = (typeof board.colorize === 'function') ? board.colorize('SEARCH_HEADER_LABEL', ' (' + board._searchResults.length + ' results)') : '\x01h\x01c (' + board._searchResults.length + ' results)\x01n';
+        var header = searchLabel + queryText + inLabel + subName + countLabel;
         if (header.length > f.width) header = header.substr(0, f.width);
         try { f.gotoxy(1, 1); f.putmsg(header); } catch (_e1) { }
         var usable = Math.max(1, f.height - 2);
@@ -979,9 +1008,11 @@ if (typeof lazyLoadModule !== 'function') {
             if (res.snippet) line += ' - ' + res.snippet.replace(/\s+/g, ' ');
             if (line.length > f.width) line = line.substr(0, f.width - 3) + '...';
             var selected = (i === board._searchSelection);
-            var resume = selected ? '\x01n\x01h' : '\x01n';
+            var rowColorKey = selected ? 'SEARCH_ROW_SELECTED' : 'SEARCH_ROW';
+            var resume = (typeof board.colorCode === 'function') ? (board.colorCode(rowColorKey) || '\x01n') : (selected ? '\x01n\x01h' : '\x01n');
             if (board._highlightQuery) line = board._highlightQuery(line, board._searchQuery, resume);
-            line = (selected ? '\x01n\x01h' : '\x01n') + line;
+            var rowPrefix = (typeof board.colorCode === 'function') ? (board.colorCode(rowColorKey) || '') : (selected ? '\x01n\x01h' : '\x01n');
+            line = rowPrefix + line;
             try { f.gotoxy(1, lineY); f.putmsg(line); } catch (_e2) { }
             var cmd = null;
         if (usedHotspots < hotspotChars.length) cmd = hotspotChars[usedHotspots++];

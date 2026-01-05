@@ -21,6 +21,7 @@ function MRC_Session(host, port, user, pass, alias) {
         mention_count: 0,
         latency: '-',
         msg_color: 7,
+        msg_bg: 0,
         twit_list: [],
         last_private_msg_from: "",
         show_ctcp_req: true
@@ -46,12 +47,16 @@ function MRC_Session(host, port, user, pass, alias) {
     }
 
     function send_message(to_user, to_room, body) {
+        // Build color prefix: background (16+bg) then foreground
+        // Always emit background to reset from bracket colors (even for black=0)
+        var colorPrefix = format("|%02d|%02d ", 16 + state.msg_bg, state.msg_color);
+        
         if (body.length + state.alias.length + 1 > 250) {
             word_wrap(body, 250 - 1 - state.alias.length).split(/\n/).forEach(function (e) {
-                send(to_user, '', to_room, state.alias + ' ' + format("|%02d", state.msg_color) + e);
+                send(to_user, '', to_room, state.alias + colorPrefix + e);
             });
         } else {
-            send(to_user, '', to_room, state.alias + ' ' + format("|%02d", state.msg_color) + body);
+            send(to_user, '', to_room, state.alias + colorPrefix + body);
         }
     }
 

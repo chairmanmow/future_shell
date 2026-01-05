@@ -49,7 +49,11 @@ function getMrcController(opts) {
 
     // Return existing controller if present for this node
     if (bbs[controllerKey] && typeof bbs[controllerKey].tick === 'function') {
-        // Controller exists - just update timer if provided
+        // Controller exists - update shell and timer references
+        // Shell must be updated to ensure activeSubprogram checks work correctly
+        if (opts.shell) {
+            bbs[controllerKey].shell = opts.shell;
+        }
         if (opts.timer && typeof bbs[controllerKey].attachTimer === 'function') {
             try { bbs[controllerKey].attachTimer(opts.timer); } catch (_) { }
         }
@@ -64,9 +68,10 @@ function getMrcController(opts) {
     // Get username for this session
     var username = (typeof user !== 'undefined' && user && user.alias) ? user.alias : 'guest';
 
-    // Get user preferences (alias, msg_color) from ShellPrefs via shell
+    // Get user preferences (alias, msg_color, msg_bg) from ShellPrefs via shell
     var formattedAlias = '';
     var msgColor = 7;
+    var msgBg = 0;
     
     if (opts.shell && typeof opts.shell._getShellPrefs === 'function') {
         try {
@@ -81,6 +86,11 @@ function getMrcController(opts) {
                 if (typeof prefs.getMrcMsgColor === 'function') {
                     msgColor = prefs.getMrcMsgColor();
                     mrcLog('[mrc-factory] Node ' + nodeNum + ': got msg_color from shell prefs: ' + msgColor);
+                }
+                // Get msg_bg from shell prefs
+                if (typeof prefs.getMrcMsgBg === 'function') {
+                    msgBg = prefs.getMrcMsgBg();
+                    mrcLog('[mrc-factory] Node ' + nodeNum + ': got msg_bg from shell prefs: ' + msgBg);
                 }
             }
         } catch (prefsErr) {
@@ -101,13 +111,14 @@ function getMrcController(opts) {
         pass: (typeof user !== 'undefined' && user && user.security && user.security.password) ? user.security.password : '',
         alias: formattedAlias,
         msg_color: msgColor,
+        msg_bg: msgBg,
         room: serverSettings.room || 'futureland',
         nodeId: nodeNum,
         timer: opts.timer || null,
         shell: opts.shell || null
     };
 
-    mrcLog('[mrc-factory] Node ' + nodeNum + ': creating controller with alias=' + controllerOpts.alias + ', msg_color=' + controllerOpts.msg_color);
+    mrcLog('[mrc-factory] Node ' + nodeNum + ': creating controller with alias=' + controllerOpts.alias + ', msg_color=' + controllerOpts.msg_color + ', msg_bg=' + controllerOpts.msg_bg);
 
     try {
         bbs[controllerKey] = new MrcController(controllerOpts);
