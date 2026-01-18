@@ -1,4 +1,5 @@
 // Calendar Subprogram (ported & simplified from legacy event calendar)
+"use strict";
 // Keys: Arrow keys move selection, PgUp/PgDn change month, Home=Today, Q/ESC exit.
 // Future extension: highlight events (birthdays, resets) via this.highlights[day]=true.
 

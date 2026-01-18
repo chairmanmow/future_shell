@@ -1,4 +1,5 @@
 /**
+"use strict";
  * MRC Controller Factory
  * Ensures one persistent controller per node, stored on bbs object.
  * Survives shell crashes/reloads for seamless MRC experience.

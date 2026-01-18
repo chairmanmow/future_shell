@@ -1,4 +1,5 @@
 /**
+"use strict";
  * Test MRC Connection Flow
  * Simulates the connection and cycling to verify socket processing
  */

@@ -1,4 +1,5 @@
 // MRC Action Type Definitions
+"use strict";
 // Defines all state mutations for the MRC store (pure action catalog)
 
 // Connection lifecycle

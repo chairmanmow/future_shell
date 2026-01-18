@@ -1,4 +1,5 @@
 // mods/future_shell/service.js
+"use strict";
 //
 // Simple read-only usage analytics service
 // Scope: ICSH_USAGE

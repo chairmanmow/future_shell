@@ -1,3 +1,5 @@
+"use strict";
+
 function Icon(iconFrame, labelFrame, data, logit) {
     this.logit = logit;
     this.iconFrame = iconFrame;

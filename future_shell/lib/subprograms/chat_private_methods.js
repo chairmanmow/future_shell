@@ -1,3 +1,5 @@
+"use strict";
+
 Chat.prototype._isSenderSameAsLast = function(currentSender, lastSender) {
     return (currentSender === lastSender) && (currentSender !== null);
 };

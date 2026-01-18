@@ -1,3 +1,5 @@
+"use strict";
+
 function PNG2ANS(optsOrArgv) {
     // --- tiny local helpers ---
     function parseArgv(argv) { var o = {}; for (var i = 0; i < (argv ? argv.length : 0); i++) { var a = String(argv[i]); var k = a.split("=", 1)[0]; var v = a.substr(k.length + 1); if (v !== "") o[k] = v; } return o; }

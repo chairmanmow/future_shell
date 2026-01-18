@@ -1,4 +1,5 @@
 // System Info Subprogram
+"use strict";
 // Displays selected properties from global 'system' object.
 // Configure the fields to display by editing SYS_INFO_FIELDS below.
 // key = property name on global 'system'; value = human-friendly label.

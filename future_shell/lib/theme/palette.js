@@ -1,4 +1,5 @@
 // palette.js - centralized theme palette management for IconShell
+"use strict";
 
 if (typeof registerModuleExports !== 'function') {
 	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }

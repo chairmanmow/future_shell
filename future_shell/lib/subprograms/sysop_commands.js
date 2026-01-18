@@ -1,3 +1,5 @@
+"use strict";
+
 load("future_shell/lib/subprograms/subprogram.js");
 if (typeof registerModuleExports !== 'function') {
 	try { load('future_shell/lib/util/lazy.js'); } catch (_) { }

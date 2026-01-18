@@ -1,3 +1,5 @@
+"use strict";
+
 if (typeof Feed === 'undefined') {
     try { load('rss-atom.js'); } catch (_e) { }
 }

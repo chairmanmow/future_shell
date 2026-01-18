@@ -1,5 +1,7 @@
 /* $Id: mrc-client.js,v 1.5 2019/05/05 04:52:40 echicken Exp $ */
 
+"use strict";
+
 /**
  * Multi Relay Chat Client Module
  * echicken -at- bbs.electronicchicken.com
@@ -195,8 +197,9 @@ function append_message(frames, msg, mention, when) {
     
     const top = frames.output.offset.y;
     if (frames.output.data_height > frames.output.height) {
+        var yieldFunc = this.yield || (function() {});
         while (frames.output.down()) {
-            yield();
+            yieldFunc();
         }
         frames.output.gotoxy(1, frames.output.height);
     }
@@ -750,7 +753,8 @@ function main() {
 
         display_system_messages(frames);
 
-        yield();
+        var yieldFunc = this.yield || (function() {});
+        yieldFunc();
     }
     console.clear(autopause=false); // prevent an unintended auto-pause when quitting
 }

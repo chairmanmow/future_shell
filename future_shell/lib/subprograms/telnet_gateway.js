@@ -1,3 +1,5 @@
+"use strict";
+
 load('sbbsdefs.js');
 load('future_shell/lib/subprograms/subprogram.js');
 load('future_shell/lib/shell/icon.js');

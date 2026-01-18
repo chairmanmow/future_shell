@@ -1,4 +1,5 @@
 // Private Message (minimal) Subprogram
+"use strict";
 // Straightforward state machine, single active input string, few states.
 // States: MENU -> RECIPIENT -> MESSAGE -> SENT -> MENU
 // Keys: T (from MENU) start telegram, Q/ESC exit, ENTER advances, blank ENTER sends when composing.

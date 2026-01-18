@@ -1,4 +1,5 @@
 // ambient_manager.js
+"use strict";
 // Lightweight ambient animation manager for IconShell background effects.
 // Mirrors the login module's animation switching concept but keeps a small integration surface.
 // API: new ShellAmbientManager(parentFrame, opts)

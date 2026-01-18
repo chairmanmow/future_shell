@@ -1,3 +1,5 @@
+"use strict";
+
 if (typeof lazyLoadModule !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }

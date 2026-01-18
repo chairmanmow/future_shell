@@ -1,4 +1,5 @@
 // avatars-float.js
+"use strict";
 // Extracted AvatarsFloat animation for focused debugging.
 // Provides a frame-only avatar sprite system using avatar_lib.js (mandatory).
 // Guarded load to avoid double-loading (which caused 'redeclaration of const defs').

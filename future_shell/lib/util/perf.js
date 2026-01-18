@@ -1,4 +1,5 @@
 // perf.js - lightweight runtime instrumentation for IconShell
+"use strict";
 // Collects metrics: frames created/closed, timers, events, key latency, chat redraw cost.
 // Safe to load multiple times (idempotent).
 if(typeof global === 'undefined') this.global = this;

@@ -1,4 +1,5 @@
 // Chat / IRC Subprogram adapted from original chat_sec.js for IconShell framework
+"use strict";
 load('future_shell/lib/subprograms/subprogram.js');
 load('sbbsdefs.js');
 load('nodedefs.js');

@@ -1,4 +1,5 @@
 // png_loader.js — Self-contained PNG loader + decoder for Synchronet/SpiderMonkey
+"use strict";
 // Exports: PNGLoader.decode(bytes) -> { rgba: Uint8Array, width, height }
 //
 // Supported:

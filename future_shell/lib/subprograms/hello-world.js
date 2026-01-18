@@ -1,4 +1,5 @@
 // Hello World demo subprogram to validate Subprogram framework.
+"use strict";
 // Behavior:
 // 1. Opens a modal prompt asking for the user's name.
 // 2. Greets the user with the supplied name inside the primary frame.

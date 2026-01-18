@@ -1,4 +1,5 @@
 // jpg_loader.js — resilient SOF0/SOF2 JPEG decoder for Synchronet JS
+"use strict";
 // Bakes in: robust entropy marker handling, bounded resync, table fallbacks,
 // mid-stream DHT/DQT, MCU-ordered non-interleaved scans, EXIF/APP14.
 // Export: JPGLoaderFactory() -> { decode(bytes), looksJPG(bytes), inspect(bytes) }

@@ -1,4 +1,5 @@
 // MRC Client: Thin wrapper around MRC_Session
+"use strict";
 // Normalizes events to a minimal interface and hides session implementation details
 
 load('future_shell/lib/mrc/session.js');

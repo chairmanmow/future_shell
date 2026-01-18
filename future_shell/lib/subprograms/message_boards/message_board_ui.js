@@ -1,3 +1,5 @@
+"use strict";
+
 load('sbbsdefs.js');
 
 (function (global) {

@@ -1,3 +1,5 @@
+"use strict";
+
 /*
  * Launch Queue - lightweight inter-node notification channel.
  * Stores recent external launch events in JSONdb so each shell instance

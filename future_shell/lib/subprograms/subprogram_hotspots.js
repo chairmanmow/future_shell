@@ -1,4 +1,5 @@
 // Lightweight wrapper so subprograms can share the shell HotSpotManager safely.
+"use strict";
 // Falls back to direct console hotspot APIs when the manager is unavailable.
 (function (global) {
     if (typeof registerModuleExports !== 'function') {

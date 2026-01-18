@@ -2,6 +2,8 @@
  * BasicShell: minimal, stable shell used as fallback.
  */
 
+"use strict";
+
 load("sbbsdefs.js"); // LOG_* and K_* constants
 
 function BasicShell(onReloadAdvancedShell) {
@@ -78,7 +80,8 @@ function BasicShell(onReloadAdvancedShell) {
                 beep(880, 80);
                 break;
         }
-        yield(true);
+        var yieldFunc = this.yield || (function() {});
+        yieldFunc(true);
     }
 }
 

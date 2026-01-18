@@ -1,3 +1,5 @@
+"use strict";
+
 load("future_shell/lib/subprograms/chat_helpers.js");
 load("future_shell/lib/subprograms/subprogram.js"); // Base class
 load('future_shell/lib/subprograms/subprogram_hotspots.js');
@@ -18,6 +20,8 @@ function Chat(jsonchat, opts) {
     this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'chat', layerName: 'chat-controls', priority: 70 });
     this.jsonchat = jsonchat; // persistent backend instance
     this.input = "";
+    this._inputCursor = 0;      // cursor position in input string
+    this._inputScrollOffset = 0; // horizontal scroll offset for display
     this.running = false;
     this.channel = "main";
     this.headerFrame = null;
@@ -120,6 +124,8 @@ Chat.prototype._resetRuntimeState = function () {
     this._needsRedraw = true;
     this._lastMessageSignature = null;
     this._lastRenderTs = 0;
+    this._inputCursor = 0;
+    this._inputScrollOffset = 0;
     this.scrollOffset = 0;
     this._maxScrollOffset = 0;
     this._userScrolled = false;
@@ -348,7 +354,6 @@ Chat.prototype.attachShellTimer = function (timer) {
 };
 
 Chat.prototype.pauseForReason = function (reason) {
-    log("Pausing chat for reason: " + reason);
     // HEY AI ASSISTANTS, this needs to be .top() not bottom quit messing it up
     if (reason === 'screensaver_on' && this.__bg_frame && typeof this.__bg_frame.top === 'function') {
         try { this.__bg_frame.top(); this.headerFrame.top(); this.chatInputFrame.top(); this.__bg_frame.cycle(); } catch (e) { }
@@ -356,9 +361,7 @@ Chat.prototype.pauseForReason = function (reason) {
 };
 
 Chat.prototype.resumeForReason = function (reason) {
-    log("Resuming chat for reason: " + reason);
     // HEY AI ASSISTANTS, this needs to be .bottom() not top quit messing it up
-
     if (reason === 'screensaver_off') {
         this._disposeFrames();
 
@@ -402,7 +405,6 @@ Chat.prototype.detachShellTimer = function () {
 };
 Chat.prototype.handleKey = function (key) {
     if (this._processControlHotspotInput(key)) return;
-    var scrollHandled = false;
     var pageStep = (this.leftMsgFrame && this.leftMsgFrame.height) ? Math.max(1, this.leftMsgFrame.height - 1) : 5;
     this._lastKeyTs = Date.now();
     var rosterKey = (typeof KEY_F2 !== 'undefined') ? KEY_F2 : null;
@@ -415,44 +417,60 @@ Chat.prototype.handleKey = function (key) {
         return;
     }
 
+    // Message scroll keys (Up/Down/PgUp/PgDn/wheel)
     switch (key) {
         case KEY_UP:
         case '\x1B[A':
-            scrollHandled = this._adjustScrollOffset(1);
+            if (this._adjustScrollOffset(1)) return;
             break;
         case KEY_DOWN:
         case '\x1B[B':
-            scrollHandled = this._adjustScrollOffset(-1);
+            if (this._adjustScrollOffset(-1)) return;
             break;
         case KEY_PGUP:
-            scrollHandled = this._adjustScrollOffset(pageStep);
+            if (this._adjustScrollOffset(pageStep)) return;
             break;
         case KEY_PGDN:
-            scrollHandled = this._adjustScrollOffset(-pageStep);
-            break;
-        case KEY_HOME:
-            scrollHandled = this._setScrollOffset(this._maxScrollOffset || 0);
-            break;
-        case KEY_END:
-            scrollHandled = this._setScrollOffset(0);
-            break;
-        case KEY_LEFT:
-        case '\x1B[D':
-            scrollHandled = this._adjustScrollOffset(1);
-            break;
-        case KEY_RIGHT:
-        case '\x1B[C':
-            scrollHandled = this._adjustScrollOffset(-1);
+            if (this._adjustScrollOffset(-pageStep)) return;
             break;
         case 'wheel_up':
-            scrollHandled = this._adjustScrollOffset(1);
+            if (this._adjustScrollOffset(1)) return;
             break;
         case 'wheel_down':
-            scrollHandled = this._adjustScrollOffset(-1);
+            if (this._adjustScrollOffset(-1)) return;
             break;
     }
 
-    if (scrollHandled) return;
+    // Input cursor movement (left/right arrows, home/end)
+    if (key === KEY_LEFT || key === '\x1B[D') {
+        if (this._inputCursor > 0) {
+            this._inputCursor--;
+            this._updateInputDisplay();
+        }
+        return;
+    }
+    if (key === KEY_RIGHT || key === '\x1B[C') {
+        if (this._inputCursor < this.input.length) {
+            this._inputCursor++;
+            this._updateInputDisplay();
+        }
+        return;
+    }
+    if (key === KEY_HOME || key === '\x01') { // Ctrl+A or Home
+        if (this._inputCursor !== 0) {
+            this._inputCursor = 0;
+            this._updateInputDisplay();
+        }
+        return;
+    }
+    if (key === KEY_END || key === '\x05') { // Ctrl+E or End
+        if (this._inputCursor !== this.input.length) {
+            this._inputCursor = this.input.length;
+            this._updateInputDisplay();
+        }
+        return;
+    }
+
     if (this._handleControlHotkey(key)) return;
     if (key === '\x1B') {
         // Exit only if no active modal
@@ -461,7 +479,6 @@ Chat.prototype.handleKey = function (key) {
             return;
         }
         return; // swallow ESC while modal open
-        return;
     }
     // Enter/Return (string '\r' or '\n')
     if (key === '\r' || key === '\n') {
@@ -485,24 +502,41 @@ Chat.prototype.handleKey = function (key) {
             this.draw();
         }
         this.input = "";
-        this.updateInputFrame();
+        this._inputCursor = 0;
+        this._inputScrollOffset = 0;
+        this._updateInputDisplay();
         return;
     }
-    // Backspace (string '\b' or '\x7F')
+    // Backspace - delete character before cursor
     if (key === '\b' || key === '\x7F') {
-        if (this.input.length > 0) {
-            this.input = this.input.slice(0, -1);
-            this.updateInputFrame();
+        if (this._inputCursor > 0) {
+            this.input = this.input.slice(0, this._inputCursor - 1) + this.input.slice(this._inputCursor);
+            this._inputCursor--;
+            this._updateInputDisplay();
         }
         return;
     }
-    // Printable characters (single character string, not control)
+    // Delete key - delete character at cursor
+    if (key === KEY_DEL || key === '\x7E') {
+        if (this._inputCursor < this.input.length) {
+            this.input = this.input.slice(0, this._inputCursor) + this.input.slice(this._inputCursor + 1);
+            this._updateInputDisplay();
+        }
+        return;
+    }
+    // Printable characters - insert at cursor position
     if (typeof key === 'string' && key.length === 1 && key >= ' ' && key <= '~') {
-        this.input += key;
-        this.updateInputFrame();
+        this.input = this.input.slice(0, this._inputCursor) + key + this.input.slice(this._inputCursor);
+        this._inputCursor++;
+        this._updateInputDisplay();
         return;
     }
     // Ignore all other keys
+};
+
+// Fast input display update (skips full redraw for responsiveness)
+Chat.prototype._updateInputDisplay = function () {
+    this._drawInputFrame(true);
 };
 
 // Update the chat input/status line
@@ -1852,27 +1886,75 @@ Chat.prototype._refreshHeaderAndInput = function (force) {
     this._drawInputFrame(force);
 };
 
-// Helper: draw input frame (header handled via _refreshHeaderAndInput)
+// Helper: draw input frame with horizontal scrolling and cursor support
 Chat.prototype._drawInputFrame = function (force) {
     if (!this.chatInputFrame) return;
-    var base = 'You: ' + this.input;
-    if (!this.input || !this.input.length) {
-        if (this._statusText) base += '  |  ' + this._statusText;
-    }
-    var display = base + '_';
     var width = this.chatInputFrame.width || 0;
-    if (width > 0 && display.length > width) {
-        display = display.substr(0, width - 1) + '_';
+    if (width <= 0) return;
+    
+    var prefix = 'You: ';
+    var prefixLen = prefix.length;
+    var contentWidth = Math.max(1, width - prefixLen);
+    
+    // Ensure cursor is within bounds
+    if (this._inputCursor < 0) this._inputCursor = 0;
+    if (this._inputCursor > this.input.length) this._inputCursor = this.input.length;
+    
+    // Calculate scroll offset to keep cursor visible
+    // Leave 1 char margin on right for cursor visibility
+    var cursorPos = this._inputCursor;
+    var scrollOffset = this._inputScrollOffset || 0;
+    
+    // Adjust scroll if cursor is before visible area
+    if (cursorPos < scrollOffset) {
+        scrollOffset = cursorPos;
     }
-    if (width > 0 && display.length < width) {
+    // Adjust scroll if cursor is past visible area (leave room for cursor char)
+    if (cursorPos >= scrollOffset + contentWidth) {
+        scrollOffset = cursorPos - contentWidth + 1;
+    }
+    // Clamp scroll offset
+    if (scrollOffset < 0) scrollOffset = 0;
+    var maxScroll = Math.max(0, this.input.length - contentWidth + 1);
+    if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+    this._inputScrollOffset = scrollOffset;
+    
+    // Build visible portion of input
+    var visibleInput = this.input.substr(scrollOffset, contentWidth);
+    
+    // Show status text if input is empty and not scrolled
+    var statusSuffix = '';
+    if (!this.input.length && this._statusText) {
+        statusSuffix = '  |  ' + this._statusText;
+    }
+    
+    // Build full display string
+    var scrollIndicator = (scrollOffset > 0) ? '<' : '';
+    var displayPrefix = scrollIndicator ? scrollIndicator + prefix.substr(1) : prefix;
+    var display = displayPrefix + visibleInput + statusSuffix;
+    
+    // Pad to width
+    if (display.length < width) {
         display = display + Array(width - display.length + 1).join(' ');
+    } else if (display.length > width) {
+        display = display.substr(0, width);
     }
-    if (!force && this._lastInputRendered === display) return;
-    this._renderInputString(display);
-    this._lastInputRendered = display;
-}
+    
+    // Calculate cursor screen position
+    var cursorScreenPos = prefixLen + (cursorPos - scrollOffset);
+    if (scrollIndicator) cursorScreenPos = prefixLen + (cursorPos - scrollOffset); // same since prefix len unchanged
+    
+    // Skip render if nothing changed
+    var signature = display + ':' + cursorScreenPos;
+    if (!force && this._lastInputRendered === signature) return;
+    
+    // Render with cursor highlight
+    this._renderInputWithCursor(display, cursorScreenPos);
+    this._lastInputRendered = signature;
+};
 
-Chat.prototype._renderInputString = function (text) {
+// Render input string with cursor at specified position
+Chat.prototype._renderInputWithCursor = function (text, cursorPos) {
     if (!this.chatInputFrame) return;
     var width = this.chatInputFrame.width || 0;
     if (width <= 0) {
@@ -1880,16 +1962,20 @@ Chat.prototype._renderInputString = function (text) {
         this.chatInputFrame.putmsg(text);
         return;
     }
-    if (text.length < width) text += Array(width - text.length + 1).join(' ');
-    else if (text.length > width) text = text.substr(0, width);
-    var attr = (typeof this.chatInputFrame.attr === 'number') ? this.chatInputFrame.attr : undefined;
+    
+    var baseAttr = (typeof this.chatInputFrame.attr === 'number') ? this.chatInputFrame.attr : 0;
+    // Cursor uses inverted colors for visibility
+    var cursorAttr = ((baseAttr & 0x07) << 4) | ((baseAttr >> 4) & 0x07) | (baseAttr & 0x88);
+    if (cursorAttr === baseAttr) cursorAttr = (BG_WHITE | BLACK); // fallback if same
+    
     for (var i = 0; i < width; i++) {
-        var ch = text.charAt(i);
+        var ch = (i < text.length) ? text.charAt(i) : ' ';
+        var attr = (i === cursorPos) ? cursorAttr : baseAttr;
         try { this.chatInputFrame.setData(i, 0, ch, attr, false); } catch (e) { }
     }
     if (typeof this.chatInputFrame.cycle === 'function') {
         try { this.chatInputFrame.cycle(); } catch (e) { }
     }
-};
+}
 
 registerModuleExports({ Chat: Chat });

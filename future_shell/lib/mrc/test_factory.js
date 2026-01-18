@@ -1,4 +1,5 @@
 // Test factory integration
+"use strict";
 load('future_shell/lib/mrc/factory.js');
 
 print('\n=== MRC Factory Integration Test ===\n');

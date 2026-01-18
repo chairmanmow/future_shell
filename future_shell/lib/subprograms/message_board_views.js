@@ -1,3 +1,5 @@
+"use strict";
+
 if (typeof lazyLoadModule !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
@@ -857,6 +859,60 @@ if (typeof lazyLoadModule !== 'function') {
                     board._paintRead && board._paintRead();
                     return true;
                 }
+                
+                // Check for new messages beyond current position
+                var currentMsg = board.lastReadMsg;
+                if (currentMsg && currentMsg.number && board.cursub) {
+                    var mb = new MsgBase(board.cursub);
+                    if (mb.open()) {
+                        var lastMsgNum = mb.last_msg;
+                        var currentNum = currentMsg.number;
+                        // Scan for next valid message
+                        for (var nextNum = currentNum + 1; nextNum <= lastMsgNum; nextNum++) {
+                            var nextHdr = null;
+                            try {
+                                nextHdr = mb.get_msg_header(false, nextNum, true);
+                            } catch (_e) { }
+                            if (nextHdr) {
+                                mb.close();
+                                // Check if this message exists in current flatHeaders
+                                var nextIdx = board._findFlatIndexByNumber ? board._findFlatIndexByNumber(nextHdr.number) : -1;
+                                if (nextIdx === -1) {
+                                    // Message not in current data - reload everything
+                                    board._threadHeadersCache = {};
+                                    board._threadSequenceCache = {};
+                                    board.threadHeaders = [];
+                                    board.flatHeaders = [];
+                                    board._flatHeadersSub = null;
+                                    board._flatHeadersSort = null;
+                                    if (typeof board._loadThreadHeaders === 'function') {
+                                        board._loadThreadHeaders();
+                                    }
+                                    if (typeof board._ensureFlatHeaders === 'function') {
+                                        board._ensureFlatHeaders();
+                                    }
+                                    // Find the message in refreshed data
+                                    nextIdx = board._findFlatIndexByNumber ? board._findFlatIndexByNumber(nextHdr.number) : -1;
+                                }
+                                // Update flatSelection so title displays correct position
+                                if (nextIdx !== -1) {
+                                    board.flatSelection = nextIdx;
+                                }
+                                // Update thread context if active
+                                if (board._readThreadContext && board._readThreadContext.mode === 'flat') {
+                                    board._readThreadContext.flatIndex = nextIdx;
+                                    board._readThreadContext.currentFlatIndex = nextIdx;
+                                }
+                                // Render with updated state
+                                board._renderReadView(nextHdr);
+                                return false;
+                            }
+                        }
+                        mb.close();
+                    }
+                }
+                
+                // No next message found - try thread navigation
                 var advanced = false;
                 if (board._openRelativeInThread) advanced = board._openRelativeInThread(1);
                 if (!advanced && board._readThreadContext && typeof board._completeThreadRead === 'function') {
@@ -864,6 +920,7 @@ if (typeof lazyLoadModule !== 'function') {
                 }
                 if (!advanced && board._openAdjacentThread) advanced = board._openAdjacentThread(1);
                 if (advanced) return false;
+                
                 if (board._showReadNotice) {
                     try { board._showReadNotice('end-of-sub'); } catch (_eEndNotice) { }
                 }

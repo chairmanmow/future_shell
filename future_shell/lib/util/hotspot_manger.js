@@ -1,4 +1,5 @@
 /*
+"use strict";
     Centralized hotspot manager for future shell.
     Provides layered hotspot registration with conflict resolution and stashing support.
 */

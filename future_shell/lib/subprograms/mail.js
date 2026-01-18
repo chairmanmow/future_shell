@@ -1,3 +1,5 @@
+"use strict";
+
 load('future_shell/lib/subprograms/subprogram.js');
 // Use shared Icon renderer for consistency with main shell
 load('future_shell/lib/shell/icon.js');

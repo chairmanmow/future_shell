@@ -1,3 +1,5 @@
+"use strict";
+
 load('sbbsdefs.js');
 load('funclib.js');
 load('future_shell/lib/subprograms/subprogram.js');
@@ -935,6 +937,8 @@ function MRC(opts) {
     this._userScrolled = false;
     this._buttons = [];
     this._inputBuffer = '';
+    this._inputCursor = 0;       // cursor position in input buffer
+    this._inputScrollOffset = 0; // horizontal scroll for input display
     this._room = '';
     this._topic = '';
     this._stats = ['-', '-', '-', '0'];
@@ -1455,18 +1459,8 @@ MRC.prototype._renderFooter = function () {
     this.footerFrame.gotoxy(1, 1);
     this.footerFrame.putmsg(fullText.substr(0, width));
 
-    // Colorized input prompt
-    var promptText = this.colorize('INPUT_PROMPT', '> ');
-    var inputText = this.colorize('INPUT_TEXT', this._inputBuffer);
-    var inputLine = promptText + inputText;
-    var available = Math.max(1, width);
-    var trimmed = inputLine;
-    if (inputLine.length > available) {
-        trimmed = inputLine.substr(inputLine.length - available);
-    }
-    this.footerFrame.gotoxy(1, Math.max(1, this.footerFrame.height));
-    this.footerFrame.putmsg(trimmed);
-    this.footerFrame.cycle();
+    // Use cursor-aware input rendering
+    this._refreshFooterInput();
 };
 
 MRC.prototype._refreshFooterInput = function () {
@@ -1476,23 +1470,66 @@ MRC.prototype._refreshFooterInput = function () {
         this.footerFrame.attr = attr;
     }
     var width = this.footerFrame.width;
-
-    // Colorized input prompt and text
-    var promptText = this.colorize('INPUT_PROMPT', '> ');
-    var inputText = this.colorize('INPUT_TEXT', this._inputBuffer);
-    var inputLine = promptText + inputText;
-    var available = Math.max(1, width);
-    var trimmed = inputLine;
-    if (inputLine.length > available) {
-        trimmed = inputLine.substr(inputLine.length - available);
+    if (width <= 0) return;
+    
+    var prefix = '> ';
+    var prefixLen = prefix.length;
+    var contentWidth = Math.max(1, width - prefixLen);
+    
+    // Ensure cursor is within bounds
+    if (this._inputCursor < 0) this._inputCursor = 0;
+    if (this._inputCursor > this._inputBuffer.length) this._inputCursor = this._inputBuffer.length;
+    
+    // Calculate scroll offset to keep cursor visible
+    var cursorPos = this._inputCursor;
+    var scrollOffset = this._inputScrollOffset || 0;
+    
+    // Adjust scroll if cursor is before visible area
+    if (cursorPos < scrollOffset) {
+        scrollOffset = cursorPos;
     }
-    var spaces = '';
-    if (trimmed.length < available) spaces = new Array(available - trimmed.length + 1).join(' ');
-    try {
-        this.footerFrame.gotoxy(1, Math.max(1, this.footerFrame.height));
-        this.footerFrame.putmsg(trimmed + spaces);
-        this.footerFrame.cycle();
-    } catch (_) { }
+    // Adjust scroll if cursor is past visible area
+    if (cursorPos >= scrollOffset + contentWidth) {
+        scrollOffset = cursorPos - contentWidth + 1;
+    }
+    // Clamp scroll offset
+    if (scrollOffset < 0) scrollOffset = 0;
+    var maxScroll = Math.max(0, this._inputBuffer.length - contentWidth + 1);
+    if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+    this._inputScrollOffset = scrollOffset;
+    
+    // Build visible portion of input
+    var visibleInput = this._inputBuffer.substr(scrollOffset, contentWidth);
+    
+    // Show scroll indicator if scrolled
+    var scrollIndicator = (scrollOffset > 0) ? '<' : '';
+    var displayPrefix = scrollIndicator ? scrollIndicator + prefix.substr(1) : prefix;
+    
+    // Calculate cursor screen position
+    var cursorScreenPos = prefixLen + (cursorPos - scrollOffset);
+    
+    // Render using setData for precise cursor positioning
+    this._renderInputWithCursor(displayPrefix, visibleInput, cursorScreenPos, width, attr);
+};
+
+// Render input line with visual cursor at specified position
+MRC.prototype._renderInputWithCursor = function (prefix, text, cursorPos, width, baseAttr) {
+    if (!this.footerFrame) return;
+    var row = Math.max(0, this.footerFrame.height - 1); // 0-indexed for setData
+    
+    // Cursor uses inverted colors for visibility
+    var cursorAttr = ((baseAttr & 0x07) << 4) | ((baseAttr >> 4) & 0x07) | (baseAttr & 0x88);
+    if (cursorAttr === baseAttr) cursorAttr = (BG_WHITE | BLACK); // fallback if same
+    
+    var fullText = prefix + text;
+    for (var i = 0; i < width; i++) {
+        var ch = (i < fullText.length) ? fullText.charAt(i) : ' ';
+        var attr = (i === cursorPos) ? cursorAttr : baseAttr;
+        try { this.footerFrame.setData(i, row, ch, attr, false); } catch (e) { }
+    }
+    if (typeof this.footerFrame.cycle === 'function') {
+        try { this.footerFrame.cycle(); } catch (e) { }
+    }
 };
 
 MRC.prototype._renderMessages = function () {
@@ -1742,6 +1779,8 @@ MRC.prototype.handleKey = function (key) {
     }
     if (this._processButtonHotspotInput(key)) return true;
     var needsFullRedraw = false;
+    
+    // Message scroll keys (Up/Down/PgUp/PgDn)
     switch (key) {
         case KEY_UP:
             this._scrollOffset = Math.min(this._scrollOffset + 1, maxOffset);
@@ -1763,73 +1802,134 @@ MRC.prototype.handleKey = function (key) {
             this._userScrolled = this._scrollOffset > 0;
             needsFullRedraw = true;
             break;
-        case KEY_HOME:
-            this._scrollOffset = maxOffset;
-            this._userScrolled = this._scrollOffset > 0;
-            needsFullRedraw = true;
-            break;
-        case KEY_END:
-            this._scrollOffset = 0;
-            this._userScrolled = false;
-            needsFullRedraw = true;
-            break;
-        case KEY_LEFT:
-            this.service.rotateMsgColor(-1);
-            needsFullRedraw = true;
-            break;
-        case KEY_RIGHT:
-            this.service.rotateMsgColor(1);
-            needsFullRedraw = true;
-            break;
-        case '\r':
-        case '\n':
-            this.service.sendLine(this._inputBuffer);
-            this._inputBuffer = '';
-            this._scrollOffset = 0;
-            this._userScrolled = false;
-            this._refreshFooterInput();
-            needsFullRedraw = true;
-            break;
-        case '\b':
-        case '\x7F':
-            if (this._inputBuffer.length) {
-                this._inputBuffer = this._inputBuffer.slice(0, -1);
-                this.service.pauseTypingFor(1000);
-                this._refreshFooterInput();
-            }
-            break;
-        case '\t':
-            this._autoComplete();
-            this._refreshFooterInput();
-            break;
-        case KEY_F1:
-            this._requestHelp();
-            needsFullRedraw = true;
-            break;
-        case '\x11': // Ctrl+Q
-            this._requestExit();
-            needsFullRedraw = true;
-            break;
-        case '\x14': // Ctrl+T
-            this.service.setToastEnabled(!this._toastEnabled);
-            needsFullRedraw = true;
-            break;
-        case '\x0E': // Ctrl+N
-            this.service.setNickListVisible(!this._showNickList);
-            needsFullRedraw = true;
-            break;
-        default:
-            if (typeof key === 'string' && key.length === 1 && key >= ' ') {
-                this._inputBuffer += key;
-                this.service.pauseTypingFor(1000);
-                this._refreshFooterInput();
-            }
-            break;
     }
     if (needsFullRedraw) {
         this._needsRedraw = true;
         if (this.running) this.draw();
+        return true;
     }
+
+    // Input cursor movement (left/right arrows)
+    if (key === KEY_LEFT || key === '\x1B[D') {
+        if (this._inputCursor > 0) {
+            this._inputCursor--;
+            this._refreshFooterInput();
+        }
+        return true;
+    }
+    if (key === KEY_RIGHT || key === '\x1B[C') {
+        if (this._inputCursor < this._inputBuffer.length) {
+            this._inputCursor++;
+            this._refreshFooterInput();
+        }
+        return true;
+    }
+    // Home/End for input cursor
+    if (key === KEY_HOME || key === '\x01') { // Ctrl+A or Home
+        if (this._inputCursor !== 0) {
+            this._inputCursor = 0;
+            this._refreshFooterInput();
+        }
+        return true;
+    }
+    if (key === KEY_END || key === '\x05') { // Ctrl+E or End
+        if (this._inputCursor !== this._inputBuffer.length) {
+            this._inputCursor = this._inputBuffer.length;
+            this._refreshFooterInput();
+        }
+        return true;
+    }
+
+    // Color rotation with Ctrl+Left/Ctrl+Right (or fallback: [ and ])
+    if (key === '[' || key === '\x1B[1;5D') { // [ or Ctrl+Left
+        this.service.rotateMsgColor(-1);
+        this._needsRedraw = true;
+        if (this.running) this.draw();
+        return true;
+    }
+    if (key === ']' || key === '\x1B[1;5C') { // ] or Ctrl+Right
+        this.service.rotateMsgColor(1);
+        this._needsRedraw = true;
+        if (this.running) this.draw();
+        return true;
+    }
+
+    // Enter - send message
+    if (key === '\r' || key === '\n') {
+        this.service.sendLine(this._inputBuffer);
+        this._inputBuffer = '';
+        this._inputCursor = 0;
+        this._inputScrollOffset = 0;
+        this._scrollOffset = 0;
+        this._userScrolled = false;
+        this._refreshFooterInput();
+        this._needsRedraw = true;
+        if (this.running) this.draw();
+        return true;
+    }
+    
+    // Backspace - delete character before cursor
+    if (key === '\b' || key === '\x7F') {
+        if (this._inputCursor > 0) {
+            this._inputBuffer = this._inputBuffer.slice(0, this._inputCursor - 1) + this._inputBuffer.slice(this._inputCursor);
+            this._inputCursor--;
+            this.service.pauseTypingFor(1000);
+            this._refreshFooterInput();
+        }
+        return true;
+    }
+    
+    // Delete key - delete character at cursor
+    if (key === KEY_DEL || key === '\x7E') {
+        if (this._inputCursor < this._inputBuffer.length) {
+            this._inputBuffer = this._inputBuffer.slice(0, this._inputCursor) + this._inputBuffer.slice(this._inputCursor + 1);
+            this._refreshFooterInput();
+        }
+        return true;
+    }
+    
+    // Tab - autocomplete
+    if (key === '\t') {
+        this._autoComplete();
+        this._refreshFooterInput();
+        return true;
+    }
+    
+    // Function keys and control keys
+    if (key === KEY_F1) {
+        this._requestHelp();
+        this._needsRedraw = true;
+        if (this.running) this.draw();
+        return true;
+    }
+    if (key === '\x11') { // Ctrl+Q
+        this._requestExit();
+        this._needsRedraw = true;
+        if (this.running) this.draw();
+        return true;
+    }
+    if (key === '\x14') { // Ctrl+T
+        this.service.setToastEnabled(!this._toastEnabled);
+        this._needsRedraw = true;
+        if (this.running) this.draw();
+        return true;
+    }
+    if (key === '\x0E') { // Ctrl+N
+        this.service.setNickListVisible(!this._showNickList);
+        this._needsRedraw = true;
+        if (this.running) this.draw();
+        return true;
+    }
+    
+    // Printable characters - insert at cursor position
+    if (typeof key === 'string' && key.length === 1 && key >= ' ') {
+        this._inputBuffer = this._inputBuffer.slice(0, this._inputCursor) + key + this._inputBuffer.slice(this._inputCursor);
+        this._inputCursor++;
+        this.service.pauseTypingFor(1000);
+        this._refreshFooterInput();
+        return true;
+    }
+    
     return true;
 };
 
@@ -1852,6 +1952,8 @@ MRC.prototype._autoComplete = function () {
         parts.push(match);
     }
     this._inputBuffer = parts.join(' ');
+    // Update cursor to end of completed text
+    this._inputCursor = this._inputBuffer.length;
 };
 
 MRC.prototype.cleanup = function () {

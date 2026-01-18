@@ -1,4 +1,5 @@
 // canvas-animations.js
+"use strict";
 // Simple animation manager and a few lightweight animations for use in
 // the future-login canvasFrame (Frame-based rendering).
 // Each animation implements: init(frame), tick(), dispose()

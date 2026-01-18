@@ -1,4 +1,5 @@
 // gif_loader.js — resilient first-frame GIF decoder for Synchronet JS
+"use strict";
 // Export: GIFLoaderFactory() -> { decode(bytes), looksGIF(bytes), inspect(bytes) }
 // Notes: decodes FIRST IMAGE DESCRIPTOR only; composes onto logical screen;
 // handles transparency, interlace, local/global palettes.

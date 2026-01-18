@@ -1,3 +1,5 @@
+"use strict";
+
 var __ICSH_FORCE_RELOAD__ = (typeof globalThis !== 'undefined' && typeof globalThis.__ICSH_FORCE_RELOAD__ === 'boolean') ? globalThis.__ICSH_FORCE_RELOAD__ : (typeof __ICSH_FORCE_RELOAD__ === 'boolean' ? __ICSH_FORCE_RELOAD__ : false);
 
 function loadModule(path) {

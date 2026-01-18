@@ -1,3 +1,5 @@
+"use strict";
+
 load('sbbsdefs.js');
 if (typeof lazyLoadModule !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (e) { }

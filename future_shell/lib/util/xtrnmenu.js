@@ -1,4 +1,5 @@
 // xtrnmenu.js
+"use strict";
 // Returns an array of menu items for all accessible games/doors for the current user
 var ICON_LOOKUP = {
 }

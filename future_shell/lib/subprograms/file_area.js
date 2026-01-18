@@ -1,4 +1,5 @@
 // File Area (NewsReader-style lifecycle)
+"use strict";
 // States: libs -> dirs -> files
 // Input:
 //   Arrow keys : navigate

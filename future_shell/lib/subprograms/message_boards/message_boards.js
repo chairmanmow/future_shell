@@ -1,3 +1,5 @@
+"use strict";
+
 load('sbbsdefs.js');
 load("future_shell/lib/subprograms/subprogram.js");
 load("future_shell/lib/util/debug.js");
@@ -988,6 +990,10 @@ MessageBoard.prototype.exit = function () {
     if (!this.running) return; // already exited
     this._cancelFrameCycle();
     this._releaseHotspots();
+    // Dispose the hotspot helper layer to prevent orphaned hotspots
+    if (this.hotspots && typeof this.hotspots.dispose === 'function') {
+        try { this.hotspots.dispose(); } catch (_disposeErr) { }
+    }
     this._alive = false;
     try { this._epoch++; } catch (_eEpoch2) { this._epoch = (this._epoch || 0) + 1; }
     Subprogram.prototype.exit.call(this);
@@ -1907,8 +1913,11 @@ MessageBoard.prototype._renderReadBodyContent = function (text) {
         canvas.__properties__.ctrl_a = false;
     }
     if (typeof canvas.home === 'function') canvas.home();
-    var ansiPattern = /\x1b\[[0-9;?]*[@-~]/;
-    var hasAnsi = ansiPattern.test(renderText);
+    // Detect ANSI art by looking for cursor positioning/movement, not just color codes
+    // Color codes (ESC[...m) are fine for word-wrapped text; art uses positioning
+    var ansiArtPattern = /\x1b\[[\d;]*[ABCDHJKfsu]/;  // Cursor movement/positioning/clear
+    var ansiColorPattern = /\x1b\[[0-9;?]*m/;          // Just color codes
+    var hasAnsiArt = ansiArtPattern.test(renderText);
     if (/\|[0-9]{2}/.test(renderText)) {
         if (typeof pipeToCtrlA === 'function') {
             renderText = pipeToCtrlA(renderText);
@@ -1924,14 +1933,54 @@ MessageBoard.prototype._renderReadBodyContent = function (text) {
         var expanded = _expandCtrlA(renderText);
         if (expanded !== renderText) {
             renderText = expanded;
-            hasAnsi = ansiPattern.test(renderText) || hasAnsi;
+            // Only recheck for art patterns, not color codes from Ctrl-A expansion
+            hasAnsiArt = ansiArtPattern.test(renderText) || hasAnsiArt;
         }
+    }
+    // Detect art by looking for box-drawing/block characters (common in ASCII art)
+    // These chars: ░▒▓█▄▀─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬ etc.
+    if (!hasAnsiArt) {
+        var artCharsPattern = /[\u2500-\u257F\u2580-\u259F\u2550-\u256C]/;
+        if (artCharsPattern.test(renderText)) hasAnsiArt = true;
+    }
+    // Pre-wrap text for text-only messages (no ANSI art) since the renderer only does character wrap
+    // Only wrap lines that are actually longer than the canvas width
+    if (!hasAnsiArt && typeof word_wrap === 'function' && canvas.width > 0) {
+        var wrapWidth = canvas.width;
+        var rawLines = renderText.split(/\r\n|\n|\r/);
+        var wrappedLines = [];
+        for (var wi = 0; wi < rawLines.length; wi++) {
+            var rawLine = rawLines[wi];
+            if (!rawLine || !rawLine.length) {
+                wrappedLines.push('');
+                continue;
+            }
+            // Strip ANSI codes to get visible length for wrap decision
+            var visibleLine = rawLine.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+            // Only wrap if the visible content exceeds width
+            if (visibleLine.length <= wrapWidth) {
+                wrappedLines.push(rawLine);
+                continue;
+            }
+            try {
+                var wrapped = word_wrap(rawLine, wrapWidth, null, false);
+                if (typeof wrapped === 'string' && wrapped.length) {
+                    var parts = wrapped.replace(/\r/g, '').split('\n');
+                    for (var wp = 0; wp < parts.length; wp++) wrappedLines.push(parts[wp]);
+                } else {
+                    wrappedLines.push(rawLine);
+                }
+            } catch (_wrapErr) {
+                wrappedLines.push(rawLine);
+            }
+        }
+        renderText = wrappedLines.join('\r\n');
     }
     var rendered = _renderAnsiIntoFrame(canvas, renderText, canvas.width, canvas.height, {
         board: this,
-        highlightQuotes: !hasAnsi
+        highlightQuotes: !hasAnsiArt
     });
-    this._readBodyHasAnsi = hasAnsi;
+    this._readBodyHasAnsi = hasAnsiArt;
     if (!rendered) {
         throw new Error('ANSI render failed for message body.');
     }
@@ -2692,14 +2741,9 @@ MessageBoard.prototype._openRelativeInThread = function (dir) {
                         this._showReadNotice(dir > 0 ? 'next-message' : 'prev-message');
                         return true;
                     }
-                } else if (ctx.mode === 'flat') {
-                    return false;
                 }
             }
-        } else if (ctx.mode === 'flat') {
-            return false;
         }
-        if (ctx.mode === 'flat') return false;
     }
 
     if (this.threadTree && this.threadNodeIndex && this.threadNodeIndex.length) {
@@ -3094,7 +3138,29 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
     var textStartCol = Math.min(Math.max(1, nextIconCol), hf.width);
 
     var from = (msg.from || msg.from_net || 'unknown');
-    var toField = msg.to || msg.to_net || msg.to_net_addr || msg.replyto || msg.reply_to || '';
+    // Determine the "To" field - check explicit to fields first
+    var toField = msg.to || msg.to_net || msg.to_net_addr || '';
+    // If no explicit recipient but this is a reply, derive "To" from the parent message's "From"
+    if (!toField && msg.reply_id) {
+        var parentHdr = null;
+        // Try to find parent in fullHeaders cache by matching reply_id to msg.id
+        if (this._fullHeaders) {
+            for (var num in this._fullHeaders) {
+                if (this._fullHeaders.hasOwnProperty(num)) {
+                    var candidate = this._fullHeaders[num];
+                    if (candidate && candidate.id === msg.reply_id) {
+                        parentHdr = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+        if (parentHdr && (parentHdr.from || parentHdr.from_net)) {
+            toField = parentHdr.from || parentHdr.from_net;
+        }
+    }
+    // Final fallback to 'All' if no recipient could be determined
+    if (!toField) toField = 'All';
     var subj = (msg.subject || '(no subject)');
     // Check msg.when (from flatHeaders summary) as well as full header date fields
     var when = msg.when_written_time || msg.when_written || msg.when_imported_time || msg.when || 0;
@@ -3117,8 +3183,8 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
     lines.push({ label: null, value: subDisplayName.toUpperCase(), colorKey: 'READ_HEADER_SUB' });
     lines.push({ label: 'Date', value: dateStr, colorKey: 'READ_HEADER_DATE' });
     lines.push({ label: 'From', value: from, colorKey: 'READ_HEADER_FROM' });
-    if (toField && toField.length) lines.push({ label: 'To', value: toField, colorKey: 'READ_HEADER_TO' });
-    if (msg.replyto && msg.replyto.length && (!toField || toField.toLowerCase() !== msg.replyto.toLowerCase())) {
+    lines.push({ label: 'To', value: toField, colorKey: 'READ_HEADER_TO' });
+    if (msg.replyto && msg.replyto.length && toField.toLowerCase() !== msg.replyto.toLowerCase()) {
         lines.push({ label: 'Reply-To', value: msg.replyto, colorKey: 'READ_HEADER_REPLYTO' });
     }
     lines.push({ label: 'Subj', value: subj, colorKey: 'READ_HEADER_SUBJECT' });
@@ -3229,25 +3295,42 @@ MessageBoard.prototype._fetchAvatarForMessage = function (msg) {
     if (!full.from_net_addr && full.number && this.cursub) {
         try { var mb = new MsgBase(this.cursub); if (mb.open()) { var fh = mb.get_msg_header(false, full.number, true); if (fh) { fh.number = full.number; full = fh; } mb.close(); } } catch (e) { log('avatar refetch header error: ' + e); }  // by_offset=false, full.number is message NUMBER
     }
-    if (!this._deriveAvatarCandidates) {
-        this._deriveAvatarCandidates = function (h) {
-            var cands = []; if (!h) return cands; var uname = h.from || h.from_net || 'unknown';
-            function push(addr, reason) { if (!addr) return; addr = '' + addr; for (var i = 0; i < cands.length; i++) { if (cands[i].netaddr === addr) return; } cands.push({ username: uname, netaddr: addr, reason: reason }); }
-            if (h.from_net_addr) push(h.from_net_addr, 'from_net_addr');
-            if (h.from_org) push(h.from_org, 'from_org');
-            function hostToQWK(idstr) { if (!idstr) return; var m = idstr.match(/<[^@]+@([^>]+)>/); if (!m) return; var host = m[1]; var first = host.split('.')[0]; if (!first) return; first = first.replace(/[^A-Za-z0-9_-]/g, ''); if (!first.length) return; var q = first.toUpperCase(); if (q.length > 8) q = q.substr(0, 8); if (!/^[A-Z][A-Z0-9_-]{1,7}$/.test(q)) return; return q; }
-            var q1 = hostToQWK(h.id); if (q1) push(q1, 'id-host');
-            var q2 = hostToQWK(h.reply_id); if (q2) push(q2, 'reply-id-host');
-            return cands;
-        };
-    }
-    var candidates = this._deriveAvatarCandidates(full);
     var attempts = []; var chosen = null; var avatarObj = null;
-    for (var i = 0; i < candidates.length; i++) {
-        var c = candidates[i]; var obj = null; var ok = false;
-        try { obj = this._avatarLib.read_netuser(c.username, c.netaddr); ok = !!(obj && obj.data); } catch (e) { obj = false; }
-        attempts.push({ netaddr: c.netaddr, username: c.username, ok: ok, reason: c.reason });
-        if (ok) { chosen = c; avatarObj = obj; break; }
+    var uname = full.from || full.from_net || '';
+    
+    // Try local user lookup first if no network address (local message)
+    if (!full.from_net_addr && !full.from_net_type && uname) {
+        var userNum = 0;
+        try { userNum = system.matchuser(uname); } catch (e) { }
+        if (userNum > 0) {
+            var obj = null; var ok = false;
+            try { obj = this._avatarLib.read_localuser(userNum); ok = !!(obj && obj.data); } catch (e) { }
+            attempts.push({ usernum: userNum, username: uname, ok: ok, reason: 'local_user' });
+            if (ok) { chosen = { username: uname, usernum: userNum, reason: 'local_user' }; avatarObj = obj; }
+        }
+    }
+    
+    // If no local avatar found, try network address candidates
+    if (!avatarObj) {
+        if (!this._deriveAvatarCandidates) {
+            this._deriveAvatarCandidates = function (h) {
+                var cands = []; if (!h) return cands; var un = h.from || h.from_net || 'unknown';
+                function push(addr, reason) { if (!addr) return; addr = '' + addr; for (var i = 0; i < cands.length; i++) { if (cands[i].netaddr === addr) return; } cands.push({ username: un, netaddr: addr, reason: reason }); }
+                if (h.from_net_addr) push(h.from_net_addr, 'from_net_addr');
+                if (h.from_org) push(h.from_org, 'from_org');
+                function hostToQWK(idstr) { if (!idstr) return; var m = idstr.match(/<[^@]+@([^>]+)>/); if (!m) return; var host = m[1]; var first = host.split('.')[0]; if (!first) return; first = first.replace(/[^A-Za-z0-9_-]/g, ''); if (!first.length) return; var q = first.toUpperCase(); if (q.length > 8) q = q.substr(0, 8); if (!/^[A-Z][A-Z0-9_-]{1,7}$/.test(q)) return; return q; }
+                var q1 = hostToQWK(h.id); if (q1) push(q1, 'id-host');
+                var q2 = hostToQWK(h.reply_id); if (q2) push(q2, 'reply-id-host');
+                return cands;
+            };
+        }
+        var candidates = this._deriveAvatarCandidates(full);
+        for (var i = 0; i < candidates.length; i++) {
+            var c = candidates[i]; var obj = null; var ok = false;
+            try { obj = this._avatarLib.read_netuser(c.username, c.netaddr); ok = !!(obj && obj.data); } catch (e) { obj = false; }
+            attempts.push({ netaddr: c.netaddr, username: c.username, ok: ok, reason: c.reason });
+            if (ok) { chosen = c; avatarObj = obj; break; }
+        }
     }
     this._lastAvatarObj = avatarObj || null;
     return { obj: avatarObj, attempts: attempts, chosen: chosen, msg: full };
@@ -4972,7 +5055,10 @@ MessageBoard.prototype._updateThreadContextAfterRead = function (msg) {
         ctx.currentIndex = ctx.numberIndexMap[msg.number];
     }
     var flatIdx = this._findFlatIndexByNumber ? this._findFlatIndexByNumber(msg.number) : -1;
-    if (flatIdx !== -1) ctx.currentFlatIndex = flatIdx;
+    if (flatIdx !== -1) {
+        ctx.currentFlatIndex = flatIdx;
+        this.flatSelection = flatIdx;
+    }
     if (ctx.visited) ctx.visited[msg.number] = true;
 };
 

@@ -1,3 +1,5 @@
+"use strict";
+
 IconShell.prototype.assignViewHotkeys = function(items, logit) {
     if (!items) return;
     var used = {};

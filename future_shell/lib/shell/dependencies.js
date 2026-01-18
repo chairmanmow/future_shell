@@ -1,4 +1,5 @@
 // Ensure core shell dependencies are loaded once per startup
+"use strict";
 (function loadShellDependencies(paths) {
 	var seen = {};
 	for (var i = 0; i < paths.length; i++) {

@@ -1,3 +1,5 @@
+"use strict";
+
 
 
 function GeneralColorLookup(__namespace, __key) {

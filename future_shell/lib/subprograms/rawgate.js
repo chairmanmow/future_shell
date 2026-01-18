@@ -1,4 +1,5 @@
 // Raw TCP Gateway Subprogram (interactive)
+"use strict";
 // Provides simple host:port connect, shows received data in output frame.
 // Input frame first prompts for host and port (ESC to exit). After connect:
 //  - CTRL-C aborts connection (KEY_ABORT) and returns to prompt.

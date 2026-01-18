@@ -1,4 +1,5 @@
 // MRC Test Harness: Validates store behavior with synthetic actions
+"use strict";
 // Run with: jsexec mods/future_shell/lib/mrc/test_harness.js
 
 load('sbbsdefs.js');

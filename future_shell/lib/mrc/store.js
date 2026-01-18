@@ -1,4 +1,5 @@
 // MRC Store: Pure state container with reducer-like apply(action) logic
+"use strict";
 // No side-effects; mutations only via actions; exposes snapshot() and isDirty()
 
 load('future_shell/lib/mrc/actions.js');

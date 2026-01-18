@@ -1,3 +1,5 @@
+"use strict";
+
 function JPG2ANS(optsOrArgv) {
     if (js.global && js.global.__IMG_AS_LIBRARY__ && typeof this === 'object') {
         this.JPG2ANS = JPG2ANS;

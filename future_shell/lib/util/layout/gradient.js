@@ -1,4 +1,5 @@
 /* ansi_gradient.js — 16-color gradient helpers for Synchronet BBS
+"use strict";
    Adds: full/space/half/shade/mix render modes (CP437 only)
    by Futureland 2025
 */

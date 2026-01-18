@@ -1,3 +1,5 @@
+"use strict";
+
 IconShell.prototype.disposeAllFrames = function() {
 	// Clear the screen to remove any leftovers
 	if (typeof console !== 'undefined' && typeof console.clear === 'function') console.clear();

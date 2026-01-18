@@ -1,3 +1,5 @@
+"use strict";
+
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
 // [Menu]
@@ -601,14 +603,14 @@ function _buildItemRecursive(key, ini, ancestry) {
 	var sect = ini['Item.' + key];
 	if (!sect) { _icsh_warn('Missing section [Item.' + key + ']'); return null; }
 	// Access gating check (inline, minimal) – returns true if allowed or user data not ready
-	function _allow(sect) {
+	var _allow = function(sect) {
 		// Centralize user level resolution (prefer security.level if present)
-		function _usrLvl() {
+		var _usrLvl = function() {
 			if (typeof user === 'undefined') return null;
 			if (user.security && typeof user.security.level === 'number') return user.security.level;
 			if (typeof user.level === 'number') return user.level;
 			return null;
-		}
+		};
 		var ulev = _usrLvl();
 		if (ulev === null) { _icsh_err('user object missing or no usable level (security.level / level) during gating; denying item'); return false; }
 		if (sect.min_level !== undefined) { var ml = parseInt(sect.min_level, 10); if (!isNaN(ml) && ulev < ml) return false; }
@@ -620,7 +622,7 @@ function _buildItemRecursive(key, ini, ancestry) {
 			if (f.length === 1) { var sets = [user.flags1, user.flags2, user.flags3, user.flags4]; var ok = false; for (var i = 0; i < sets.length && !ok; i++) if (sets[i] && sets[i].indexOf(f) !== -1) ok = true; if (!ok && user.security) { var ss = user.security; var more = [ss.flags1, ss.flags2, ss.flags3, ss.flags4]; for (var m = 0; m < more.length && !ok; m++) if (more[m] && more[m].indexOf(f) !== -1) ok = true; } if (!ok) return false; }
 		}
 		return true;
-	}
+	};
 	if (!_allow(sect)) { _icsh_log('Filtered (gating) ' + key); return null; }
 	var type = (sect.type || '').toLowerCase();
 	var label = sect.label || key.charAt(0).toUpperCase() + key.substring(1);
@@ -1077,7 +1079,7 @@ function applyColorOverrides(defaults) {
 		var sect = ini.Colors || ini.colors;
 		if (debug_theme) _icsh_log('Theme override initialised with ' + Object.keys(sect).length + ' entries');
 
-		function lookupColor(token, isBg) {
+		var lookupColor = function(token, isBg) {
 			if (token === undefined || token === null) return null;
 			token = ('' + token).trim();
 			if (token === '') return null;
@@ -1095,17 +1097,17 @@ function applyColorOverrides(defaults) {
 				try { if (eval('typeof ' + name + ' !== "undefined"')) { var v = eval(name); if (typeof v === 'number') return v; } } catch (e) { }
 			}
 			return null;
-		}
+		};
 
-		function setPair(baseKey, bgVal, fgVal) {
+		var setPair = function(baseKey, bgVal, fgVal) {
 			if (!vals[baseKey] || typeof vals[baseKey] !== 'object') return;
 			var applied = false;
 			if (bgVal !== null) { vals[baseKey].BG = bgVal; applied = true; _icsh_log('Color override ' + baseKey + '.BG applied'); }
 			if (fgVal !== null) { vals[baseKey].FG = fgVal; applied = true; _icsh_log('Color override ' + baseKey + '.FG applied'); }
 			if (applied) changed = true;
-		}
+		};
 
-		function applyNamespaceOverride(origKey, value) {
+		var applyNamespaceOverride = function(origKey, value) {
 			var parts = origKey.split('.');
 			if (parts.length < 2) { _icsh_warn('Invalid namespace color override ' + origKey); return; }
 			var ns = parts.shift().trim();
@@ -1124,7 +1126,7 @@ function applyColorOverrides(defaults) {
 			}
 			keyName = keyName.toUpperCase();
 			var entry = ensureNamespace(ns, keyName);
-			function logSuccess(msg) { if (debug_theme) _icsh_log('Color override ' + ns + '.' + keyName + msg); }
+			var logSuccess = function(msg) { if (debug_theme) _icsh_log('Color override ' + ns + '.' + keyName + msg); };
 			if (attrTarget === 'COLOR') {
 				var c = lookupColor(value, false);
 				if (c !== null) { entry.COLOR = c; changed = true; logSuccess('.COLOR applied'); } else _icsh_warn('Invalid COLOR token ' + value + ' for ' + ns + '.' + keyName);
@@ -1148,7 +1150,7 @@ function applyColorOverrides(defaults) {
 				if (fgOnly !== null) { entry.FG = fgOnly; changed = true; logSuccess('.FG applied'); }
 				else _icsh_warn('Invalid color token ' + value + ' for ' + ns + '.' + keyName);
 			}
-		}
+		};
 
 		var seenKeys = 0;
 		for (var rawKey in sect) {

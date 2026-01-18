@@ -1,9 +1,6 @@
 // Update openSelection to use changeFolder for both up and down navigation
+"use strict";
 IconShell.prototype.openSelection = function () {
-    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
-    logFile.open('a');
-    logFile.writeln('[openSelection] called');
-
     dbug('[openSelection] selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, 'nav');
     var node = this.stack[this.stack.length - 1];
     if (!node._cachedChildren) {
@@ -25,23 +22,16 @@ IconShell.prototype.openSelection = function () {
     var isFolderNav = (item.type === 'folder') || (hasUp && this.selection === 0);
     if (!isFolderNav) this.flashSelection();
     if (hasUp && this.selection === 0) {
-        logFile.writeln('[openSelection] UP action triggered');
-        logFile.close();
         dbug('[openSelection] UP action triggered', 'nav');
         this._handleUpSelection(item);
         return;
     }
-    logFile.writeln('[openSelection] activating label=' + (item.label || '') + ' type=' + item.type);
     dbug('[openSelection] activating label=' + (item.label || '') + ' type=' + item.type, 'nav');
     if (item.type === 'folder') {
-        logFile.writeln('[openSelection] calling _handleFolderSelection');
-        logFile.close();
         this._handleFolderSelection(item);
         return;
     }
     if (item.type === 'item') {
-        logFile.writeln('[openSelection] calling _handleItemSelection');
-        logFile.close();
         this._handleItemSelection(item);
     }
 };
@@ -107,36 +97,18 @@ IconShell.prototype._handleFolderSelection = function (realItem) {
 };
 
 IconShell.prototype._handleItemSelection = function (realItem) {
-    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
-    logFile.open('a');
-    logFile.writeln('[_handleItemSelection] *** CODE VERSION: v2-with-timing ***');
-    logFile.writeln('[_handleItemSelection] called, typeof realItem.action=' + typeof realItem.action);
-
     if (typeof realItem.action === "function") {
-        logFile.writeln('[_handleItemSelection] action is function');
         try {
-            var t1 = Date.now();
-            logFile.writeln('[_handleItemSelection] playDissolveBefore START at ' + t1);
             // Play dissolve animation before launching
             this.playDissolveBefore(this.selection);
-            var t2 = Date.now();
-            logFile.writeln('[_handleItemSelection] playDissolveBefore END at ' + t2 + ' (duration: ' + (t2 - t1) + 'ms)');
-
             // Ensure the action runs with IconShell as 'this' (was unbound, breaking runExternal etc.)
-            var t3 = Date.now();
-            logFile.writeln('[_handleItemSelection] action START at ' + t3);
             realItem.action.call(this);
-            var t4 = Date.now();
-            logFile.writeln('[_handleItemSelection] action END at ' + t4 + ' (duration: ' + (t4 - t3) + 'ms)');
         } catch (e) {
-            logFile.writeln('[_handleItemSelection] EXCEPTION: ' + e);
-            logFile.close();
             dbug("IconShell action error: " + e, "view");
             if (e === "Exit Shell") throw e;
         }
         this.drawFolder();
     }
-    logFile.close();
 };
 
 

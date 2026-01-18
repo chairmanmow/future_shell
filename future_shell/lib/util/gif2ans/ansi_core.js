@@ -1,4 +1,5 @@
 /* ansi_core.js — drop-in with preCGAify + FS (default), optional Bayer dither,
+"use strict";
    perceptual nearestCGA, BG bias for half-blocks, Unicode toggle, and a
    convenience pipelineHalfBlock().  Keeps your existing API/returns. */
 

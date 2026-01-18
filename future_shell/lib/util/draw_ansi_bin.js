@@ -1,4 +1,5 @@
 // console-only ANSI / BIN / XBIN renderer (clean implementation)
+"use strict";
 // drawAnsiBin(inputPathOrBase, opts)
 // opts: { bases:["answer","logon"], speed:0, pausing:true, forceSimple:false, autowrap:true, debug:false, pause:false, finalPause:false }
 function dbg(msg) {

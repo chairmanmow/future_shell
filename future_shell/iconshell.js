@@ -1,3 +1,5 @@
+"use strict";
+
 load("future_shell/config/config.js");
 // -------------------- Helpers --------------------
 load("future_shell/lib/shell/index.js");

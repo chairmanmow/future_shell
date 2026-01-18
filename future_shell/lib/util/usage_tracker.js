@@ -1,3 +1,5 @@
+"use strict";
+
 /*
  * External Program Usage Tracker
  * ------------------------------

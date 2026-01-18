@@ -1,4 +1,5 @@
 // Minimal test harness for playDissolveBefore timing analysis
+"use strict";
 // This script calls playDissolveBefore in isolation and measures execution time
 
 var testLog = new File(system.logs_dir + 'test_play_dissolve_before.log');

@@ -1,3 +1,5 @@
+"use strict";
+
 function createTimestamp(currentMsgTime, lastMsgTime) {
     function pad(n) { return n < 10 ? '0' + n : n; }
     function ampm(hours) { return hours % 12 === 0 ? 12 : hours % 12; }

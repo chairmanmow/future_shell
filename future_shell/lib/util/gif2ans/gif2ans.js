@@ -1,4 +1,5 @@
 // gif2ans.js — minimal runner calling ansi_core *positionally*
+"use strict";
 
 load("http.js");
 

@@ -1,3 +1,5 @@
+"use strict";
+
 function Button(opts) {
     opts = opts || {};
     this.parentFrame = opts.parentFrame || null;

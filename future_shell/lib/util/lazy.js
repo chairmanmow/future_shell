@@ -1,4 +1,5 @@
 // lazy.js - shared helpers for memoizing expensive load() operations
+"use strict";
 (function (global) {
 	if (global && typeof global.lazyLoadModule === 'function') return;
 

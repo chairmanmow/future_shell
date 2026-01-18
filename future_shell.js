@@ -3,6 +3,8 @@
  * Set Command Shell to: ?mods/chshell
  */
 
+"use strict";
+
 load("sbbsdefs.js"); // LOG_* and K_* constants
 
 // Load shell modules (define global IconShell() and BasicShell())
@@ -130,7 +132,8 @@ function sleepMs(ms) {
         mswait(ms);
     else {
         var end = (new Date()).getTime() + ms;
+        var yieldFunc = this.yield || (function() {});
         while ((new Date()).getTime() < end)
-            yield(true);
+            yieldFunc(true);
     }
 }

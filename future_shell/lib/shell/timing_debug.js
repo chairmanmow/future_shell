@@ -1,4 +1,5 @@
 // Comprehensive timing instrumentation to find the 30-second freeze
+"use strict";
 
 // Wrap key functions with timing
 var originalOpenSelection = IconShell.prototype.openSelection;

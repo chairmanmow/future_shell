@@ -1,4 +1,5 @@
 /*	'color' may be a colour def (LIGHTBLUE, etc.) or an array of same
+"use strict";
 	'title', if present, must have x, y, attr, and text properties */
 Frame.prototype.drawBorder = function(color, title) {
 	this.pushxy();

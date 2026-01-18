@@ -1,4 +1,5 @@
 // MRC Controller: Orchestrates client, store, and persistence
+"use strict";
 // Translates client events → store actions; exposes command API to view
 
 load('future_shell/lib/mrc/client.js');

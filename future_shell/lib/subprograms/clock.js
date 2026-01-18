@@ -1,4 +1,5 @@
 // Digital Clock Subprogram (ported)
+"use strict";
 // Displays stylized HH:MM:SS with day & date. Updates every second.
 // Keys: Q/ESC exit. Any other key exits (optional minimal interaction).
 

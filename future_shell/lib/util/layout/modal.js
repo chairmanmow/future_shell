@@ -1,4 +1,5 @@
 // Migration tracker (completed): legacy bespoke overlays replaced with unified Modal.
+"use strict";
 //   - message_boards.js: read + transition notices now spinner Modals (legacy frames removed)
 //   - users.js: user detail view now uses type:'custom' Modal (multi-frame layout removed)
 //   - newsreader.js: loading overlay uses spinner Modal

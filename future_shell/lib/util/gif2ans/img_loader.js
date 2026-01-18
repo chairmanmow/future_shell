@@ -1,4 +1,5 @@
 // img_loader.js — unified bitmap→ANSI (native gif2ans with JS fallback) + SAUCE + ImageMagick presets + verbose logs
+"use strict";
 // Usage:
 //   convertImageToANSI(pathOrUrl, columns, /*contiguous_ignored*/ false, /*outputPath*/ null, {
 //     debug: true,

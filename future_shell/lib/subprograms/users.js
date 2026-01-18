@@ -1,3 +1,5 @@
+"use strict";
+
 load('future_shell/lib/subprograms/subprogram.js');
 load('future_shell/lib/subprograms/subprogram_hotspots.js');
 if (typeof registerModuleExports !== 'function') {

@@ -1,4 +1,5 @@
 // screensaver.js
+"use strict";
 // Unified screen saver controller for IconShell.
 // Manages MatrixRain plus a pool of modular animations sourced from
 // canvas-animations.js and avatars-float.js. Animations are selected

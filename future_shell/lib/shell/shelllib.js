@@ -1,3 +1,5 @@
+"use strict";
+
 if (typeof dbug !== 'function') {
     try { load('future_shell/lib/util/debug.js'); } catch (e) {
         dbug = function () { };
@@ -576,7 +578,8 @@ IconShell.prototype.main = function () {
                 var elapsed = this._lastKeyTimestamp ? (Date.now() - this._lastKeyTimestamp) : Infinity;
                 if (elapsed >= this.keyStrokeTimeoutMs) this.timer.cycle();
             }
-            yield(true);
+            var yieldFunc = this.yield || (function() {});
+            yieldFunc(true);
         }
     } finally {
         this._cleanupMainLoop();
@@ -585,11 +588,6 @@ IconShell.prototype.main = function () {
 
 // Refactor processKeyboardInput to not call changeFolder() with no argument
 IconShell.prototype.processKeyboardInput = function (ch) {
-    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
-    logFile.open('a');
-    logFile.writeln('[processKeyboardInput] called with ch=' + JSON.stringify(ch) + ' charCode=' + (ch && typeof ch === 'string' ? ch.charCodeAt(0) : 'N/A'));
-    logFile.close();
-
     if (this.activeSubprogram && this.activeSubprogram.running === false) {
         dbug('Releasing inactive subprogram before handling key', 'subprogram');
         this.exitSubprogram();
@@ -921,7 +919,87 @@ IconShell.prototype._refreshScreenSaverFrame = function () {
     this._screenSaver.refreshFrame();
 };
 
+IconShell.prototype._suspendJsonChat = function() {
+    if (!this.jsonchat) return;
+    
+    try {
+        dbug('[jsonchat] suspending connection before external launch', 'chat');
+        
+        // Unsubscribe from channels
+        if (typeof this.jsonchat.unsubscribe === 'function') {
+            try { 
+                this.jsonchat.unsubscribe('main'); 
+            } catch (e) { 
+                dbug('[jsonchat] unsubscribe error: ' + e, 'chat'); 
+            }
+        }
+        
+        // Disconnect the client
+        if (this.jsonchat.client && typeof this.jsonchat.client.disconnect === 'function') {
+            try { 
+                this.jsonchat.client.disconnect(); 
+            } catch (e) { 
+                dbug('[jsonchat] disconnect error: ' + e, 'chat'); 
+            }
+        }
+        
+        // Mark as suspended
+        this._jsonChatSuspended = true;
+        
+    } catch (e) {
+        log(LOG_ERR, '[jsonchat] suspend failed: ' + e);
+    }
+};
+
+IconShell.prototype._resumeJsonChat = function() {
+    if (!this._jsonChatSuspended) return;
+    
+    try {
+        dbug('[jsonchat] resuming connection after external return', 'chat');
+        
+        var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
+        var host = bbs.sys_inetaddr || "127.0.0.1";
+        var port = 10088;
+        
+        // Create fresh connection
+        var jsonclient = new JSONClient(host, port);
+        this.jsonchat = new JSONChat(usernum, jsonclient, host, port);
+        
+        // Rejoin channels
+        this.jsonchat.join("main");
+        
+        // Re-wrap update() for notifications
+        var origUpdate = this.jsonchat.update;
+        var self = this;
+        this.jsonchat.update = function (packet) {
+            self._processChatUpdate(packet);
+            return origUpdate.call(this, packet);
+        };
+        
+        // Update chat subprogram reference
+        if (this.chat) {
+            this.chat.jsonchat = this.jsonchat;
+        }
+        
+        // Clear suspended flag and reset health counters
+        this._jsonChatSuspended = false;
+        this._chatDisconnectCount = 0;
+        this._chatSlowCycleCount = 0;
+        this._chatConnectionUnhealthy = false;
+        this._chatRecoveryAttempted = false;
+        
+        dbug('[jsonchat] connection resumed successfully', 'chat');
+        
+    } catch (e) {
+        log(LOG_ERR, '[jsonchat] resume failed: ' + e);
+        this._jsonChatSuspended = false;
+    }
+};
+
 IconShell.prototype._pollChatBackend = function (nowTs) {
+    // Skip if suspended during external program
+    if (this._jsonChatSuspended) return;
+    
     if (!this.jsonchat) return;
     var ts = nowTs || Date.now();
     if (this._lastChatPollTs && (ts - this._lastChatPollTs) < 1000) return;
@@ -1375,9 +1453,6 @@ IconShell.prototype._handleSubprogramKey = function (ch) {
 };
 
 IconShell.prototype._handleNavigationKey = function (ch) {
-    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
-    logFile.open('a');
-    logFile.writeln('[_handleNavigationKey] called with ch=' + JSON.stringify(ch) + ' charCode=' + (ch ? ch.charCodeAt(0) : 'null'));
 
     // Defensive: ensure selection/index not out of sync with current visible items (especially root view)
     try {
@@ -1387,20 +1462,15 @@ IconShell.prototype._handleNavigationKey = function (ch) {
         if (this.selection >= items.length) this.selection = items.length ? items.length - 1 : 0;
     } catch (e) { }
     switch (ch) {
-        case KEY_LEFT: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(-1, 0); logFile.close(); return true;
-        case KEY_RIGHT: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(1, 0); logFile.close(); return true;
-        case KEY_UP: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(0, -1); logFile.close(); return true;
+        case KEY_LEFT: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(-1, 0); return true;
+        case KEY_RIGHT: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(1, 0); return true;
+        case KEY_UP: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(0, -1); return true;
         case KEY_DOWN:
         case "\u000a":
-            log('key down detected as navigation');
-            logFile.writeln('[_handleNavigationKey] DOWN/LF pressed, moving selection');
             if (this._resetTypeahead) this._resetTypeahead();
             this.moveSelection(0, 1);
-            logFile.close();
             return true;
         case '\r': // ENTER
-            logFile.writeln('[_handleNavigationKey] ENTER pressed, calling openSelection');
-            logFile.close();
             if (this._resetTypeahead) this._resetTypeahead();
             this.openSelection();
             return true;
@@ -1413,10 +1483,8 @@ IconShell.prototype._handleNavigationKey = function (ch) {
                     if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
                 }
             }
-            logFile.close();
             return true;
         default:
-            logFile.close();
             return false;
     }
 };
@@ -1595,9 +1663,6 @@ IconShell.prototype._handleHotkeyAction = function (ch) {
 };
 
 IconShell.prototype._handleHotkeyItemSelection = function (ch) {
-    var logFile = new File(system.logs_dir + 'dissolve_debug.log');
-    logFile.open('a');
-    logFile.writeln('[_handleHotkeyItemSelection] called with ch=' + JSON.stringify(ch));
 
     var node = this.stack[this.stack.length - 1];
     var items = node.children ? node.children.slice() : [];
@@ -1612,7 +1677,6 @@ IconShell.prototype._handleHotkeyItemSelection = function (ch) {
     for (var i = 0; i < visibleItems.length; i++) {
         var item = visibleItems[i];
         if (item.hotkey && ch === item.hotkey) {
-            logFile.writeln('[_handleHotkeyItemSelection] MATCH FOUND: label=' + (item.label || '') + ' hotkey=' + JSON.stringify(item.hotkey));
             dbug(item.hotkey + ":" + item.label, "hotkeys");
             if (this._resetTypeahead) this._resetTypeahead();
             // Clear border from previous selection if it's different
@@ -1635,8 +1699,6 @@ IconShell.prototype._handleHotkeyItemSelection = function (ch) {
                 }
             }
             this.previousSelectedIndex = this.selection;
-            logFile.writeln('[_handleHotkeyItemSelection] calling openSelection with selection=' + this.selection);
-            logFile.close();
             this.openSelection();
             if (this.folderChanged) {
                 this.folderChanged = false;
@@ -1645,8 +1707,6 @@ IconShell.prototype._handleHotkeyItemSelection = function (ch) {
             return true;
         }
     }
-    logFile.writeln('[_handleHotkeyItemSelection] no match found');
-    logFile.close();
     return false;
 };
 

@@ -1,4 +1,5 @@
 // Test harness to compare ENTER path vs hotkey path execution
+"use strict";
 // Run this to see which code paths are actually being called and in what order
 
 IconShell.prototype.testEnterVsHotkey = function() {

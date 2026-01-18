@@ -1,4 +1,5 @@
 // User List Subprogram (ported from classic userlist.js)
+"use strict";
 // Minimal interactive viewer:
 //   - Shows users (filtered by optional mode: UL_SUB or UL_DIR if provided in opts.mode)
 //   - Hotkeys: N=Sort by Name, L=Sort by Last-on, # (ignored placeholder), Q/ESC exit

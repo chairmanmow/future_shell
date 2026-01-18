@@ -1,4 +1,5 @@
 // Simple test to verify dissolve function works
+"use strict";
 load("sbbsdefs.js");
 
 try { load('future_shell/lib/effects/eye_candy.js'); } catch (e) {

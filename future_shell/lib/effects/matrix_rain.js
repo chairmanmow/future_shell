@@ -1,4 +1,5 @@
 /* Matrix rain background effect for IconShell
+"use strict";
  * Usage: var rain = new MatrixRain({ parent:this.root }); rain.start(); in init()
  */
 (function(){
