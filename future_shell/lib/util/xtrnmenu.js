@@ -93,3 +93,18 @@ function getItemsForXtrnSection(index) {
 	});
 	return items;
 }
+
+// Lookup section by CODE (case-insensitive) instead of index
+// This is needed because sec_list is filtered by user access, so indices shift
+function getItemsForXtrnSectionByCode(code) {
+	if (typeof xtrn_area === 'undefined' || !xtrn_area.sec_list) return [];
+	var codeUpper = (code || '').toUpperCase();
+	for (var i = 0; i < xtrn_area.sec_list.length; i++) {
+		var sec = xtrn_area.sec_list[i];
+		if (sec && sec.code && sec.code.toUpperCase() === codeUpper) {
+			return getItemsForXtrnSection(i);
+		}
+	}
+	// Section not found (user can't access it)
+	return [];
+}

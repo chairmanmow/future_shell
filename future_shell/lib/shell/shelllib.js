@@ -190,6 +190,12 @@ IconShell.prototype.init = function () {
     this._maxToastsPerType = MAX_TOASTS_PER_TYPE;
     this._lastLaunchEventId = undefined;
     this._shellPrefsInstance = null;
+    // Toast batching/grouping: coalesce rapid toasts from same category
+    this._toastBatchQueue = {};       // { category: [opts, opts, ...] }
+    this._toastBatchTimers = {};      // { category: timeoutId }
+    this._toastBatchDelayMs = 800;    // Wait this long before flushing batch
+    this._toastBatchThreshold = 2;    // Show grouped toast when >= this many queued
+    this._toastGroupedInstances = {}; // { category: toastInstance } - active grouped toasts
     // Track reserved hotspot commands so we avoid collisions
     this._reservedHotspotCommands = {};
     if (typeof ICSH_HOTSPOT_FILL_CMD === 'string' && ICSH_HOTSPOT_FILL_CMD.length === 1) {
@@ -250,6 +256,24 @@ IconShell.prototype.init = function () {
     var jsonclient = new JSONClient(host, port);
     this.jsonchat = new JSONChat(usernum, jsonclient, host, port);
     this.jsonchat.join("main");
+    
+    // Register cleanup handler for abrupt disconnects (user drops connection)
+    // This prevents dangling sockets from crashing the JSON service
+    // The handler runs as a string evaluated on exit, so it must be self-contained
+    js.on_exit(
+        "try {" +
+        "  var shell = (typeof global !== 'undefined' && global.__ICSH_ACTIVE_SHELL__) || (typeof globalThis !== 'undefined' && globalThis.__ICSH_ACTIVE_SHELL__);" +
+        "  if (shell && shell.jsonchat) {" +
+        "    if (shell.jsonchat.client) {" +
+        "      try { shell.jsonchat.client.disconnect(); } catch(e) {}" +
+        "      if (shell.jsonchat.client.socket) {" +
+        "        try { shell.jsonchat.client.socket.close(); } catch(e) {}" +
+        "      }" +
+        "    }" +
+        "  }" +
+        "} catch(e) {}"
+    );
+    
     // Wrap update() to log incoming messages for notification/debugging
 
     this.chatNotifications = [];
@@ -352,6 +376,19 @@ IconShell.prototype.init = function () {
         }
     } catch (e) {
         try { log(LOG_ERR, '[shell] MRC controller init failed: ' + e); } catch (_) { }
+    }
+
+    // Initialize points system and award login points
+    try {
+        this._pointsSystem = load({}, system.mods_dir + 'points/points.js');
+        if (this._pointsSystem) {
+            this._pointsSystem.award('loggedIn');
+            this._pointsSystem.award('joinedChat'); // Auto-join main chat at init
+            this._pointsSystem.checkDailyLogin();
+            dbug('[shell] Points system initialized', 'points');
+        }
+    } catch (e) {
+        dbug('[shell] Points system not available: ' + e, 'points');
     }
 };
 
@@ -555,6 +592,11 @@ IconShell.prototype._dismissAllToasts = function () {
 IconShell.prototype.main = function () {
     try {
         while (!js.terminated) {
+            // Check if exit was requested (e.g., via modal confirmation)
+            if (this._pendingExit) {
+                this._pendingExit = false;
+                throw('Exit Shell');
+            }
             var keys = [];
             var key;
             while ((key = console.inkey(K_NOECHO | K_NOSPIN, 0))) {
@@ -578,8 +620,10 @@ IconShell.prototype.main = function () {
                 var elapsed = this._lastKeyTimestamp ? (Date.now() - this._lastKeyTimestamp) : Infinity;
                 if (elapsed >= this.keyStrokeTimeoutMs) this.timer.cycle();
             }
-            var yieldFunc = this.yield || (function() {});
-            yieldFunc(true);
+            // Yield CPU when idle to prevent busy-wait spinning
+            var idle = !keys.length;
+            var yieldFunc = this.yield || (function(isIdle) { if (isIdle) mswait(10); });
+            yieldFunc(idle);
         }
     } finally {
         this._cleanupMainLoop();
@@ -710,8 +754,16 @@ IconShell.prototype._processChatUpdate = function (packet) {
             if (packet.data && packet.data.str) {
                 var nickName = (packet.data && packet.data.nick && (packet.data.nick.name || packet.data.nick)) ? (packet.data.nick.name || packet.data.nick) : 'Chat';
                 var netAddr = (packet.data && packet.data.nick && (packet.data.nick.host || packet.data.nick.netaddr)) ? (packet.data.nick.host || packet.data.nick.netaddr) : system.name;
+                var toastMessage = packet.data.str;
+                // Humanize BITMAP payloads: [BITMAP|width|height|fromName|hexData]
+                var isBitmapPayload = (typeof toastMessage === 'string' && toastMessage.indexOf('[BITMAP|') === 0);
+                if (isBitmapPayload) {
+                    var bitmapParts = toastMessage.split('|');
+                    var bitmapSender = (bitmapParts.length >= 4) ? bitmapParts[3] : nickName;
+                    toastMessage = bitmapSender + ' shared an image in Chat';
+                }
                 this.showToast({
-                    message: nickName + ': ' + packet.data.str,
+                    message: isBitmapPayload ? toastMessage : (nickName + ': ' + toastMessage),
                     avatar: { username: nickName, netaddr: netAddr },
                     title: nickName,
                     launch: 'chat',
@@ -892,12 +944,26 @@ IconShell.prototype._handleConsoleResize = function (dims) {
     this.drawFolder();
 };
 
-IconShell.prototype._resolveScreensaverFrame = function () {
-    if (this.activeSubprogram && typeof this.activeSubprogram.backgroundFrame === 'function') {
-        try {
-            var frame = this.activeSubprogram.backgroundFrame();
-            if (frame && frame.is_open !== false) return frame;
-        } catch (e) { dbug('screensaver backgroundFrame error: ' + e, 'screensaver'); }
+IconShell.prototype._resolveScreensaverFrame = function (animationName) {
+    // Overlay screensavers (avatars_float, figlet_message) need a frame without children
+    // Background screensavers render behind content
+    var isOverlay = (animationName === 'avatars_float' || animationName === 'figlet_message');
+    
+    if (this.activeSubprogram) {
+        // For overlay: use overlayFrame if available, else backgroundFrame
+        // For background: use backgroundFrame (renders behind content)
+        if (isOverlay && typeof this.activeSubprogram.overlayFrame === 'function') {
+            try {
+                var ovl = this.activeSubprogram.overlayFrame();
+                if (ovl && ovl.is_open !== false) return ovl;
+            } catch (e) { dbug('screensaver overlayFrame error: ' + e, 'screensaver'); }
+        }
+        if (typeof this.activeSubprogram.backgroundFrame === 'function') {
+            try {
+                var frame = this.activeSubprogram.backgroundFrame();
+                if (frame && frame.is_open !== false) return frame;
+            } catch (e) { dbug('screensaver backgroundFrame error: ' + e, 'screensaver'); }
+        }
     }
     var viewFrame = this.view;
     if (!viewFrame || (typeof viewFrame.is_open !== 'undefined' && !viewFrame.is_open)) {
@@ -919,32 +985,47 @@ IconShell.prototype._refreshScreenSaverFrame = function () {
     this._screenSaver.refreshFrame();
 };
 
-IconShell.prototype._suspendJsonChat = function() {
+IconShell.prototype._suspendJsonChat = function(opts) {
     if (!this.jsonchat) return;
+    opts = opts || {};
+    
+    // Silent mode: keep connection alive, just pause polling (for external launches)
+    // This prevents noisy join/leave notifications for other users
+    var silent = (opts.silent !== false); // default to silent for external launches
     
     try {
-        dbug('[jsonchat] suspending connection before external launch', 'chat');
+        dbug('[jsonchat] suspending connection before external launch (silent=' + silent + ')', 'chat');
         
-        // Unsubscribe from channels
-        if (typeof this.jsonchat.unsubscribe === 'function') {
-            try { 
-                this.jsonchat.unsubscribe('main'); 
-            } catch (e) { 
-                dbug('[jsonchat] unsubscribe error: ' + e, 'chat'); 
+        if (silent) {
+            // Silent suspend: keep connection alive, just mark as suspended
+            // This avoids triggering "user has left" notifications for other users
+            this._jsonChatSuspended = true;
+            this._jsonChatSilentSuspend = true;
+            dbug('[jsonchat] silent suspend - connection kept alive', 'chat');
+        } else {
+            // Full disconnect (legacy behavior - causes noisy notifications)
+            // Unsubscribe from channels
+            if (typeof this.jsonchat.unsubscribe === 'function') {
+                try { 
+                    this.jsonchat.unsubscribe('main'); 
+                } catch (e) { 
+                    dbug('[jsonchat] unsubscribe error: ' + e, 'chat'); 
+                }
             }
-        }
-        
-        // Disconnect the client
-        if (this.jsonchat.client && typeof this.jsonchat.client.disconnect === 'function') {
-            try { 
-                this.jsonchat.client.disconnect(); 
-            } catch (e) { 
-                dbug('[jsonchat] disconnect error: ' + e, 'chat'); 
+            
+            // Disconnect the client
+            if (this.jsonchat.client && typeof this.jsonchat.client.disconnect === 'function') {
+                try { 
+                    this.jsonchat.client.disconnect(); 
+                } catch (e) { 
+                    dbug('[jsonchat] disconnect error: ' + e, 'chat'); 
+                }
             }
+            
+            // Mark as suspended
+            this._jsonChatSuspended = true;
+            this._jsonChatSilentSuspend = false;
         }
-        
-        // Mark as suspended
-        this._jsonChatSuspended = true;
         
     } catch (e) {
         log(LOG_ERR, '[jsonchat] suspend failed: ' + e);
@@ -955,8 +1036,29 @@ IconShell.prototype._resumeJsonChat = function() {
     if (!this._jsonChatSuspended) return;
     
     try {
-        dbug('[jsonchat] resuming connection after external return', 'chat');
+        dbug('[jsonchat] resuming connection after external return (silentSuspend=' + !!this._jsonChatSilentSuspend + ')', 'chat');
         
+        // If this was a silent suspend, check if connection is still alive
+        if (this._jsonChatSilentSuspend && this.jsonchat && this.jsonchat.client) {
+            // Connection was kept alive during external - just resume polling
+            var isConnected = false;
+            try {
+                isConnected = this.jsonchat.client.socket && this.jsonchat.client.socket.is_connected;
+            } catch (_) { }
+            
+            if (isConnected) {
+                // Connection still alive - just clear suspend flag and resume
+                this._jsonChatSuspended = false;
+                this._jsonChatSilentSuspend = false;
+                dbug('[jsonchat] silent resume - connection still alive, resuming polling', 'chat');
+                return;
+            } else {
+                // Connection died during external - need to do full reconnect
+                dbug('[jsonchat] silent suspend connection died during external, doing full reconnect', 'chat');
+            }
+        }
+        
+        // Full reconnect path (connection died or was non-silent suspend)
         var usernum = (typeof user !== 'undefined' && user.number) ? user.number : 1;
         var host = bbs.sys_inetaddr || "127.0.0.1";
         var port = 10088;
@@ -983,6 +1085,7 @@ IconShell.prototype._resumeJsonChat = function() {
         
         // Clear suspended flag and reset health counters
         this._jsonChatSuspended = false;
+        this._jsonChatSilentSuspend = false;
         this._chatDisconnectCount = 0;
         this._chatSlowCycleCount = 0;
         this._chatConnectionUnhealthy = false;
@@ -993,6 +1096,7 @@ IconShell.prototype._resumeJsonChat = function() {
     } catch (e) {
         log(LOG_ERR, '[jsonchat] resume failed: ' + e);
         this._jsonChatSuspended = false;
+        this._jsonChatSilentSuspend = false;
     }
 };
 
@@ -1304,6 +1408,9 @@ IconShell.prototype._handleInactivity = function (nowTs) {
 };
 
 IconShell.prototype._cycleToasts = function () {
+    // Check if any batched toasts should be flushed
+    this._checkToastBatchFlush();
+    
     if (this.toasts && this.toasts.length) {
         for (var i = 0; i < this.toasts.length; i++) {
             var toast = this.toasts[i];
@@ -1732,6 +1839,10 @@ IconShell.prototype._startScreenSaver = function () {
     if (this._screenSaver.isActive()) return false;
     var sub = this.activeSubprogram;
     if (sub && (sub.blockScreensaver === true || sub.blockScreenSaver === true)) return false;
+    // Notify shell to suppress subprogram cycles during screensaver
+    if (typeof this._onAmbientStart === 'function') {
+        try { this._onAmbientStart(); } catch (e) { }
+    }
     return this._screenSaver.activate();
 };
 
@@ -1739,6 +1850,10 @@ IconShell.prototype._stopScreenSaver = function () {
     if (!this._screenSaver || !this._screenSaver.isActive()) return false;
     this._screenSaver.deactivate();
     this._removeScreensaverHotspot();
+    // Notify shell that screensaver stopped so subprogram cycles can resume
+    if (typeof this._onAmbientStop === 'function') {
+        try { this._onAmbientStop(); } catch (e) { }
+    }
     return true;
 };
 
@@ -1954,12 +2069,14 @@ IconShell.prototype._getToastColors = function (category) {
     return { msg: defaultMsg, border: defaultBorder, title: defaultTitle };
 };
 
+// Categories that should batch/group their toasts
+IconShell.prototype._batchableCategories = ['mrc', 'mrc-chat', 'json-chat', 'chat'];
+
 IconShell.prototype.showToast = function (params) {
     var self = this;
     var opts = params || {};
 
     // Filter out MRC app launch/return messages - they're just clutter since XTRN toasts are more useful
-    // Check title instead of message since that's where the user name comes from
     var title = opts.title || '';
     var message = opts.message || opts.body || '';
     if ((/\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(title)) || (/\[LAUNCHED APP\]|\[RETURNED FROM APP\]/.test(message))) {
@@ -1967,13 +2084,14 @@ IconShell.prototype.showToast = function (params) {
         return null;
     }
 
-    opts.parentFrame = this.root;
     var action = (typeof opts.action === 'function') ? opts.action : null;
     var launch = null;
     if (typeof opts.launch === 'string') launch = opts.launch;
     else if (typeof opts.subprogram === 'string') launch = opts.subprogram;
     var category = (typeof opts.category === 'string' && opts.category.length) ? opts.category : null;
     var sender = (typeof opts.sender === 'string' && opts.sender.length) ? opts.sender : null;
+    
+    // Check notification preferences
     if (category || sender) {
         var prefs = this.reloadShellPrefs();
         if (prefs && typeof prefs.shouldDisplayNotification === 'function') {
@@ -1987,6 +2105,210 @@ IconShell.prototype.showToast = function (params) {
             }
         }
     }
+
+    // Determine if this category should be batched
+    var shouldBatch = category && this._batchableCategories.indexOf(category) >= 0;
+    
+    // If not a batchable category, show immediately
+    if (!shouldBatch) {
+        return this._showToastImmediate(opts);
+    }
+
+    // Batching logic: queue this toast and schedule a flush
+    if (!this._toastBatchQueue) this._toastBatchQueue = {};
+    if (!this._toastBatchQueue[category]) this._toastBatchQueue[category] = [];
+    
+    // Store the opts for later
+    this._toastBatchQueue[category].push({
+        opts: opts,
+        launch: launch,
+        action: action,
+        sender: sender
+    });
+    
+    try { dbug('[toast] queued for batch category=' + category + ' queueLen=' + this._toastBatchQueue[category].length, 'toast'); } catch (_) { }
+
+    // If there's already a grouped toast showing for this category, update its count
+    if (this._toastGroupedInstances && this._toastGroupedInstances[category]) {
+        this._updateGroupedToastCount(category);
+        return null; // Return null since we're updating existing grouped toast
+    }
+
+    // Schedule flush if not already scheduled
+    if (!this._toastBatchTimers) this._toastBatchTimers = {};
+    if (!this._toastBatchTimers[category]) {
+        var delayMs = this._toastBatchDelayMs || 800;
+        this._toastBatchTimers[category] = true; // Mark as scheduled
+        var flushTime = Date.now() + delayMs;
+        this._toastBatchFlushTime = this._toastBatchFlushTime || {};
+        this._toastBatchFlushTime[category] = flushTime;
+        try { dbug('[toast] batch timer scheduled for category=' + category + ' delay=' + delayMs, 'toast'); } catch (_) { }
+    }
+
+    return null; // Toast will be shown when batch flushes
+};
+
+// Called from cycle loop to check if batch should flush
+IconShell.prototype._checkToastBatchFlush = function () {
+    if (!this._toastBatchQueue || !this._toastBatchFlushTime) return;
+    var now = Date.now();
+    for (var category in this._toastBatchFlushTime) {
+        if (!this._toastBatchFlushTime.hasOwnProperty(category)) continue;
+        if (now >= this._toastBatchFlushTime[category]) {
+            this._flushToastBatch(category);
+        }
+    }
+};
+
+IconShell.prototype._flushToastBatch = function (category) {
+    if (!this._toastBatchQueue || !this._toastBatchQueue[category]) return;
+    
+    var queue = this._toastBatchQueue[category];
+    var count = queue.length;
+    
+    // Clear the timer and queue
+    if (this._toastBatchTimers) delete this._toastBatchTimers[category];
+    if (this._toastBatchFlushTime) delete this._toastBatchFlushTime[category];
+    this._toastBatchQueue[category] = [];
+    
+    if (count === 0) return;
+    
+    try { dbug('[toast] flushing batch category=' + category + ' count=' + count, 'toast'); } catch (_) { }
+    
+    var threshold = this._toastBatchThreshold || 2;
+    
+    if (count < threshold) {
+        // Show individual toasts
+        for (var i = 0; i < queue.length; i++) {
+            this._showToastImmediate(queue[i].opts);
+        }
+    } else {
+        // Show a single grouped toast
+        this._showGroupedToast(category, queue);
+    }
+};
+
+IconShell.prototype._showGroupedToast = function (category, queue) {
+    var count = queue.length;
+    if (count === 0) return;
+    
+    // Use the first item's properties as template
+    var first = queue[0];
+    var launch = first.launch;
+    var programIcon = first.opts.programIcon;
+    
+    // Build grouped message
+    var categoryLabel = this._getCategoryLabel(category);
+    var message = count + ' new ' + categoryLabel + ' messages';
+    
+    // Collect unique senders for title
+    var senders = {};
+    for (var i = 0; i < queue.length; i++) {
+        var sender = queue[i].sender || queue[i].opts.title;
+        if (sender) senders[sender] = true;
+    }
+    var senderList = [];
+    for (var s in senders) {
+        if (senders.hasOwnProperty(s)) senderList.push(s);
+    }
+    var title = senderList.length <= 2 ? senderList.join(', ') : senderList.length + ' people';
+    
+    var self = this;
+    var groupedOpts = {
+        title: title || categoryLabel,
+        message: message,
+        launch: launch,
+        category: category,
+        programIcon: programIcon,
+        colors: this._getToastColors(category),
+        timeout: 60000, // Grouped toasts stay longer
+        onDone: function (t) {
+            // Clean up grouped instance tracking
+            if (self._toastGroupedInstances) delete self._toastGroupedInstances[category];
+        }
+    };
+    
+    var toast = this._showToastImmediate(groupedOpts);
+    if (toast) {
+        toast.__shellMeta = toast.__shellMeta || {};
+        toast.__shellMeta.isGrouped = true;
+        toast.__shellMeta.groupedCount = count;
+        toast.__shellMeta.groupedQueue = queue;
+        if (!this._toastGroupedInstances) this._toastGroupedInstances = {};
+        this._toastGroupedInstances[category] = toast;
+    }
+    return toast;
+};
+
+IconShell.prototype._updateGroupedToastCount = function (category) {
+    if (!this._toastGroupedInstances || !this._toastGroupedInstances[category]) return;
+    var toast = this._toastGroupedInstances[category];
+    if (!toast || toast._dismissed) {
+        delete this._toastGroupedInstances[category];
+        return;
+    }
+    
+    // Get current queue count
+    var queue = this._toastBatchQueue && this._toastBatchQueue[category];
+    var queueCount = queue ? queue.length : 0;
+    var existingCount = (toast.__shellMeta && toast.__shellMeta.groupedCount) || 0;
+    var newCount = existingCount + queueCount;
+    
+    // Update the message
+    var categoryLabel = this._getCategoryLabel(category);
+    var newMessage = newCount + ' new ' + categoryLabel + ' messages';
+    
+    // Update toast content if possible
+    if (toast.msgFrame && typeof toast.msgFrame.clear === 'function') {
+        try {
+            toast.msgFrame.clear();
+            toast.msgFrame.home();
+            toast.msgFrame.putmsg(newMessage);
+            if (typeof toast.msgFrame.cycle === 'function') toast.msgFrame.cycle();
+        } catch (_) { }
+    }
+    
+    // Merge queue into grouped toast's queue
+    if (toast.__shellMeta) {
+        toast.__shellMeta.groupedCount = newCount;
+        if (!toast.__shellMeta.groupedQueue) toast.__shellMeta.groupedQueue = [];
+        if (queue) {
+            for (var i = 0; i < queue.length; i++) {
+                toast.__shellMeta.groupedQueue.push(queue[i]);
+            }
+        }
+    }
+    
+    // Clear the pending queue since we merged it
+    if (this._toastBatchQueue) this._toastBatchQueue[category] = [];
+    if (this._toastBatchTimers) delete this._toastBatchTimers[category];
+    if (this._toastBatchFlushTime) delete this._toastBatchFlushTime[category];
+    
+    try { dbug('[toast] updated grouped toast count=' + newCount + ' category=' + category, 'toast'); } catch (_) { }
+};
+
+IconShell.prototype._getCategoryLabel = function (category) {
+    var labels = {
+        'mrc': 'MRC',
+        'mrc-chat': 'MRC',
+        'json-chat': 'chat',
+        'chat': 'chat'
+    };
+    return labels[category] || category || 'notification';
+};
+
+// The actual toast creation (formerly the body of showToast)
+IconShell.prototype._showToastImmediate = function (opts) {
+    var self = this;
+    opts = opts || {};
+    opts.parentFrame = this.root;
+    
+    var action = (typeof opts.action === 'function') ? opts.action : null;
+    var launch = null;
+    if (typeof opts.launch === 'string') launch = opts.launch;
+    else if (typeof opts.subprogram === 'string') launch = opts.subprogram;
+    var category = (typeof opts.category === 'string' && opts.category.length) ? opts.category : null;
+
     var toastTypeKey = this._getToastTypeKey(opts, category, launch);
     this._enforceToastCapForType(toastTypeKey);
     
@@ -1995,7 +2317,7 @@ IconShell.prototype.showToast = function (params) {
         opts.colors = this._getToastColors(category);
     }
     
-    dbug('[toast] showToast title=' + (opts.title || '') + ' launch=' + (launch || '') + ' category=' + (category || ''), 'toast');
+    dbug('[toast] showToastImmediate title=' + (opts.title || '') + ' launch=' + (launch || '') + ' category=' + (category || ''), 'toast');
     var position = opts.position || 'bottom-right';
     var userOnDone = opts.onDone;
     opts.onDone = function (t) {

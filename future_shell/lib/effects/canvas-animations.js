@@ -806,6 +806,13 @@ function FigletMessage(){
 FigletMessage.prototype.init = function(frame, opts){
 	this.f = frame;
 	opts = opts || {};
+	// Clear frame at init to remove any artifacts from previous animations
+	// This is critical for transparent overlay frames
+	try {
+		if(typeof frame.invalidate === 'function') frame.invalidate();
+		if(typeof frame.clear === 'function') frame.clear();
+		if(typeof frame.cycle === 'function') frame.cycle();
+	} catch(_){}
 	this.tdf = load('tdfonts_lib.js');
 	if(!this.tdf.opt) this.tdf.opt = {};
 	this.tdf.opt.width = frame.width;
@@ -1214,8 +1221,18 @@ FigletMessage.prototype.tick = function(){
 	this._draw();
 };
 FigletMessage.prototype.dispose = function(){
-	if(this.inner){ try { this.inner.close(); } catch(e){} }
-	if(this.box){ try { this.box.close(); } catch(e){} }
+	if(this.inner){
+		try { this.inner.clear(); } catch(e){}
+		try { this.inner.close(); } catch(e){}
+	}
+	if(this.box){
+		try { this.box.clear(); } catch(e){}
+		try { this.box.close(); } catch(e){}
+	}
+	// Invalidate parent to force full redraw after transparent child frames are closed
+	if(this.f){
+		try { if(typeof this.f.invalidate === 'function') this.f.invalidate(); } catch(_){}
+	}
 	this._clearFrame(this.f);
 	if(this.f && typeof this.f.cycle === 'function'){
 		try { this.f.cycle(); } catch(_c){}

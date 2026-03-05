@@ -1,5 +1,3 @@
-"use strict";
-
 load('sbbsdefs.js');
 load("future_shell/lib/subprograms/subprogram.js");
 load("future_shell/lib/util/debug.js");
@@ -640,6 +638,14 @@ if (typeof Frame !== 'undefined' && typeof Frame.prototype.loadAnsiString !== 'f
 
 function MessageBoard(opts) {
     opts = opts || {};
+    // MUST call parent constructor FIRST before using inherited methods
+    Subprogram.call(this, {
+        id: 'message_board',
+        name: 'message-board',
+        parentFrame: opts.parentFrame,
+        shell: opts.shell,
+        timer: opts.timer
+    });
     this.blockScreenSaver = false;
     this.frameSet = null;
     this.overlay = null;
@@ -655,7 +661,6 @@ function MessageBoard(opts) {
     this.currentMessageHeader = null;
     this.currentMessageBody = '';
     this.currentMessageRawBody = '';
-    this.id = "message_board";
     this._threadPaletteLogged = false;
     this.registerColors({
         TITLE_FRAME: { BG: BG_BLACK, FG: LIGHTBLUE },
@@ -691,13 +696,6 @@ function MessageBoard(opts) {
         THREAD_STATUS_SUB: { BG: BG_BLACK, FG: LIGHTCYAN }
     });
     this.parentFrame = opts.parentFrame || null;
-    Subprogram.call(this, {
-        id: 'message_board',
-        name: 'message-board',
-        parentFrame: opts.parentFrame,
-        shell: opts.shell,
-        timer: opts.timer
-    });
     this._pendingHotspotDefs = [];
     try {
         this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'message-board', layerName: 'message-board', priority: 75 });
@@ -849,7 +847,9 @@ MessageBoard.prototype._handleInlineSearchKey = function (key) {
 
 // Main loop (called externally by shell or could be invoked after enter)
 MessageBoard.prototype.cycle = function () {
-    if (!this.running) return;
+    if (!this.running) {
+        return;
+    }
     this._startFrameCycle();
 };
 
@@ -987,7 +987,9 @@ MessageBoard.prototype._drawInput = function () {
 
 // Guarded exit override (ensures done callback only fires once through base implementation)
 MessageBoard.prototype.exit = function () {
-    if (!this.running) return; // already exited
+    if (!this.running) {
+        return; // already exited
+    }
     this._cancelFrameCycle();
     this._releaseHotspots();
     // Dispose the hotspot helper layer to prevent orphaned hotspots
@@ -3407,11 +3409,11 @@ MessageBoard.prototype._ensureThreadContentFrame = function () {
     var listHeight = Math.max(1, base.height - totalReserved);
     var controlsAttr = this.paletteAttr('THREAD_CONTROLS', BG_BLACK | LIGHTGRAY);
     var listAttr = this.paletteAttr('THREAD_LIST', base.attr || (BG_BLACK | LIGHTGRAY));
-    var searchButtonAttr = this.paletteAttr('THREAD_SEARCH_BUTTON', controlsAttr);
+    var searchButtonAttr = this.paletteAttr('THREAD_SEARCH_BUTTON', BG_CYAN | WHITE);
     var searchButtonFocusAttr = this.paletteAttr('THREAD_SEARCH_BUTTON_FOCUS', BG_LIGHTGRAY | BLACK);
-    var backButtonAttr = this.paletteAttr('THREAD_BACK_BUTTON', controlsAttr);
+    var backButtonAttr = this.paletteAttr('THREAD_BACK_BUTTON', BG_RED | WHITE);
     var backButtonFocusAttr = this.paletteAttr('THREAD_BACK_BUTTON_FOCUS', BG_LIGHTGRAY | BLACK);
-    var toggleButtonAttr = this.paletteAttr('THREAD_TOGGLE_BUTTON', controlsAttr);
+    var toggleButtonAttr = this.paletteAttr('THREAD_TOGGLE_BUTTON', BG_MAGENTA | YELLOW);
     var toggleButtonFocusAttr = this.paletteAttr('THREAD_TOGGLE_BUTTON_FOCUS', BG_LIGHTGRAY | BLACK);
     var statusGroupAttr = this.paletteAttr('THREAD_STATUS_GROUP', controlsAttr);
     var statusSepAttr = this.paletteAttr('THREAD_STATUS_SEPARATOR', controlsAttr);
@@ -3540,6 +3542,10 @@ MessageBoard.prototype._ensureThreadContentFrame = function () {
         }
         statusWidth = ensureStatusGap();
 
+        // Extract blend color from controls frame background
+        var threadCtrlBg = (this._threadControlsFrame && this._threadControlsFrame.attr) ? ((this._threadControlsFrame.attr >> 4) & 0x07) : BLACK;
+        var threadButtonShadowColors = [8, threadCtrlBg]; // shadow=DARKGRAY(8), blend=threadCtrlBg
+
         this._threadBackButton = new Button({
             parentFrame: this._threadControlsFrame,
             x: backX,
@@ -3548,6 +3554,7 @@ MessageBoard.prototype._ensureThreadContentFrame = function () {
             height: Math.min(2, this._threadControlsFrame.height - rowY + 1),
             attr: backButtonAttr,
             focusAttr: backButtonFocusAttr,
+            shadowColors: threadButtonShadowColors,
             label: 'Back',
             onClick: function () {
                 self._handleKey('\x1b');
@@ -3562,6 +3569,7 @@ MessageBoard.prototype._ensureThreadContentFrame = function () {
             height: Math.min(2, this._threadControlsFrame.height - rowY + 1),
             attr: toggleButtonAttr,
             focusAttr: toggleButtonFocusAttr,
+            shadowColors: threadButtonShadowColors,
             label: toggleLabel,
             onClick: function () {
                 self._toggleThreadFlatView();
@@ -3576,6 +3584,7 @@ MessageBoard.prototype._ensureThreadContentFrame = function () {
             height: Math.min(2, this._threadControlsFrame.height - rowY + 1),
             attr: searchButtonAttr,
             focusAttr: searchButtonFocusAttr,
+            shadowColors: threadButtonShadowColors,
             label: '[S] Search',
             onClick: function () {
                 self._promptSearch(self.cursub || self._lastActiveSubCode || null, 'threads');
@@ -3746,6 +3755,7 @@ MessageBoard.prototype._renderThreadControlsStatus = function (opts) {
 // Static convenience launcher so shell code can do: MessageBoard.launch(shell, cb)
 MessageBoard.launch = function (shell, cb, opts) {
     opts = opts || {};
+    log("[MB.launch] autoCycle=" + opts.autoCycle);
     var createdParent = null;
     if (!opts.parentFrame && shell && shell.root) {
         var root = shell.root;
@@ -3780,9 +3790,10 @@ MessageBoard.launch = function (shell, cb, opts) {
     if (createdParent) {
         mb._ownsParentFrame = true; // ensure cleanup closes our custom parent frame
     }
-    mb.enter(function () { if (typeof cb === 'function') cb(); });
     if (opts.autoCycle) mb.autoCycle = true;
-    if (mb.autoCycle) mb.cycle();
+    log("[MB.launch] Before enter: autoCycle=" + mb.autoCycle + " running=" + mb.running);
+    mb.enter(function () { if (typeof cb === 'function') cb(); });
+    log("[MB.launch] After enter: running=" + mb.running);
     return mb;
 };
 

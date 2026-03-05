@@ -1,5 +1,3 @@
-"use strict";
-
 load('future_shell/lib/subprograms/subprogram.js');
 if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
@@ -30,8 +28,7 @@ var hideSysopXtrns = ['scfgansi'];
 function UsageViewer(opts) {
     log("USAGE VIEWER CONSTRUCTOR");
     opts = opts || {};
-    Subprogram.call(this, { name: 'usage-viewer', parentFrame: opts.parentFrame, shell: opts.shell, timer: opts.timer });
-    this.id = 'usage-viewer';
+    Subprogram.call(this, { id: 'usage-viewer', name: 'usage-viewer', parentFrame: opts.parentFrame, shell: opts.shell, timer: opts.timer });
     this.hotspots = (typeof SubprogramHotspotHelper === 'function')
         ? new SubprogramHotspotHelper({ shell: this.shell, owner: 'usage-viewer', layerName: 'usage-viewer', priority: 67 })
         : null;
@@ -871,7 +868,7 @@ UsageViewer.prototype._destroyBackButton = function () {
 UsageViewer.prototype._registerBackButtonFrame = function () {
     if (!this._backButton || !this._backButton.frame) return;
     var frame = this._backButton.frame;
-    if (frame.parent !== this.listFrame) frame.parent = this.listFrame;
+    // Note: frame.parent is read-only, cannot be reassigned
     if (typeof frame.open === 'function') {
         try {
             if (!frame.is_open) frame.open();
@@ -916,9 +913,9 @@ UsageViewer.prototype._ensureBackButton = function (parentFrame) {
     var desiredWidth = Math.max(8, label.length + 4);
     if (desiredWidth > availableWidth) desiredWidth = Math.max(6, Math.min(availableWidth, label.length + 2));
     var buttonAttr = ((typeof BG_MAGENTA !== 'undefined' ? BG_MAGENTA : 0) | (typeof YELLOW !== 'undefined' ? YELLOW : 14));
-    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
-    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
-    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    // Shadow: BLACK for 3D effect, GREEN to blend with header background
+    var shadowColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+    var blendColor = (typeof GREEN !== 'undefined' ? GREEN : 2);
     var self = this;
     var clickHandler = function () { self.exit(); };
 
@@ -937,9 +934,7 @@ UsageViewer.prototype._ensureBackButton = function (parentFrame) {
             label: label,
             attr: buttonAttr,
             focusAttr: buttonAttr,
-            shadowAttr: shadowAttr,
-            backgroundColors: [0, 0],
-            shadowColors: [shadowFg, shadowBg],
+            shadowColors: [shadowColor, blendColor],
             onClick: clickHandler
         });
         this._backButton.setFocused(false);
@@ -1008,9 +1003,9 @@ UsageViewer.prototype._ensureSortButton = function (parentFrame, startX) {
 
     var buttonAttr = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : 0) | (typeof CYAN !== 'undefined' ? CYAN : 11));
     var focusAttr = buttonAttr;
-    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
-    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
-    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    // Shadow: BLACK for 3D effect, GREEN to blend with header background
+    var shadowColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+    var blendColor = (typeof GREEN !== 'undefined' ? GREEN : 2);
     var self = this;
 
     var clickHandler = function () { self._cycleSort(); self.draw(); };
@@ -1025,9 +1020,7 @@ UsageViewer.prototype._ensureSortButton = function (parentFrame, startX) {
                 label: label,
                 attr: buttonAttr,
                 focusAttr: focusAttr,
-                shadowAttr: shadowAttr,
-                backgroundColors: [0, 0],
-                shadowColors: [shadowFg, shadowBg],
+                shadowColors: [shadowColor, blendColor],
                 onClick: clickHandler
             });
             this._sortButton.setFocused(false);
@@ -1051,7 +1044,7 @@ UsageViewer.prototype._ensureSortButton = function (parentFrame, startX) {
             this._sortButton.frame.y = y;
             this._sortButton.frame.width = desiredWidth;
             this._sortButton.frame.height = 2;
-            this._sortButton.frame.parent = parentFrame;
+            // Note: frame.parent is read-only
         }
     }
     return x + desiredWidth;
@@ -1078,9 +1071,9 @@ UsageViewer.prototype._ensureUserFilterButton = function (parentFrame, startX) {
 
     var buttonAttr = ((typeof BG_GREEN !== 'undefined' ? BG_GREEN : 0) | (typeof BLACK !== 'undefined' ? BLACK : 0));
     var focusAttr = buttonAttr;
-    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
-    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
-    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    // Shadow: BLACK for 3D effect, GREEN to blend with header background
+    var shadowColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+    var blendColor = (typeof GREEN !== 'undefined' ? GREEN : 2);
     var self = this;
 
     var clickHandler = function () { self._showUserFilter(); };
@@ -1095,9 +1088,7 @@ UsageViewer.prototype._ensureUserFilterButton = function (parentFrame, startX) {
                 label: label,
                 attr: buttonAttr,
                 focusAttr: focusAttr,
-                shadowAttr: shadowAttr,
-                backgroundColors: [0, 0],
-                shadowColors: [shadowFg, shadowBg],
+                shadowColors: [shadowColor, blendColor],
                 onClick: clickHandler
             });
             this._userFilterButton.setFocused(false);
@@ -1121,7 +1112,7 @@ UsageViewer.prototype._ensureUserFilterButton = function (parentFrame, startX) {
             this._userFilterButton.frame.y = y;
             this._userFilterButton.frame.width = desiredWidth;
             this._userFilterButton.frame.height = 2;
-            this._userFilterButton.frame.parent = parentFrame;
+            // Note: frame.parent is read-only
         }
     }
     return x + desiredWidth;
@@ -1147,9 +1138,9 @@ UsageViewer.prototype._ensureMonthPrevButton = function (parentFrame, startX) {
 
     var buttonAttr = ((typeof BG_CYAN !== 'undefined' ? BG_CYAN : 0) | (typeof BLACK !== 'undefined' ? BLACK : 0));
     var focusAttr = buttonAttr;
-    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
-    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
-    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    // Shadow: BLACK for 3D effect, GREEN to blend with header background
+    var shadowColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+    var blendColor = (typeof GREEN !== 'undefined' ? GREEN : 2);
     var self = this;
 
     var clickHandler = function () {
@@ -1171,9 +1162,7 @@ UsageViewer.prototype._ensureMonthPrevButton = function (parentFrame, startX) {
                 label: label,
                 attr: buttonAttr,
                 focusAttr: focusAttr,
-                shadowAttr: shadowAttr,
-                backgroundColors: [0, 0],
-                shadowColors: [shadowFg, shadowBg],
+                shadowColors: [shadowColor, blendColor],
                 onClick: clickHandler
             });
             this._monthPrevButton.setFocused(false);
@@ -1192,7 +1181,7 @@ UsageViewer.prototype._ensureMonthPrevButton = function (parentFrame, startX) {
             this._monthPrevButton.frame.y = y;
             this._monthPrevButton.frame.width = desiredWidth;
             this._monthPrevButton.frame.height = 2;
-            this._monthPrevButton.frame.parent = parentFrame;
+            // Note: frame.parent is read-only
         }
     }
     return x + desiredWidth;
@@ -1218,9 +1207,9 @@ UsageViewer.prototype._ensureMonthNextButton = function (parentFrame, startX) {
 
     var buttonAttr = ((typeof BG_CYAN !== 'undefined' ? BG_CYAN : 0) | (typeof BLACK !== 'undefined' ? BLACK : 0));
     var focusAttr = buttonAttr;
-    var shadowFg = (typeof LIGHTGRAY !== 'undefined' ? LIGHTGRAY : 7);
-    var shadowBg = (typeof BG_LIGHTGRAY !== 'undefined' ? BG_LIGHTGRAY : 0);
-    var shadowAttr = (shadowBg & 0x70) | (shadowFg & 0x0F);
+    // Shadow: BLACK for 3D effect, GREEN to blend with header background
+    var shadowColor = (typeof BLACK !== 'undefined' ? BLACK : 0);
+    var blendColor = (typeof GREEN !== 'undefined' ? GREEN : 2);
     var self = this;
 
     var clickHandler = function () {
@@ -1242,9 +1231,7 @@ UsageViewer.prototype._ensureMonthNextButton = function (parentFrame, startX) {
                 label: label,
                 attr: buttonAttr,
                 focusAttr: focusAttr,
-                shadowAttr: shadowAttr,
-                backgroundColors: [0, 0],
-                shadowColors: [shadowFg, shadowBg],
+                shadowColors: [shadowColor, blendColor],
                 onClick: clickHandler
             });
             this._monthNextButton.setFocused(false);
@@ -1263,7 +1250,7 @@ UsageViewer.prototype._ensureMonthNextButton = function (parentFrame, startX) {
             this._monthNextButton.frame.y = y;
             this._monthNextButton.frame.width = desiredWidth;
             this._monthNextButton.frame.height = 2;
-            this._monthNextButton.frame.parent = parentFrame;
+            // Note: frame.parent is read-only
         }
     }
     return x + desiredWidth;
@@ -1753,22 +1740,60 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     blockFrame.clear(attr);
     this._programFrames.push(blockFrame);
 
+    // Draw white border frame around selected item
+    if (isSelected && width >= 3 && height >= 2) {
+        var borderAttr = BG_BLACK | WHITE;
+        // Box-drawing characters (CP437): ┌\xDA ┐\xBF └\xC0 ┘\xD9 ─\xC4 │\xB3
+        var TL = '\xDA', TR = '\xBF', BL = '\xC0', BR = '\xD9', HZ = '\xC4', VT = '\xB3';
+        blockFrame.attr = borderAttr;
+        // Top border
+        blockFrame.gotoxy(1, 1);
+        blockFrame.putmsg(TL);
+        for (var bx = 2; bx < width; bx++) {
+            blockFrame.gotoxy(bx, 1);
+            blockFrame.putmsg(HZ);
+        }
+        blockFrame.gotoxy(width, 1);
+        blockFrame.putmsg(TR);
+        // Bottom border
+        blockFrame.gotoxy(1, height);
+        blockFrame.putmsg(BL);
+        for (var bx = 2; bx < width; bx++) {
+            blockFrame.gotoxy(bx, height);
+            blockFrame.putmsg(HZ);
+        }
+        blockFrame.gotoxy(width, height);
+        blockFrame.putmsg(BR);
+        // Side borders
+        for (var by = 2; by < height; by++) {
+            blockFrame.gotoxy(1, by);
+            blockFrame.putmsg(VT);
+            blockFrame.gotoxy(width, by);
+            blockFrame.putmsg(VT);
+        }
+        blockFrame.attr = baseAttr;
+    }
+
     var display = this._resolveProgramDisplayInfo(prog);
     var iconWidth = (typeof ICSH_CONSTANTS !== 'undefined' && ICSH_CONSTANTS && ICSH_CONSTANTS.ICON_W) ? ICSH_CONSTANTS.ICON_W : 12;
     var iconHeight = (typeof ICSH_CONSTANTS !== 'undefined' && ICSH_CONSTANTS && ICSH_CONSTANTS.ICON_H) ? ICSH_CONSTANTS.ICON_H : 6;
-    iconHeight = Math.min(iconHeight, height);
-    var leftPad = 1;
+    // Adjust padding when selected to account for border
+    var borderOffset = isSelected ? 1 : 0;
+    // Reduce available height when selected (border takes 2 rows)
+    var availableHeight = isSelected ? Math.max(1, height - 2) : height;
+    iconHeight = Math.min(iconHeight, availableHeight);
+    var leftPad = 1 + borderOffset;
     var gap = 2;
-    var availableForIcon = Math.max(0, width - leftPad - gap - 1);
+    var availableForIcon = Math.max(0, width - leftPad - gap - 1 - borderOffset);
     var showIcon = iconWidth > 0 && iconHeight > 0 && availableForIcon >= iconWidth;
     var iconFrame = null;
     var iconAttr = baseAttr; // use base attribute for icon background
-    var textStart = gap + 1;
+    var textStart = gap + 1 + borderOffset;
     var iconError = null;
     if (showIcon) {
         // Icon frame using absolute positioning
         var iconX = absX + leftPad;
-        var iconY = absY;
+        var iconY = absY + borderOffset;
         try {
             iconFrame = new Frame(iconX, iconY, iconWidth, iconHeight, iconAttr, this.hostFrame || this.parentFrame);
             iconFrame.transparent = true;
@@ -1778,11 +1803,11 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
         } catch (iconEx) {
             iconError = iconEx;
             iconFrame = null;
-            textStart = gap + 1;
+            textStart = gap + 1 + borderOffset;
         }
     }
     if (textStart > width) textStart = Math.max(2, width - 10);
-    var textWidth = Math.max(0, width - textStart + 1);
+    var textWidth = Math.max(0, width - textStart - borderOffset + 1);
 
     var lines = [];
     var rankStr, nameStr;
@@ -1803,13 +1828,16 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     var uCount = (typeof prog.uniqueUsers === 'number') ? prog.uniqueUsers : 0;
     lines.push(this.colorize('TEXT_TOTAL', 'Total players:', { reset: false }) + '  ' + this.colorize('TEXT_TOTAL', uCount + ''));
     lines.push('');
-    for (var row = 0; row < height && row < lines.length; row++) {
+    // Adjust available rows when selected (border takes 2 rows)
+    var maxRows = isSelected ? height - 2 : height;
+    var rowOffset = borderOffset; // Start at row 2 when selected (after top border)
+    for (var row = 0; row < maxRows && row < lines.length; row++) {
         var line = lines[row] || '';
         if (row === 0 && iconError) line += ' [icon error]';
         if (textWidth > 0) {
             var lineAttr = (isSelected && row === 0) ? this.paletteAttr('LIGHTBAR') : baseAttr;
             blockFrame.attr = lineAttr;
-            blockFrame.gotoxy(textStart, row + 1);
+            blockFrame.gotoxy(textStart, row + 1 + rowOffset);
             // var padded = this._padColoredLine(line, textWidth);
             // blockFrame.putmsg(padded);
             blockFrame.putmsg(line)

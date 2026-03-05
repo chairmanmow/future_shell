@@ -1256,11 +1256,16 @@ NewsReader.prototype._iconExists = function (iconName) {
     if (typeof system !== 'undefined' && system && system.mods_dir) baseDir = system.mods_dir;
     else if (typeof js !== 'undefined' && js && js.exec_dir) baseDir = js.exec_dir;
     if (baseDir && baseDir.charAt(baseDir.length - 1) !== '/' && baseDir.charAt(baseDir.length - 1) !== '\\') baseDir += '/';
-    var pathBase = baseDir + 'future_shell/assets/' + iconName;
     var exists = false;
     if (typeof file_exists === 'function') {
         try {
-            exists = file_exists(pathBase + '.bin') || file_exists(pathBase + '.ans');
+            // Check newsreader subdirectory first, then fall back to main assets
+            var newsreaderBase = baseDir + 'future_shell/assets/newsreader/' + iconName;
+            exists = file_exists(newsreaderBase + '.bin') || file_exists(newsreaderBase + '.ans');
+            if (!exists) {
+                var pathBase = baseDir + 'future_shell/assets/' + iconName;
+                exists = file_exists(pathBase + '.bin') || file_exists(pathBase + '.ans');
+            }
         } catch (_iconExistsErr) {
             exists = false;
         }
@@ -1383,7 +1388,7 @@ NewsReader.prototype._resetFrameSurface = function (frame, attr) {
             frame.__position__.offset.y = 0;
         }
     }
-    if (typeof frame.data_height === 'number') frame.data_height = 0;
+    try { if (typeof frame.data_height === 'number') frame.data_height = 0; } catch (_e) { }
 };
 
 NewsReader.prototype._normalizeAnsiPreview = function (payload) {
@@ -1670,7 +1675,7 @@ NewsReader.prototype._renderAnsiPreview = function (frame, payload, opts) {
     }
 
     if (frame.__properties__) frame.__properties__.data_height = totalRows;
-    if (typeof frame.data_height === 'number') frame.data_height = totalRows;
+    try { if (typeof frame.data_height === 'number') frame.data_height = totalRows; } catch (_e) { }
     if (typeof frame.cycle === 'function') {
         try { frame.cycle(); } catch (_cycleErr) { }
     }
@@ -1972,6 +1977,172 @@ NewsReader.prototype._iconNameForCategory = function (category) {
     return '';
 };
 
+// ═══════════════════════════════════════════════════════════════════════
+// Dynamic feed icon recoloring — palette lookup tables
+// Palette: { edge_fg, body_bg, text_fg, star_fg }
+// CGA: 0=BLK 1=BLU 2=GRN 3=CYN 4=RED 5=MAG 6=BRN 7=LGY
+//      8=DGY 9=LBL 10=LGN 11=LCN 12=LRD 13=LMG 14=YEL 15=WHT
+// ═══════════════════════════════════════════════════════════════════════
+
+var _NR_COUNTRY_PALETTES = {
+    'algeria':[2,2,15,12],'botswana':[9,1,15,11],'burkina_faso':[4,4,10,14],
+    'central_african_republic':[1,2,14,15],'chad':[1,1,14,12],'cote_d_ivoire':[2,2,15,6],
+    'democratic_republic_of_the_congo':[1,1,14,12],'djibouti':[9,2,15,12],
+    'egypt':[4,4,15,14],'eritrea':[1,1,10,14],'eswatini':[1,1,14,12],
+    'ethiopia':[2,2,14,12],'gabon':[2,2,14,9],'ghana':[4,4,14,10],
+    'kenya':[4,4,10,15],'lesotho':[1,2,15,9],'libya':[4,4,15,10],
+    'malawi':[4,4,10,15],'mauritius':[4,1,14,10],'morocco':[4,4,10,14],
+    'namibia':[1,1,10,14],'nigeria':[2,2,15,10],'rwanda':[1,1,14,10],
+    'sierra_leone':[2,2,15,9],'somalia':[9,1,15,11],'south_africa':[2,2,14,12],
+    'south_sudan':[4,2,15,1],'tanzania':[2,2,14,9],'togo':[2,2,14,12],
+    'uganda':[4,4,14,15],'zambia':[2,2,15,6],'zimbabwe':[2,2,14,12],
+    'afghanistan':[4,4,15,10],'bangladesh':[2,2,12,15],'cambodia':[1,4,15,9],
+    'china':[4,4,14,14],'hong_kong':[4,4,15,12],'india':[6,2,15,1],
+    'indonesia':[4,4,15,12],'japan':[15,7,12,4],'malaysia':[1,4,14,15],
+    'mongolia':[4,4,14,9],'myanmar':[2,2,14,12],'nepal':[4,4,15,1],
+    'north_korea':[4,4,15,1],'pakistan':[2,2,15,10],'philippines':[1,4,14,15],
+    'singapore':[4,4,15,12],'south_korea':[15,7,12,1],'sri_lanka':[6,6,14,12],
+    'taiwan':[1,4,15,9],'thailand':[1,4,15,9],'vietnam':[4,4,14,14],
+    'albania':[4,4,15,8],'armenia':[4,4,14,1],'austria':[4,4,15,12],
+    'azerbaijan':[1,1,10,12],'belarus':[4,4,10,15],'belgium':[6,4,14,8],
+    'bosnia_and_herzegovina':[1,1,14,15],'bulgaria':[2,2,15,12],'croatia':[4,4,15,1],
+    'czech_republic':[1,4,15,9],'denmark':[4,4,15,12],'estonia':[1,1,15,8],
+    'finland':[15,7,9,1],'france':[1,4,15,9],'georgia':[4,4,15,12],
+    'germany':[4,6,14,8],'greece':[9,1,15,11],'hungary':[4,4,15,2],
+    'iceland':[1,1,15,12],'ireland':[2,2,15,6],'italy':[2,4,15,10],
+    'kosovo':[1,1,14,15],'latvia':[4,4,15,6],'lithuania':[2,2,14,12],
+    'luxembourg':[9,4,15,11],'moldova':[1,1,14,12],'montenegro':[4,4,14,8],
+    'netherlands':[4,4,15,1],'north_macedonia':[4,4,14,12],'norway':[4,4,15,1],
+    'poland':[4,4,15,12],'portugal':[2,4,14,10],'romania':[1,4,14,9],
+    'russia':[4,1,15,12],'serbia':[4,4,15,1],'slovakia':[1,4,15,9],
+    'slovenia':[1,4,15,9],'spain':[4,4,14,6],'sweden':[1,1,14,9],
+    'switzerland':[4,4,15,12],'turkey':[4,4,15,12],'ukraine':[1,1,14,9],
+    'united_kingdom':[1,4,15,9],
+    'bahrain':[4,4,15,12],'iran':[2,2,15,12],'iraq':[4,4,15,10],
+    'israel':[15,7,1,9],'jordan':[4,2,15,8],'kuwait':[2,2,15,12],
+    'lebanon':[4,4,10,15],'oman':[4,4,15,2],'palestine':[2,4,15,8],
+    'qatar':[6,6,15,12],'saudi_arabia':[2,2,15,10],'syria':[4,4,15,10],
+    'united_arab_emirates':[2,4,15,8],'yemen':[4,4,15,8],
+    'canada':[4,4,15,12],'costa_rica':[1,4,15,9],'cuba':[1,4,15,9],
+    'dominican_republic':[1,4,15,9],'el_salvador':[1,1,15,9],
+    'guatemala':[9,1,15,11],'haiti':[1,4,15,9],'honduras':[1,1,15,9],
+    'jamaica':[2,2,14,8],'mexico':[2,2,15,12],'nicaragua':[1,1,15,9],
+    'panama':[1,4,15,9],'trinidad_and_tobago':[4,4,15,8],'united_states':[1,4,15,9],
+    'argentina':[9,1,15,14],'bolivia':[4,2,14,12],'brazil':[2,2,14,1],
+    'chile':[4,4,15,1],'colombia':[1,1,14,12],'ecuador':[1,1,14,12],
+    'guyana':[2,2,14,12],'paraguay':[4,4,15,1],'peru':[4,4,15,12],
+    'suriname':[2,2,14,12],'uruguay':[15,7,9,14],'venezuela':[1,4,14,9],
+    'australia':[1,1,15,12],'fiji':[9,1,15,12],'new_zealand':[1,1,15,12],
+    'papua_new_guinea':[4,4,14,8],
+    'barbados':[1,1,14,8],'belize':[1,1,15,12],'bhutan':[6,6,14,15],
+    'cyprus':[15,7,6,2],'england':[15,7,12,4],'europe':[1,1,14,9],
+    'grenada':[4,4,14,2],'kazakhstan':[9,1,14,11],'laos':[4,1,15,12],
+    'malta':[4,4,15,7],'trinidad':[4,4,15,8]
+};
+
+var _NR_CATEGORY_PALETTES = {
+    'images':        [11,3,15,14], 'news_current_affairs':[1,4,15,9],
+    'news & current affairs':[1,4,15,9], 'technology':[9,1,15,11],
+    'business_finance':[6,2,14,15], 'business & finance':[6,2,14,15],
+    'sports':        [10,2,15,14], 'entertainment':[13,5,15,14],
+    'health_wellness':[10,2,15,12], 'health & wellness':[10,2,15,12],
+    'travel_lifestyle':[9,1,14,11], 'travel & lifestyle':[9,1,14,11],
+    'science_education':[11,3,15,14], 'science & education':[11,3,15,14],
+    'special_interests':[5,5,15,14], 'art_design':[6,6,14,12],
+    'arts & culture':[6,6,14,12], 'arts_culture':[6,6,14,12],
+    'offbeat':       [12,4,14,15], 'misc':[8,7,0,15],
+    'local news':    [7,0,15,14], 'local_news':[7,0,15,14],
+    'politics':      [1,1,14,12], 'politics & society':[1,1,14,12],
+    'politics_society':[1,1,14,12],
+    'business':      [6,2,14,15], 'business & economy':[6,2,14,15],
+    'business_economy':[6,2,14,15],
+    'lifestyle':     [13,5,15,14], 'lifestyle & culture':[13,5,15,14],
+    'lifestyle_culture':[13,5,15,14],
+    'world':         [9,1,15,11], 'world_news':[9,1,15,11],
+    'opinion':       [5,5,15,14], 'science':[11,3,15,14],
+    'other':         [8,7,0,15]
+};
+
+/**
+ * Build a recolor palette for a feed, or return null if feed has a custom icon.
+ * Lookup order: country → category → default gray.
+ */
+NewsReader.prototype._feedRecolorPalette = function (feed) {
+    if (!feed) return null;
+    // If the feed already has a dedicated icon file, don't recolor
+    if (feed.icon && this._iconExists(feed.icon)) return null;
+    if (feed.label) {
+        var slugIcon = 'newsfeed_' + this._slugifyLabel(feed.label);
+        if (this._iconExists(slugIcon)) return null;
+    }
+
+    // Build abbreviated title from feed label (up to 5 chars)
+    var rawLabel = feed.label || '';
+    var title = this._abbreviateFeedTitle(rawLabel);
+
+    // Lookup country palette first
+    var pal = null;
+    if (feed.country) {
+        var countrySlug = newsreaderSlugify(feed.country);
+        if (_NR_COUNTRY_PALETTES[countrySlug]) pal = _NR_COUNTRY_PALETTES[countrySlug];
+    }
+    // Fallback to category palette
+    if (!pal && feed.category) {
+        var catLower = feed.category.toLowerCase();
+        if (_NR_CATEGORY_PALETTES[catLower]) pal = _NR_CATEGORY_PALETTES[catLower];
+        if (!pal) {
+            var catSlug = newsreaderSlugify(feed.category);
+            if (_NR_CATEGORY_PALETTES[catSlug]) pal = _NR_CATEGORY_PALETTES[catSlug];
+        }
+    }
+    // Fallback to subcategory
+    if (!pal && feed.subcategory) {
+        var subLower = feed.subcategory.toLowerCase();
+        if (_NR_CATEGORY_PALETTES[subLower]) pal = _NR_CATEGORY_PALETTES[subLower];
+    }
+    // Default gray with color accent
+    if (!pal) pal = [7, 7, 1, 14];
+
+    return { edge_fg: pal[0], body_bg: pal[1], text_fg: pal[2], star_fg: pal[3], title: title };
+};
+
+/**
+ * Abbreviate a feed label to fit the 5-char title area.
+ * Strategy: strip common prefixes/suffixes, then take first words' initials
+ * or truncate, and center in 5 chars.
+ */
+NewsReader.prototype._abbreviateFeedTitle = function (label) {
+    var MAX = 6;
+    if (!label) return ' FEED ';
+    // Strip common noise words
+    var s = label.replace(/\s*[-–—|:]\s*/g, ' ')
+                 .replace(/\b(RSS|Feed|Online|Daily|The|World)\b/gi, '')
+                 .replace(/\s+/g, ' ')
+                 .replace(/^\s+|\s+$/g, '');
+    if (!s) s = label.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    var upper = s.toUpperCase();
+    if (upper.length <= MAX) return upper;
+    // Take initials of first words if many words
+    var words = s.split(/\s+/);
+    if (words.length >= 3) {
+        var initials = '';
+        for (var i = 0; i < Math.min(words.length, MAX); i++) {
+            if (words[i].length > 0) initials += words[i].charAt(0).toUpperCase();
+        }
+        if (initials.length >= 2 && initials.length <= MAX) return initials;
+    }
+    // Two words: abbreviate first + full second (or vice versa)
+    if (words.length === 2) {
+        var combo = (words[0].charAt(0) + '.' + words[1]).toUpperCase();
+        if (combo.length <= MAX) return combo;
+        combo = (words[0] + ' ' + words[1].charAt(0) + '.').toUpperCase();
+        if (combo.length <= MAX) return combo;
+    }
+    // Truncate
+    return upper.substr(0, MAX);
+    return trunc;
+};
+
 NewsReader.prototype._renderIconLabel = function (frame, text, isSelected) {
     if (!frame) return;
     var attr = isSelected ? this.paletteAttr('LIST_ACTIVE') : this.paletteAttr('LIST_INACTIVE');
@@ -2190,9 +2361,20 @@ NewsReader.prototype._renderFeedIcons = function () {
             if (typeof this.registerFrame === 'function') this.registerFrame(borderFrame);
 
             var iconName;
-            if (item && item._type === 'back') iconName = 'back';
-            else iconName = this._iconNameForFeed(item);
+            var recolorPalette = null;
+            if (item && item._type === 'back') {
+                iconName = 'back';
+            } else {
+                recolorPalette = this._feedRecolorPalette(item);
+                if (recolorPalette) {
+                    // Use the base newsitems template; recolor will happen after load
+                    iconName = this._iconExists('newsitems') ? 'newsitems' : '';
+                } else {
+                    iconName = this._iconNameForFeed(item);
+                }
+            }
             var iconData = { iconFile: iconName, label: '', iconBg: bgVal, iconFg: fgVal };
+            if (recolorPalette) iconData.recolorPalette = recolorPalette;
             var iconObj = new Icon(iconFrame, labelFrame, iconData);
             try { iconObj.render(); } catch (_eIcon) { }
             if (typeof this.registerFrame === 'function') {
@@ -2681,15 +2863,15 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
     var callback = this._createArticleLinkButtonHandler(link);
     if (!this.articleLinkButton) {
         try {
+            // Shadow: BLACK for 3D, use parent frame background as blend
+            var blendColor = this.articleHeaderFrame ? ((this.articleHeaderFrame.attr >> 4) & 0x07) : BLACK;
             this.articleLinkButton = new Button({
                 frame: this.articleLinkButtonFrame,
                 parentFrame: this.articleHeaderFrame,
                 label: 'Read Link',
                 attr: WHITE | BG_CYAN,
                 focusAttr: focusAttr,
-                shadowAttr: shadowAttr,
-                backgroundColors: [LIGHTGRAY, BG_LIGHTGRAY],
-                shadowColors: [BLACK, BG_BLACK],
+                shadowColors: [8, blendColor], // shadow=DARKGRAY(8), blend=blendColor
                 onClick: callback
             });
         } catch (_eBtnInit) {
@@ -2701,8 +2883,9 @@ NewsReader.prototype._renderArticleLinkButton = function (article) {
         this.articleLinkButton.setLabel('Read Link');
         this.articleLinkButton.setOnClick(callback);
         this.articleLinkButton.parentFrame = this.articleHeaderFrame || null;
-        this.articleLinkButton.backgroundColors = [RED, BG_RED];
-        this.articleLinkButton.shadowColors = [BLACK, BG_BLACK];
+        // Update blend color from parent frame background
+        var updateBlendColor = this.articleHeaderFrame ? ((this.articleHeaderFrame.attr >> 4) & 0x07) : BLACK;
+        this.articleLinkButton.shadowColors = [8, updateBlendColor]; // shadow=DARKGRAY(8)
     }
 
     this.articleLinkButton.setFocused(true);
@@ -3945,7 +4128,13 @@ NewsReader.prototype._ensureArticleIcon = function (options) {
     if (useIcon && this.articleIconFrame) {
         if (!this.articleIconObj) {
             var headerAttr = this.paletteAttr('READ_HEADER');
-            this.articleIconObj = new Icon(this.articleIconFrame, this.articleHeaderLabelFrame, { iconFile: iconName, label: '', iconBg: headerAttr.bg, iconFg: headerAttr.fg });
+            var artRecolor = this._feedRecolorPalette(this.currentFeed);
+            var artIconData = { iconFile: iconName, label: '', iconBg: headerAttr.bg, iconFg: headerAttr.fg };
+            if (artRecolor) {
+                artIconData.iconFile = this._iconExists('newsitems') ? 'newsitems' : iconName;
+                artIconData.recolorPalette = artRecolor;
+            }
+            this.articleIconObj = new Icon(this.articleIconFrame, this.articleHeaderLabelFrame, artIconData);
         }
         if (this.articleIconObj && typeof this.articleIconObj.render === 'function') {
             try { this.articleIconObj.render(); } catch (_erIco) { }

@@ -1,5 +1,3 @@
-"use strict";
-
 // Attempt dynamic configuration via guishell.ini
 // INI format example:
 // [Menu]
@@ -212,7 +210,30 @@ var BUILTIN_ACTIONS = {
 		missingMessage: 'HelloWorld class missing after load'
 	}),
 	exit: function () {
-		throw ('Exit Shell');
+		var shell = this;
+		try { load('future_shell/lib/util/layout/modal.js'); } catch (e) { }
+		if (typeof Modal !== 'function') {
+			throw('Exit Shell');  // Fallback if modal unavailable
+		}
+		new Modal({
+			type: 'confirm',
+			title: 'Logoff',
+			message: 'Are you sure you want to log off?',
+			parentFrame: shell.root,
+			overlay: false,  // Don't hide background content
+			onSubmit: function(confirmed) {
+				if (confirmed) {
+					shell._pendingExit = true;
+				}
+			},
+			onClose: function(result) {
+				// Restore the grid (including any dissolved icon) when modal closes
+				// Skip if we're exiting since shell will terminate anyway
+				if (!shell._pendingExit && typeof shell.drawFolder === 'function') {
+					shell.drawFolder();
+				}
+			}
+		});
 	},
 	msg_boards: new SubprogramActionHandler('MessageBoard', {
 		module: 'future_shell/lib/subprograms/message_boards/message_boards.js',
@@ -646,18 +667,34 @@ function _buildItemRecursive(key, ini, ancestry) {
 		obj.type = 'item'; obj.action = actionFn; return obj;
 	}
 	if (type === 'xtrn_section') {
-		var secNum = parseInt(sect.section, 10);
-		if (isNaN(secNum) || secNum < 0) { _icsh_warn('Bad section number for ' + key); return null; }
+		// Support both section_code (preferred, by code) and section (legacy, by index)
+		var secCode = sect.section_code ? ('' + sect.section_code).trim() : null;
+		var secNum = secCode ? null : parseInt(sect.section, 10);
+		if (!secCode && (isNaN(secNum) || secNum < 0)) { _icsh_warn('Bad section number/code for ' + key); return null; }
 		obj.type = 'folder';
-		(function (secNumRef) {
-			Object.defineProperty(obj, 'children', {
-				configurable: true,
-				enumerable: true,
-				get: function () {
-					return ensureXtrnMenuLoaded() ? getItemsForXtrnSection(secNumRef) : [];
-				}
-			});
-		})(secNum);
+		if (secCode) {
+			// Code-based lookup (stable across user access filtering)
+			(function (secCodeRef) {
+				Object.defineProperty(obj, 'children', {
+					configurable: true,
+					enumerable: true,
+					get: function () {
+						return ensureXtrnMenuLoaded() ? getItemsForXtrnSectionByCode(secCodeRef) : [];
+					}
+				});
+			})(secCode);
+		} else {
+			// Legacy index-based lookup
+			(function (secNumRef) {
+				Object.defineProperty(obj, 'children', {
+					configurable: true,
+					enumerable: true,
+					get: function () {
+						return ensureXtrnMenuLoaded() ? getItemsForXtrnSection(secNumRef) : [];
+					}
+				});
+			})(secNum);
+		}
 		return obj;
 	}
 	if (type === 'folder') {

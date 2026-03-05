@@ -15,7 +15,7 @@ ansiedit.js
 future_shell/data/*
 future_shell/settings.json
 future_signup/*
-customlogoff.js
+customlogoff*
 customlogin.js
 customlogon.js
 doorparty.js
@@ -23,3 +23,4 @@ rlogin-proxy.js
 rloginhack.js
 future_shell/lib/3rdp/mrc/*.ini
 !future_shell/lib/3rdp/mrc/*.example.ini
+json-service-private.js

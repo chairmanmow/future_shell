@@ -134,12 +134,6 @@ this.query = function (client, packet) {
 
 		dlog("Query IN oper=" + oper + " location=" + location);
 
-
-		if (oper !== "READ") {
-			sendError(client, location, "unsupported oper: " + oper);
-			return;
-		}
-
 		// Built-ins first
 		if (handleBuiltin(client, location)) return;
 

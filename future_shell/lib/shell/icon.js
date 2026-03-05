@@ -21,6 +21,10 @@ Icon.prototype.render = function () {
     } else if (this.data.iconFile) {
         loaded = this._renderIconFile(iconW, iconH);
     }
+    // Dynamic recolor: if a recolorPalette was provided and a template loaded, recolor in-place
+    if (loaded && this.data.recolorPalette) {
+        try { this._recolorNewsTemplate(this.data.recolorPalette); } catch (_erc) { }
+    }
     if (!loaded && (hasBg || hasFg)) {
         this._renderFallbackBg(hasBg, hasFg);
     }
@@ -55,28 +59,132 @@ Icon.prototype._renderAvatar = function (iconW, iconH) {
 };
 
 Icon.prototype._renderIconFile = function (iconW, iconH) {
-    var iconPathBase = "future_shell/assets/" + this.data.iconFile;
-    var binPath = system.mods_dir + iconPathBase + ".bin";
-    var ansPath = system.mods_dir + iconPathBase + ".ans";
-    if (file_exists(binPath)) {
-        try {
-            this.iconFrame.load(binPath, iconW, iconH);
-            this.redraw();
-            return true;
-        } catch (e1) {
-            dbug("Error loading bin: " + e1, "icon");
+    var modsDir = system.mods_dir;
+    var iconFile = this.data.iconFile;
+    // Search paths: newsreader subdirectory first, then main assets
+    var searchPaths = [
+        modsDir + "future_shell/assets/newsreader/" + iconFile,
+        modsDir + "future_shell/assets/" + iconFile
+    ];
+    for (var sp = 0; sp < searchPaths.length; sp++) {
+        var binPath = searchPaths[sp] + ".bin";
+        var ansPath = searchPaths[sp] + ".ans";
+        if (file_exists(binPath)) {
+            try {
+                this.iconFrame.load(binPath, iconW, iconH);
+                this.redraw();
+                return true;
+            } catch (e1) {
+                dbug("Error loading bin: " + e1, "icon");
+            }
+        } else if (file_exists(ansPath)) {
+            try {
+                this.iconFrame.load(ansPath, iconW, iconH);
+                return true;
+            } catch (e2) {
+                dbug("Error loading ans: " + e2, "icon");
+            }
         }
-    } else if (file_exists(ansPath)) {
-        try {
-            this.iconFrame.load(ansPath, iconW, iconH);
-            return true;
-        } catch (e2) {
-            dbug("Error loading ans: " + e2, "icon");
+    }
+    dbug("Icon file does not exist: " + iconFile + " (checked newsreader/ and assets/)", "icon");
+    return false;
+};
+
+/**
+ * Dynamically recolor a loaded newsitems.bin template in-place.
+ * palette: { edge_fg, body_bg, text_fg, star_fg, title }
+ *   edge_fg  - FG color for outline/border cells (bg=0 non-space)
+ *   body_bg  - BG color for the paper interior (replaces bg=7)
+ *   text_fg  - FG color for title text (original fg=1, bg=7)
+ *   star_fg  - FG color for star accents (original fg=14, bg=7)
+ *   title    - up to 6 chars to replace R1 text at C3-C8
+ */
+Icon.prototype._recolorNewsTemplate = function (palette) {
+    var frame = this.iconFrame;
+    if (!frame || !palette) return;
+    var w = frame.width || 0;
+    var h = frame.height || 0;
+    if (w <= 0 || h <= 0) return;
+
+    var edgeFg  = (typeof palette.edge_fg  === 'number') ? palette.edge_fg  : 7;
+    var bodyBg  = (typeof palette.body_bg  === 'number') ? palette.body_bg  : 7;
+    var textFg  = (typeof palette.text_fg  === 'number') ? palette.text_fg  : 1;
+    var starFg  = (typeof palette.star_fg  === 'number') ? palette.star_fg  : 14;
+    var title   = palette.title || '';
+
+    for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+            var cell = frame.getData(x, y);
+            if (!cell) continue;
+            var ch = cell.ch;
+            var at = cell.attr;
+            if (typeof at !== 'number') continue;
+            var code = (typeof ch === 'number') ? (ch & 0xFF) : (typeof ch === 'string' && ch.length ? ch.charCodeAt(0) & 0xFF : 0);
+            var fg = at & 0x0F;
+            var bg = (at >> 4) & 0x07;
+
+            // Transparent corner cells: space with bg=0 → leave alone
+            if (code === 0x20 && bg === 0) continue;
+
+            // Edge cells: non-space with bg=0 → recolor fg
+            if (bg === 0 && code !== 0x20) {
+                frame.setData(x, y, ch, (edgeFg & 0x0F));
+                continue;
+            }
+
+            // Star cells: fg=14 (Yellow) on bg=7
+            if (fg === 14 && bg === 7) {
+                frame.setData(x, y, ch, ((bodyBg & 0x07) << 4) | (starFg & 0x0F));
+                continue;
+            }
+
+            // Text cells: fg=1 (Blue) on bg=7
+            if (fg === 1 && bg === 7) {
+                frame.setData(x, y, ch, ((bodyBg & 0x07) << 4) | (textFg & 0x0F));
+                continue;
+            }
+
+            // Body cells with bg=7
+            if (bg === 7) {
+                var newFg = fg;
+                if (fg === 0) {
+                    newFg = (edgeFg !== bodyBg) ? edgeFg : 0;
+                } else if (fg === 7) {
+                    newFg = bodyBg & 0x0F;
+                }
+                frame.setData(x, y, ch, ((bodyBg & 0x07) << 4) | (newFg & 0x0F));
+                continue;
+            }
+        }
+    }
+
+    // Stamp title text at R1, C3-C8 (6 chars), preserving stars at C2 and C9
+    var tLen = 6;
+    var tStart = 3;
+    var titleAttr = ((bodyBg & 0x07) << 4) | (textFg & 0x0F);
+    var bodyAttr = ((bodyBg & 0x07) << 4) | (bodyBg & 0x0F);
+    if (title && title.length > 0) {
+        var padded = title;
+        if (padded.length > tLen) padded = padded.substr(0, tLen);
+        // Center the title in 6 chars
+        var padL = Math.floor((tLen - padded.length) / 2);
+        var centered = '';
+        for (var p = 0; p < padL; p++) centered += ' ';
+        centered += padded;
+        while (centered.length < tLen) centered += ' ';
+        for (var i = 0; i < tLen; i++) {
+            if (tStart + i < w && 1 < h) {
+                frame.setData(tStart + i, 1, centered.charAt(i), titleAttr);
+            }
         }
     } else {
-        dbug("Icon file does not exist: " + binPath + " or " + ansPath, "icon");
+        // Fill C3-C8 with body background when no title
+        for (var i = 0; i < tLen; i++) {
+            if (tStart + i < w && 1 < h) {
+                frame.setData(tStart + i, 1, ' ', bodyAttr);
+            }
+        }
     }
-    return false;
 };
 
 Icon.prototype._renderFallbackBg = function (hasBg, hasFg) {

@@ -107,7 +107,11 @@ IconShell.prototype._handleItemSelection = function (realItem) {
             dbug("IconShell action error: " + e, "view");
             if (e === "Exit Shell") throw e;
         }
-        this.drawFolder();
+        // Skip drawFolder if a modal is now active (e.g., exit confirmation)
+        // as drawFolder clears hotspots, breaking modal button clicks
+        if (!this.hasActiveModal || !this.hasActiveModal()) {
+            this.drawFolder();
+        }
     }
 };
 
@@ -723,5 +727,6 @@ IconShell.prototype.paintIcon = function (cell, selected, invert) {
     var name = item.label || "";
     var start = Math.max(0, Math.floor((width - name.length) / 2));
     var pad = start > 0 ? new Array(start + 1).join(' ') : '';
+    cell.label.attr = labelAttr;  // Ensure correct attribute for non-segmented labels
     cell.label.putmsg((pad + name).substr(0, width));
 }

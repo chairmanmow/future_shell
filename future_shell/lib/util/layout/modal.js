@@ -616,15 +616,10 @@ Modal.prototype._buildButtons = function () {
         var baseAttr = (typeof def.attr === 'number') ? def.attr : (isCancel ? this.cancelButtonAttr : buttonPalette.attr);
         var focusAttr = (typeof def.focusAttr === 'number') ? def.focusAttr : (isCancel ? this.cancelButtonFocusAttr : buttonPalette.focusAttr);
         var disabledAttr = (typeof def.disabledAttr === 'number') ? def.disabledAttr : (isCancel ? this.cancelButtonDisabledAttr : buttonPalette.disabledAttr);
-        // Mask/shadow: cancel button can override shadow color; mask shared
-        var maskAttr = (typeof this.buttonMaskAttr === 'number') ? this.buttonMaskAttr : baseAttr;
-        // Background colors derived from mask/base (legacy approach) so we don't override intended label fg/bg.
-        var backgroundColors = this._deriveButtonColors(maskAttr, baseAttr);
-        // Unified shadow: reuse cancel shadow (if defined) for all buttons so both have visible shadow, else fall back to generic or base.
-        var shadowAttr = (typeof this.cancelButtonShadowAttr === 'number') ? this.cancelButtonShadowAttr
-            : (typeof this.buttonShadowAttr === 'number') ? this.buttonShadowAttr : baseAttr;
-        // Shadow colors passed directly; Button will extract nibs. Second entry uses maskAttr background to produce trail.
-        var shadowColors = [shadowAttr, maskAttr];
+        // Shadow: DARKGRAY(8) for 3D effect, modal background as blend color
+        var shadowColor = 8; // DARKGRAY
+        var blendColor = (this.attr >> 4) & 0x07; // Extract modal BG as 0-7 value
+        var shadowColors = [shadowColor, blendColor];
         var width = Math.max(6, (def.label || '').length + 4);
         var btn = new Button({
             parentFrame: this.frame,
@@ -635,7 +630,6 @@ Modal.prototype._buildButtons = function () {
             attr: baseAttr,
             focusAttr: focusAttr,
             disabledAttr: disabledAttr,
-            backgroundColors: backgroundColors,
             shadowColors: shadowColors,
             enabled: !def.disabled,
             focused: false,
@@ -664,33 +658,18 @@ Modal.prototype._registerButtonHotspots = function () {
         var btn = this._buttons[i];
         if (!btn || !btn.frame) continue;
         var def = this._buttonDefs[i] || {};
-        var commands = [];
-        if (def.hotKey) commands.push(def.hotKey);
-        if (def.default) {
-            commands.push('\r');
-            commands.push('\n');
-        }
-        if (def.cancel) {
-            commands.push('\x1B');
-        }
-        if (!commands.length) commands.push(String.fromCharCode(1 + i));
+        // For button click hotspots, use ONLY the hotKey (e.g., 'Y' for Yes, 'N' for No)
+        // Don't use Enter/Escape - those are for keyboard navigation of focused buttons
+        var cmd = def.hotKey;
+        if (!cmd) cmd = String.fromCharCode(1 + i);  // fallback
         var stored = btn._absHotspot;
         var r = stored ? { x: stored.x, y: stored.y, w: stored.w, h: stored.h } : absRect(btn.frame);
         var startY = Math.max(1, r.y - 1);
         var secondY = startY + 1;
         if (!this._hotspotMap) this._hotspotMap = {};
-        var added = {};
-        for (var c = 0; c < commands.length; c++) {
-            var raw = commands[c];
-            if (raw === null || raw === undefined) continue;
-            var cmd = (typeof raw === 'string') ? raw : String(raw);
-            if (!cmd || !cmd.length) continue;
-            if (added[cmd]) continue;
-            added[cmd] = true;
-            try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, startY); } catch (_) { }
-            try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, secondY); } catch (_) { }
-            this._hotspotMap[cmd] = i;
-        }
+        try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, startY); } catch (_) { }
+        try { console.add_hotspot(cmd, false, r.x, r.x + r.w - 1, secondY); } catch (_) { }
+        this._hotspotMap[cmd] = i;
     }
 };
 
@@ -981,6 +960,16 @@ Modal.prototype.handleKey = function (key) {
     }
     if (typeof KEY_END !== 'undefined' && key === KEY_END) {
         if (isPrompt && this._focusIndex === -1) { this._setPromptCursor(this._inputValue.length); return true; }
+    }
+    // Check hotspot map first - if key is from a button click, trigger that specific button
+    if (this._hotspotMap && this._hotspotMap.hasOwnProperty(key)) {
+        var btnIdx = this._hotspotMap[key];
+        if (btnIdx >= 0 && btnIdx < this._buttons.length) {
+            this._focusIndex = btnIdx;
+            this._applyButtonFocus();
+            this._buttons[btnIdx].press();
+            return true;
+        }
     }
     if (key === '\r' || key === '\n') {
         if (this._triggerButtonByRole('default')) return true;

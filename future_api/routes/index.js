@@ -15,6 +15,9 @@ function get_routes(ctx) {
 	load(base + "sysinfo.js");
 	load(base + "users.js");
 	load(base + "files.js");
+	load(base + "avatar.js");
+	load(base + "auth.js");
+	load(base + "wallet.js");
 
 	var routes = [];
 
@@ -46,6 +49,21 @@ function get_routes(ctx) {
 	// files.js defines make_files_route(ctx)
 	if (typeof make_files_route === "function") {
 		routes.push(make_files_route(ctx));
+	}
+
+	// avatar.js defines make_avatar_route(ctx)
+	if (typeof make_avatar_route === "function") {
+		routes.push(make_avatar_route(ctx));
+	}
+
+	// auth.js defines make_auth_route(ctx)
+	if (typeof make_auth_route === "function") {
+		routes.push(make_auth_route(ctx));
+	}
+
+	// wallet.js defines make_wallet_route(ctx)
+	if (typeof make_wallet_route === "function") {
+		routes.push(make_wallet_route(ctx));
 	}
 
 	return routes;

@@ -980,6 +980,9 @@ ShellPrefs.prototype._ensureMoveButton = function (dir, x, y, width) {
     var attr = this.paletteAttr('BUTTON', this.paletteAttr('ROW_ACTIVE'));
     var focusAttr = this.paletteAttr('BUTTON_FOCUS', attr);
     var disabledAttr = this.paletteAttr('BUTTON_DISABLED', attr);
+    // Extract blend color from parent frame background
+    var parentBg = (parent && parent.attr) ? ((parent.attr >> 4) & 0x07) : BLACK;
+    var shadowColors = [8, parentBg]; // shadow=DARKGRAY(8), blend=parentBg
     var label = dir === 'up' ? 'Move Up' : 'Move Dn';
     var self = this;
     if (dir === 'up') {
@@ -993,6 +996,7 @@ ShellPrefs.prototype._ensureMoveButton = function (dir, x, y, width) {
                 attr: attr,
                 focusAttr: focusAttr,
                 disabledAttr: disabledAttr,
+                shadowColors: shadowColors,
                 onClick: function () { self._moveSelectedSaver(-1); }
             });
         } else {
@@ -1004,8 +1008,8 @@ ShellPrefs.prototype._ensureMoveButton = function (dir, x, y, width) {
             this._moveUpButton.attr = attr;
             this._moveUpButton.focusAttr = focusAttr;
             this._moveUpButton.disabledAttr = disabledAttr;
+            this._moveUpButton.shadowColors = shadowColors;
             if (this._moveUpButton.frame) {
-                this._moveUpButton.frame.parent = parent;
                 if (typeof this._moveUpButton.frame.moveTo === 'function') {
                     try { this._moveUpButton.frame.moveTo(x, y); } catch (_) { this._moveUpButton.frame.x = x; this._moveUpButton.frame.y = y; }
                 } else {
@@ -1028,6 +1032,7 @@ ShellPrefs.prototype._ensureMoveButton = function (dir, x, y, width) {
                 attr: attr,
                 focusAttr: focusAttr,
                 disabledAttr: disabledAttr,
+                shadowColors: shadowColors,
                 onClick: function () { self._moveSelectedSaver(1); }
             });
         } else {
@@ -1039,8 +1044,8 @@ ShellPrefs.prototype._ensureMoveButton = function (dir, x, y, width) {
             this._moveDownButton.attr = attr;
             this._moveDownButton.focusAttr = focusAttr;
             this._moveDownButton.disabledAttr = disabledAttr;
+            this._moveDownButton.shadowColors = shadowColors;
             if (this._moveDownButton.frame) {
-                this._moveDownButton.frame.parent = parent;
                 if (typeof this._moveDownButton.frame.moveTo === 'function') {
                     try { this._moveDownButton.frame.moveTo(x, y); } catch (_) { this._moveDownButton.frame.x = x; this._moveDownButton.frame.y = y; }
                 } else {

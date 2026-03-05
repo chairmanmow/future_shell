@@ -53,6 +53,9 @@ MrcController.prototype.connect = function () {
     this.client.connect();
 };
 
+// Static version property for hot-reload detection
+MrcController.CODE_VERSION = 3;
+
 /**
  * Disconnect from server
  */
@@ -377,7 +380,12 @@ MrcController.prototype._bindClientEvents = function () {
     });
 
     this.client.on('banner', function (info) {
-        self._handleSystemMessage(info.text);
+        self._debugLog('Banner event received, text length:', (info && info.text) ? info.text.length : 0);
+        var text = info.text || '';
+        
+        // Forward ALL banners to listeners - let the view decide what to do
+        // This allows view code (which is recreated each time) to handle pattern matching
+        self._notifyListeners('banner', { text: text });
     });
 
     this.client.on('nicks', function (info) {
@@ -500,10 +508,13 @@ MrcController.prototype._handleIncomingMessage = function (msg) {
         mention = plainLower.indexOf(userLower) >= 0;
     }
 
+    // Normalize room comparison: strip leading #, trim, lowercase
+    var normRoom = function(s) { return String(s || '').replace(/^#/, '').trim().toLowerCase(); };
+    
     // Check room match
     var currentRoom = this.client.getCurrentRoom();
     if (msg.to_room && msg.to_room !== '' && currentRoom &&
-        msg.to_room.toLowerCase() !== currentRoom.toLowerCase()) {
+        normRoom(msg.to_room) !== normRoom(currentRoom)) {
         this._debugLog('Message for different room:', msg.to_room, 'vs', currentRoom);
         return;
     }
@@ -720,12 +731,16 @@ MrcController.prototype._sendStartupMetadata = function () {
  * Notify listeners of events
  */
 MrcController.prototype._notifyListeners = function (event, data) {
+    this._debugLog('_notifyListeners:', event, 'listeners:', this.listeners.length);
     for (var i = 0; i < this.listeners.length; i++) {
         var listener = this.listeners[i];
         var method = 'on' + event.charAt(0).toUpperCase() + event.slice(1);
+        this._debugLog('Checking listener', i, 'for method:', method, 'hasMethod:', typeof listener[method] === 'function');
         if (listener && typeof listener[method] === 'function') {
             try {
+                this._debugLog('Calling listener method:', method);
                 listener[method](data);
+                this._debugLog('Listener method returned successfully:', method);
             } catch (err) {
                 this._debugLog('Listener error:', method, err);
             }
@@ -761,14 +776,15 @@ MrcController.prototype._notifyListenersSnapshot = function () {
 };
 
 MrcController.prototype._debugLog = function () {
-    if (typeof global !== 'undefined' && global.__MRC_CONTROLLER_DEBUG__) {
-        var args = Array.prototype.slice.call(arguments);
-        try {
-            if (typeof log === 'function') {
-                log(LOG_DEBUG, '[MrcController] ' + args.join(' '));
-            }
-        } catch (_) { }
-    }
+    var args = Array.prototype.slice.call(arguments);
+    var msg = '[MrcController] ' + args.join(' ');
+    try {
+        if (typeof dbug === 'function') {
+            dbug(msg, 'mrc');
+        } else if (typeof global !== 'undefined' && global.__MRC_CONTROLLER_DEBUG__ && typeof log === 'function') {
+            log(LOG_DEBUG, msg);
+        }
+    } catch (_) { }
 };
 
 if (typeof registerModuleExports === 'function') {

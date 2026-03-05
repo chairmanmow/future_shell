@@ -4,6 +4,7 @@ load('sbbsdefs.js');
 load('funclib.js');
 load('future_shell/lib/subprograms/subprogram.js');
 load('future_shell/lib/util/layout/button.js');
+load('future_shell/lib/util/layout/modal.js');
 load('frame.js');
 load('scrollbar.js');
 load('future_shell/lib/effects/frame-ext.js');
@@ -16,6 +17,7 @@ if (typeof registerModuleExports !== 'function') {
 
 if (typeof KEY_F1 === 'undefined') var KEY_F1 = 0x3B00;
 
+var MRC_MAX_MESSAGE_LENGTH = 140;
 var MRC_PIPE_COLOURS = [2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15];
 
 var DEFAULT_MRC_SETTINGS = {
@@ -357,7 +359,9 @@ MRCService.prototype._handleIncoming = function (msg, opts) {
     if (plain && user.alias && msg.from_user && msg.from_user.toLowerCase() !== user.alias.toLowerCase()) {
         mention = plain.toLowerCase().indexOf(user.alias.toLowerCase()) >= 0;
     }
-    if (msg.to_room && msg.to_room !== '' && this.session.room && msg.to_room.toLowerCase() !== this.session.room.toLowerCase()) {
+    // Normalize room comparison: strip leading #, trim, lowercase
+    var normRoom = function(s) { return String(s || '').replace(/^#/, '').trim().toLowerCase(); };
+    if (msg.to_room && msg.to_room !== '' && this.session.room && normRoom(msg.to_room) !== normRoom(this.session.room)) {
         return;
     }
     var epoch = (typeof msg.ts === 'number') ? msg.ts : Date.now();
@@ -764,8 +768,8 @@ MRCService.prototype.removeListener = function (listener) {
 
 MRCService.prototype.cycle = function () {
     if (!this.connected) return;
-    var now = Date.now();
-    if (this._typingHoldUntil && now < this._typingHoldUntil) return;
+    // Always cycle the socket - do not block on typing hold
+    // Typing hold was causing significant latency issues
     try { this.session.cycle(); } catch (_) { }
 };
 
@@ -781,6 +785,11 @@ MRCService.prototype.sendLine = function (line) {
     if (!line || !line.length) return;
     if (line.charAt(0) === '/') {
         this.executeCommand(line.substr(1));
+    } else if (line.charAt(0) === '!') {
+        // Server commands prefixed with ! (e.g., !info, !quote)
+        // Send as raw command including the !
+        this.session.send_command(line);
+        this.flush();
     } else {
         this.session.send_room_message(line);
         this.flush();
@@ -849,6 +858,7 @@ function MRC(opts) {
     opts = opts || {};
     opts.name = 'mrc';
     Subprogram.call(this, opts);
+    
     this._redrawThrottleMs = 200;
     this._lastRenderTs = 0;
     this._throttlePending = null;
@@ -916,10 +926,18 @@ function MRC(opts) {
 
     // Use factory to get persistent per-node controller
     this.controller = getMrcController();
+    
+    try { if (typeof dbug === 'function') dbug('[MRC] Got controller from factory, listeners count: ' + (this.controller.listeners ? this.controller.listeners.length : 'N/A'), 'mrc'); } catch (_) { }
 
     // Create adapter to bridge old service API to new controller API
     this.service = this._createServiceAdapter(this.controller);
-    this.controller.addListener(this._onControllerUpdate.bind(this));
+    
+    // Register as object listener to receive both snapshots and events
+    // Note: We create a fresh proxy each time since MRC instances don't persist
+    this._listenerProxy = this._createListenerProxy();
+    this.controller.addListener(this._listenerProxy);
+    
+    try { if (typeof dbug === 'function') dbug('[MRC] Registered listener proxy with controller, new listeners count: ' + (this.controller.listeners ? this.controller.listeners.length : 'N/A'), 'mrc'); } catch (_) { }
 
     this.headerFrame = null;
     this.controlsFrame = null;
@@ -929,7 +947,7 @@ function MRC(opts) {
     this.footerFrame = null;
     this.messageScroll = null;
     this.headerHeight = 1;
-    this.footerHeight = 2;
+    this.footerHeight = 1; // Just the input prompt
     this.controlHeight = 4;
     this._messageLines = [];
     this._maxLines = 800;
@@ -949,11 +967,21 @@ function MRC(opts) {
     this._needsRedraw = true;
     this._exiting = false;
     this._buttonHotspots = [];
-    this._buttonHotspotTokens = {};
-    this._buttonKeyMap = {};
+    this._hotspotHandlers = {};
+    this._hotspotCounter = 0;
     this._hotspotBuffer = '';
     this._wrappedLineCache = null;
     this._wrappedLineCacheWidth = 0;
+    this._lastRenderedMsgId = 0;
+    this._lastContentHash = null;
+    this._activeBannerModal = null;
+    this._systemModal = null;
+    this._systemModalLines = [];
+    this._systemModalFrame = null;
+    this._lastMessageCount = 0;
+    
+    // Force nick list off - will be integrated into header info instead
+    this._showNickList = false;
 }
 
 if (typeof extend === 'function') extend(MRC, Subprogram);
@@ -988,8 +1016,13 @@ MRC.prototype._createServiceAdapter = function (controller) {
 
         sendLine: function (text) {
             if (!text || !text.trim().length) return;
-            if (text.trim()[0] === '/') {
-                controller.executeCommand(text.trim().slice(1));
+            var trimmed = text.trim();
+            if (trimmed[0] === '/') {
+                controller.executeCommand(trimmed.slice(1));
+            } else if (trimmed[0] === '!') {
+                // Server commands prefixed with ! (e.g., !info, !quote)
+                // Send as raw command including the !
+                controller.executeCommand('quote ' + trimmed);
             } else {
                 controller.sendMessage(text);
             }
@@ -1028,6 +1061,164 @@ MRC.prototype._createServiceAdapter = function (controller) {
 };
 
 /**
+ * Create listener proxy object for controller events
+ */
+MRC.prototype._createListenerProxy = function() {
+    var self = this;
+    return {
+        onSnapshot: function(snapshot) {
+            self._onControllerUpdate(snapshot);
+        },
+        onBanner: function(data) {
+            // Pattern detection happens HERE in the view (which is recreated each time)
+            // Controller just forwards all banners
+            var text = (data && data.text) || '';
+            
+            // Strip pipe codes for pattern matching
+            var cleanText = text.replace(/\|[0-9]{2}/g, '');
+            
+            // Match header pattern: underscores, dashes, or equals followed by /command
+            var headerPattern = /[_=-]{10,}[^\/]*\/(\w+)/;
+            var match = cleanText.match(headerPattern);
+            
+            if (match) {
+                var command = match[1].toLowerCase();
+                var bannerCommands = ['list', 'motd', 'help', 'whoon', 'info', 'users'];
+                if (bannerCommands.indexOf(command) >= 0) {
+                    // Show in modal
+                    self._handleBannerModal({ command: command, text: text });
+                    return;
+                }
+            }
+            
+            // Default: show as system message in chat
+            self._addBannerToChat(text);
+        },
+        onBannerModal: function(data) {
+            // Legacy handler - kept for compatibility
+            self._handleBannerModal(data);
+        }
+    };
+};
+
+/**
+ * Add banner text to chat as system messages
+ */
+MRC.prototype._addBannerToChat = function(text) {
+    if (!text) return;
+    var lines = text.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.length > 0) {
+            this._messageLines.push('[' + nowTimestamp() + '] System *.: ' + line);
+        }
+    }
+    this._invalidateWrappedMessageLines();
+    this._needsRedraw = true;
+};
+
+/**
+ * Handle banner-modal event from controller
+ * Shows banner content in a modal with context-aware actions
+ */
+MRC.prototype._handleBannerModal = function(data) {
+    try { if (typeof dbug === 'function') dbug('[MRC] _handleBannerModal called for: ' + (data ? data.command : 'null'), 'mrc'); } catch (_) { }
+    try { log('[MRC-MODAL] _handleBannerModal called for command: ' + (data ? data.command : 'null')); } catch (_) { }
+    
+    var self = this;
+    if (!data) {
+        try { if (typeof dbug === 'function') dbug('[MRC] _handleBannerModal: no data, returning', 'mrc'); } catch (_) { }
+        return;
+    }
+    var command = data.command;
+    var text = data.text || '';
+    
+    try { if (typeof dbug === 'function') dbug('[MRC] _handleBannerModal: text length=' + text.length, 'mrc'); } catch (_) { }
+    
+    // Convert pipe codes to Ctrl-A for display using funclib's pipeToCtrlA
+    var displayText = typeof pipeToCtrlA === 'function' ? pipeToCtrlA(text) : text;
+    
+    // Close any existing banner modal
+    if (this._activeBannerModal) {
+        try { this._activeBannerModal.close(); } catch (_) { }
+        this._activeBannerModal = null;
+    }
+    
+    // Get modal title and action based on command
+    // Note: 'list' is the actual header for /rooms command
+    var titles = {
+        list: 'Room List',
+        motd: 'Message of the Day',
+        help: 'Help',
+        whoon: 'Who\'s Online',
+        info: 'MRC Info',
+        users: 'Who\'s Online'
+    };
+    var title = titles[command] || 'Server Message';
+    
+    // Get action hint for prepopulating input
+    var actions = {
+        list: '/join #',
+        whoon: '/tell ',
+        users: '/tell '
+    };
+    var actionHint = actions[command] || null;
+    
+    // Build buttons based on whether action is available
+    var buttons = [];
+    if (actionHint) {
+        buttons.push({ label: 'Action', hotKey: 'A', value: 'action', default: true });
+    }
+    buttons.push({ label: 'Close', value: 'close', cancel: true });
+    
+    // Create modal with banner content
+    this._activeBannerModal = new Modal({
+        type: 'custom',
+        title: title,
+        parentFrame: this.parentFrame,
+        overlay: true,
+        captureKeys: true,
+        render: function(contentFrame) {
+            // Split text into lines and draw
+            var lines = displayText.split('\n');
+            var y = 0;
+            for (var i = 0; i < lines.length && y < contentFrame.height; i++) {
+                contentFrame.gotoxy(1, y + 1);
+                contentFrame.putmsg(lines[i]);
+                y++;
+            }
+        },
+        buttons: buttons,
+        onSubmit: function(value) {
+            self._activeBannerModal = null;
+            // Handle action button - prepopulate input
+            if (value === 'action' && actionHint) {
+                self._inputBuffer = actionHint;
+                self._inputCursor = self._inputBuffer.length;
+                self._inputScrollOffset = 0;
+            }
+            self._needsRedraw = true;
+        },
+        onCancel: function() {
+            self._activeBannerModal = null;
+            self._needsRedraw = true;
+        },
+        onClose: function() {
+            self._activeBannerModal = null;
+            self._needsRedraw = true;
+        }
+    });
+    
+    // Bring modal to front and cycle to make visible
+    if (this._activeBannerModal && this._activeBannerModal.frame) {
+        this._activeBannerModal.frame.top();
+        this._activeBannerModal.frame.cycle();
+        // Also bring to top of parent
+        if (this.parentFrame) this.parentFrame.cycle();
+    }
+};
+
+/**
  * Handle controller updates
  */
 MRC.prototype._onControllerUpdate = function (snapshot) {
@@ -1051,16 +1242,142 @@ MRC.prototype._onControllerUpdate = function (snapshot) {
     this._room = snapshot.room.name;
     this._topic = snapshot.room.topic;
     this._nickList = snapshot.room.users.map(function (u) { return u.nick; });
-    this._showNickList = snapshot.prefs.showNickList;
+    // Force nick list off - integrated into header instead of sidebar
+    this._showNickList = false;
     this._toastEnabled = snapshot.prefs.toastEnabled;
     this._latency = snapshot.latency.ping > 0 ? String(snapshot.latency.ping) + 'ms' : '-';
 
-    // Update messages
-    this._messageLines = snapshot.messages.slice();
+    // Filter messages - System messages go to modal, rest to chat
+    var filtered = this._filterSystemMessages(snapshot.messages);
+    
+    this._messageLines = filtered;
     this._messageLines = truncateLines(this._messageLines, this._maxLines);
     this._invalidateWrappedMessageLines();
 
     this._needsRedraw = true;
+};
+
+/**
+ * SIMPLE: System messages go to modal, everything else to chat
+ */
+MRC.prototype._filterSystemMessages = function(messages) {
+    if (!messages || !messages.length) return [];
+    
+    var result = [];
+    var prevCount = this._lastMessageCount || 0;
+    this._lastMessageCount = messages.length;
+    
+    for (var i = 0; i < messages.length; i++) {
+        var msg = messages[i];
+        
+        // Only check NEW messages
+        if (i < prevCount) {
+            result.push(msg);
+            continue;
+        }
+        
+        // Handle both string and object message formats
+        var msgText = '';
+        if (typeof msg === 'string') {
+            msgText = msg;
+        } else if (msg && typeof msg === 'object') {
+            msgText = msg.display || msg.text || msg.body || '';
+        }
+        
+        // Strip pipe color codes for pattern matching (|00 through |FF)
+        var cleanMsg = String(msgText).replace(/\|[0-9A-Fa-f]{2}/g, '');
+        
+        // Is this a System message? Pattern: "[HH:MM:SS] System *.:"
+        if (/\]\s*System\s*\*\.:\s*/.test(cleanMsg)) {
+            // Extract content after "System *.:" (from original msgText to preserve colors)
+            var content = String(msgText).replace(/^.*System\s*\*\.:\s*/i, '');
+            this._addToSystemModal(content);
+            // Don't add to chat
+        } else {
+            result.push(msg);
+        }
+    }
+    
+    return result;
+};
+
+/**
+ * Add line to system modal - create if doesn't exist, append if it does
+ */
+MRC.prototype._addToSystemModal = function(content) {
+    // If no modal or modal is closed, create new one
+    if (!this._systemModal || !this._systemModal.isOpen) {
+        this._systemModalLines = [];
+        this._createSystemModal();
+    }
+    
+    // Append content
+    this._systemModalLines.push(content);
+    
+    // Update modal content
+    if (this._systemModal && this._systemModal.frame) {
+        this._renderSystemModalContent();
+    }
+};
+
+/**
+ * Create the system modal
+ */
+MRC.prototype._createSystemModal = function() {
+    var self = this;
+    
+    this._systemModal = new Modal({
+        parentFrame: this.layout.parentFrame,
+        title: 'System',
+        type: 'custom',
+        width: Math.min(70, this.layout.parentFrame.width - 4),
+        height: Math.min(20, this.layout.parentFrame.height - 4),
+        render: function(modalFrame) {
+            self._systemModalFrame = modalFrame;
+            self._renderSystemModalContent();
+        },
+        keyHandler: function(key) {
+            if (key === '\x1b' || key.toLowerCase() === 'q') {
+                self._systemModal.close();
+                self._systemModal = null;
+                return true;
+            }
+            return false;
+        },
+        buttons: [
+            { text: 'Close', hotkey: 'C', action: function() { 
+                self._systemModal.close();
+                self._systemModal = null;
+            }}
+        ]
+    });
+    
+    // Bring to front
+    if (this._systemModal.frame) {
+        this._systemModal.frame.top();
+    }
+};
+
+/**
+ * Render content into system modal
+ */
+MRC.prototype._renderSystemModalContent = function() {
+    if (!this._systemModalFrame || !this._systemModalLines) return;
+    
+    this._systemModalFrame.clear();
+    
+    var lines = this._systemModalLines;
+    var maxLines = this._systemModalFrame.height - 1;
+    var startLine = Math.max(0, lines.length - maxLines);
+    
+    for (var i = startLine; i < lines.length; i++) {
+        var line = lines[i];
+        // Truncate to frame width
+        if (line.length > this._systemModalFrame.width - 1) {
+            line = line.substring(0, this._systemModalFrame.width - 1);
+        }
+        this._systemModalFrame.putmsg(line + '\n');
+    }
 };
 
 // Store bound update for cleanup
@@ -1068,6 +1385,11 @@ MRC.prototype._boundUpdate = MRC.prototype._onControllerUpdate;
 
 MRC.prototype.enter = function (done) {
     this._exiting = false;
+    
+    // Reset scroll state on re-entry
+    this._scrollOffset = 0;
+    this._userScrolled = false;
+    
     if (this.service) {
         if (typeof this.service.flush === 'function') {
             try { this.service.flush(); } catch (_) { }
@@ -1087,6 +1409,12 @@ MRC.prototype.enter = function (done) {
         this._messageLines = truncateLines(this._messageLines, this._maxLines);
         this._invalidateWrappedMessageLines();
     }
+    
+    // Clear frame data to force full re-render
+    if (this.messagesFrame) {
+        try { this.messagesFrame.clear(); } catch (_) { }
+    }
+    
     Subprogram.prototype.enter.call(this, done);
 };
 
@@ -1098,7 +1426,8 @@ MRC.prototype.onServiceSnapshot = function (snapshot) {
     this._topic = snapshot.topic || this._topic;
     this._stats = snapshot.stats || this._stats;
     this._latency = snapshot.latency || this._latency;
-    this._showNickList = snapshot.showNickList;
+    // Force nick list off - integrated into header
+    this._showNickList = false;
     this._toastEnabled = snapshot.toastEnabled;
     this._nickList = snapshot.nickList || [];
     this._needsRedraw = true;
@@ -1147,11 +1476,8 @@ MRC.prototype.onServiceLatency = function (latency) {
 MRC.prototype.onServicePreference = function (pref) {
     if (!pref) return;
     if (pref.key === 'toast') this._toastEnabled = !!pref.value;
-    if (pref.key === 'showNickList') {
-        this._showNickList = !!pref.value;
-        this._releaseFrameRefs();
-        this._ensureFrames();
-    }
+    // Nick list toggle is disabled - integrated into header instead
+    // if (pref.key === 'showNickList') { ... }
     this._needsRedraw = true;
     if (this.running) this.draw();
 };
@@ -1172,6 +1498,13 @@ MRC.prototype._ensureFrames = function () {
     var width = host.width;
     var height = host.height;
     if (width <= 0 || height <= 0) return;
+    
+    // Reset button render flag if dimensions changed
+    if (this._lastFrameWidth !== width || this._lastFrameHeight !== height) {
+        this._buttonsRendered = false;
+        this._lastFrameWidth = width;
+        this._lastFrameHeight = height;
+    }
 
     var headerAttr = this.paletteAttr('CHAT_HEADER', BG_BLUE | WHITE);
     var footerAttr = this.paletteAttr('CHAT_INPUT', BG_BLUE | WHITE);
@@ -1203,38 +1536,47 @@ MRC.prototype._ensureFrames = function () {
 
     var mainHeight = Math.max(1, height - this.headerHeight - this.footerHeight);
     var mainTop = this.headerHeight + 1;
-    var controlsHeight = Math.min(mainHeight, 3);
     var messageWidth = width;
     if (this._showNickList) messageWidth = Math.max(24, width - 18);
 
-    if (!this.controlsFrame) {
-        this.controlsFrame = new Frame(1, mainTop, messageWidth, Math.min(2, controlsHeight), controlsAttr, host);
-        this.controlsFrame.open();
-        this.registerFrame(this.controlsFrame);
-    } else {
-        this.controlsFrame.moveTo(1, mainTop);
-        this.controlsFrame.width = messageWidth;
-        this.controlsFrame.height = Math.min(2, controlsHeight);
-    }
-    this.controlsFrame.attr = controlsAttr;
-
-    var buttonTop = mainTop + 2;
+    // Layout order (matching wireframe):
+    // 1. Buttons row (2 lines for button + shadow)
+    // 2. Channel info row (1 line: #room - topic - N users)
+    // 3. Messages (remaining space)
+    
+    var buttonTop = mainTop;
+    var buttonHeight = 2;
     if (!this.buttonsFrame) {
-        this.buttonsFrame = new Frame(1, buttonTop, messageWidth, 2, controlsAttr, host);
+        this.buttonsFrame = new Frame(1, buttonTop, messageWidth, buttonHeight, controlsAttr, host);
         this.buttonsFrame.open();
         this.registerFrame(this.buttonsFrame);
     } else {
         this.buttonsFrame.moveTo(1, buttonTop);
         this.buttonsFrame.width = messageWidth;
-        this.buttonsFrame.height = 2;
+        this.buttonsFrame.height = buttonHeight;
     }
     this.buttonsFrame.attr = controlsAttr;
 
-    var messagesTop = buttonTop + this.buttonsFrame.height;
+    var controlsTop = buttonTop + buttonHeight;
+    var controlsHeight = 1;
+    if (!this.controlsFrame) {
+        this.controlsFrame = new Frame(1, controlsTop, messageWidth, controlsHeight, controlsAttr, host);
+        this.controlsFrame.open();
+        this.registerFrame(this.controlsFrame);
+    } else {
+        this.controlsFrame.moveTo(1, controlsTop);
+        this.controlsFrame.width = messageWidth;
+        this.controlsFrame.height = controlsHeight;
+    }
+    this.controlsFrame.attr = controlsAttr;
+
+    var messagesTop = controlsTop + controlsHeight;
     var messagesHeight = Math.max(1, height - messagesTop - this.footerHeight + 1);
     if (!this.messagesFrame) {
         this.messagesFrame = new Frame(1, messagesTop, messageWidth, messagesHeight, messagesAttr, host);
         this.messagesFrame.word_wrap = false;
+        this.messagesFrame.v_scroll = true;   // Enable vertical scrolling
+        this.messagesFrame.lf_strict = true;  // Newlines trigger scroll at bottom
         this.messagesFrame.open();
         this.registerFrame(this.messagesFrame);
     } else {
@@ -1288,11 +1630,12 @@ MRC.prototype._buildButtons = function () {
     var focusAttr = this.paletteAttr('CHAT_BUTTON_FOCUS', BG_BLUE | WHITE);
     var self = this;
     this._buttonHotspots = [];
-    this._buttonHotspotTokens = {};
-    this._buttonKeyMap = {};
     var buttonHeight = 2;
     var buttonY = 3;
-    function addButton(label, handler, x, keyChar) {
+    // Extract blend color from button surface background (defaults CYAN if available)
+    var surfaceBg = (buttonSurface && buttonSurface.attr) ? ((buttonSurface.attr >> 4) & 0x07) : CYAN;
+    var buttonShadowColors = [8, surfaceBg]; // shadow=DARKGRAY(8), blend=surfaceBg
+    function addButton(label, handler, x) {
         var btn = new Button({
             parentFrame: buttonSurface,
             x: x,
@@ -1301,24 +1644,56 @@ MRC.prototype._buildButtons = function () {
             height: buttonHeight,
             attr: attr,
             focusAttr: focusAttr,
+            shadowColors: buttonShadowColors,
             label: label,
             onClick: handler
         });
         self._buttons.push(btn);
-        self._buttonHotspots.push({ frame: btn.frame, action: handler, key: keyChar || null, token: null });
+        self._buttonHotspots.push({ frame: btn.frame, button: btn });
         return btn.frame.width + 1;
     }
     var nextX = 2;
-    nextX += addButton('Help', function () { self._requestHelp(); }, nextX, null);
-    nextX += addButton('Exit', function () { self._requestExit(); }, nextX, null);
+    nextX += addButton('Help', function () { self._requestHelp(); }, nextX);
+    nextX += addButton('Rooms', function () { self._requestRooms(); }, nextX);
+    nextX += addButton('Users', function () { self._requestWhoon(); }, nextX);
+    nextX += addButton('BBSes', function () { self._requestBBSes(); }, nextX);
+    nextX += addButton('Stats', function () { self._requestStats(); }, nextX);
+    nextX += addButton('Motd', function () { self._requestMotd(); }, nextX);
+    nextX += addButton('Exit', function () { self._requestExit(); }, nextX);
+};
+
+MRC.prototype._requestRooms = function () {
+    try { if (typeof dbug === 'function') dbug('[MRC] _requestRooms called', 'mrc'); } catch (_) { }
+    this.service.executeCommand('rooms');
+};
+
+MRC.prototype._requestWhoon = function () {
+    try { if (typeof dbug === 'function') dbug('[MRC] _requestWhoon called', 'mrc'); } catch (_) { }
+    this.service.executeCommand('quote chatters');
+};
+
+MRC.prototype._requestBBSes = function () {
+    try { if (typeof dbug === 'function') dbug('[MRC] _requestBBSes called', 'mrc'); } catch (_) { }
+    this.service.executeCommand('quote bbses');
+};
+
+MRC.prototype._requestMotd = function () {
+    try { if (typeof dbug === 'function') dbug('[MRC] _requestMotd called', 'mrc'); } catch (_) { }
+    this.service.executeCommand('motd');
+};
+
+MRC.prototype._requestStats = function () {
+    try { if (typeof dbug === 'function') dbug('[MRC] _requestStats called', 'mrc'); } catch (_) { }
+    this.service.executeCommand('quote statistics');
 };
 
 MRC.prototype._buttonFrameBounds = function (frame) {
     var buttonSurface = this.buttonsFrame || this.controlsFrame || this.hostFrame;
     var surfaceX = buttonSurface ? buttonSurface.x : 1;
     var surfaceY = buttonSurface ? buttonSurface.y : 1;
+    // Compute absolute screen position from frame's relative position within surface
     var minX = surfaceX + (frame.x || 1) - 1;
-    var minY = surfaceY + (frame.y || 1) - 5;
+    var minY = surfaceY + (frame.y || 1) - 1;
     var width = Math.max(1, frame.width || 1);
     var height = Math.max(1, frame.height || 1);
     return {
@@ -1330,59 +1705,99 @@ MRC.prototype._buttonFrameBounds = function (frame) {
 };
 
 MRC.prototype._clearHotspots = function () {
+    this._hotspotHandlers = {};
+    this._hotspotCounter = 0;
+    this._hotspotBuffer = '';
     if (typeof console !== 'undefined' && typeof console.clear_hotspots === 'function') {
         try { console.clear_hotspots(); } catch (_) { }
     }
-    this._buttonHotspotTokens = {};
-    this._buttonKeyMap = {};
-    this._hotspotBuffer = '';
+};
+
+MRC.prototype._nextHotspotToken = function () {
+    var token = '~' + this._hotspotCounter.toString(36) + '~';
+    this._hotspotCounter += 1;
+    return token;
+};
+
+MRC.prototype._registerHotspot = function (minX, maxX, minY, maxY, button) {
+    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    if (minX > maxX || minY > maxY) return;
+    var token = this._nextHotspotToken();
+    this._hotspotHandlers[token] = button;
+    for (var y = minY; y <= maxY; y++) {
+        try { console.add_hotspot(token, false, minX, maxX, y); } catch (_) { }
+    }
 };
 
 MRC.prototype._registerHotspots = function () {
     this._clearHotspots();
     if (!this._buttonHotspots || !this._buttonHotspots.length) return;
-    if (typeof console === 'undefined' || typeof console.add_hotspot !== 'function') return;
+    
     for (var i = 0; i < this._buttonHotspots.length; i++) {
         var entry = this._buttonHotspots[i];
-        if (!entry || !entry.frame) continue;
+        if (!entry || !entry.frame || !entry.button) continue;
         var bounds = this._buttonFrameBounds(entry.frame);
-        var token = entry.token || String.fromCharCode(0x10 + (i % 16));
-        entry.token = token;
-        this._buttonHotspotTokens[token] = entry.action;
-        for (var y = bounds.minY; y <= bounds.maxY; y++) {
-            try { console.add_hotspot(token, false, bounds.minX, bounds.maxX, y); } catch (_) { }
+        // Adjust Y coordinates by -2 to align hotspots with visual button positions
+        this._registerHotspot(bounds.minX, bounds.maxX, bounds.minY - 2, bounds.maxY - 2, entry.button);
+    }
+};
+
+MRC.prototype._cleanup = function () {
+    this._clearHotspots();
+    if (this._systemModal && typeof this._systemModal.close === 'function') {
+        try { this._systemModal.close(); } catch (_) { }
+    }
+    this._systemModal = null;
+    if (this._activeBannerModal && typeof this._activeBannerModal.close === 'function') {
+        try { this._activeBannerModal.close(); } catch (_) { }
+    }
+    this._activeBannerModal = null;
+    this._destroyButtons();
+
+    // Explicitly close and null all child frames to prevent artifacts.
+    // The base cleanup closes hostFrame (which cascades to children), but
+    // nulling references ensures no stale frame objects linger on re-entry.
+    var frameNames = ['headerFrame', 'footerFrame', 'controlsFrame', 'buttonsFrame', 'messagesFrame', 'nickFrame'];
+    for (var i = 0; i < frameNames.length; i++) {
+        var fn = frameNames[i];
+        if (this[fn]) {
+            try { this[fn].close(); } catch (_) { }
+            this[fn] = null;
         }
-        if (entry.key) {
-            var lower = entry.key.toLowerCase();
-            var upper = entry.key.toUpperCase();
-            this._buttonKeyMap[lower] = entry.action;
-            this._buttonKeyMap[upper] = entry.action;
-            for (var y2 = bounds.minY; y2 <= bounds.maxY; y2++) {
-                try { console.add_hotspot(lower, false, bounds.minX, bounds.maxX, y2); } catch (_) { }
-                if (upper !== lower) {
-                    try { console.add_hotspot(upper, false, bounds.minX, bounds.maxX, y2); } catch (_) { }
-                }
+    }
+    if (this.messageScroll) {
+        this.messageScroll = null;
+    }
+};
+
+MRC.prototype.cleanup = MRC.prototype._cleanup;
+
+MRC.prototype._processHotspotKey = function (key) {
+    if (!key) return false;
+    this._hotspotBuffer += key;
+    if (this._hotspotBuffer.length > 16) {
+        this._hotspotBuffer = this._hotspotBuffer.substr(this._hotspotBuffer.length - 16);
+    }
+    // Check for complete token match
+    for (var token in this._hotspotHandlers) {
+        if (this._hotspotHandlers.hasOwnProperty(token) && this._hotspotBuffer.indexOf(token) !== -1) {
+            var button = this._hotspotHandlers[token];
+            this._hotspotBuffer = '';
+            if (button && typeof button.press === 'function') {
+                try { button.press(); } catch (_) { }
             }
+            return true;
         }
     }
-};
-
-MRC.prototype._activateButtonAction = function (handler) {
-    if (typeof handler === 'function') {
-        try { handler(); } catch (_) { }
-        return true;
-    }
-    return false;
-};
-
-MRC.prototype._processButtonHotspotInput = function (key) {
-    if (typeof key === 'number') key = String.fromCharCode(key);
-    if (!key || typeof key !== 'string') return false;
-    if (this._buttonKeyMap && Object.prototype.hasOwnProperty.call(this._buttonKeyMap, key)) {
-        return this._activateButtonAction(this._buttonKeyMap[key]);
-    }
-    if (this._buttonHotspotTokens && Object.prototype.hasOwnProperty.call(this._buttonHotspotTokens, key)) {
-        return this._activateButtonAction(this._buttonHotspotTokens[key]);
+    // Check if we're in the middle of building a token (has ~ but no closing ~)
+    // Tokens are format ~X~ where X is alphanumeric
+    var tildeIdx = this._hotspotBuffer.lastIndexOf('~');
+    if (tildeIdx !== -1) {
+        var afterTilde = this._hotspotBuffer.substr(tildeIdx + 1);
+        // If afterTilde has no closing ~, we might be mid-token - consume the key
+        if (afterTilde.indexOf('~') === -1 && afterTilde.length < 8) {
+            return true;
+        }
     }
     return false;
 };
@@ -1394,7 +1809,9 @@ MRC.prototype._requestHelp = function () {
 MRC.prototype._requestExit = function () {
     if (this._exiting) return;
     this._exiting = true;
-    this.service.disconnect();
+    // DO NOT disconnect from the network - MRC is a long-running service
+    // that persists at the node level. Just exit the UI subprogram.
+    // The user can still receive toast notifications and re-enter MRC later.
     if (this.running) this.exit();
 };
 
@@ -1414,6 +1831,10 @@ MRC.prototype._renderHeader = function () {
     if (this._topic) {
         parts.push(this.colorize('HEADER_TOPIC', ' - ' + this._topic));
     }
+    // Add user count to header (moved from controls row)
+    if (this._nickList && this._nickList.length > 0) {
+        parts.push(this.colorize('HEADER_LATENCY', ' (' + this._nickList.length + ' users)'));
+    }
 
     var text = parts.join('');
     this.headerFrame.gotoxy(1, 1);
@@ -1427,39 +1848,7 @@ MRC.prototype._renderFooter = function () {
     this.footerFrame.attr = attr;
     this.footerFrame.clear(attr);
 
-    // Build colorized status line
-    var statusParts = [];
-    if (this._latency !== undefined && this._latency !== null && this._latency !== '-' && this._latency !== '') {
-        statusParts.push(this.colorize('STATUS_LATENCY', 'Latency ' + this._latency + 'ms'));
-    }
-    if (Array.isArray(this._stats) && this._stats.length >= 3) {
-        statusParts.push('  ');
-        statusParts.push(this.colorize('STATUS_BBS_COUNT', 'BBS ' + this._stats[0]));
-        statusParts.push('  ');
-        statusParts.push(this.colorize('STATUS_ROOM_COUNT', 'Rooms ' + this._stats[1]));
-        statusParts.push('  ');
-        statusParts.push(this.colorize('STATUS_USER_COUNT', 'Users ' + this._stats[2]));
-    }
-
-    // Build colorized flags
-    var flagParts = [];
-    flagParts.push('[');
-    flagParts.push(this.colorize('STATUS_FLAGS', 'Toasts'));
-    flagParts.push(' ');
-    flagParts.push(this.colorize(this._toastEnabled ? 'TOAST_ENABLED' : 'TOAST_DISABLED', this._toastEnabled ? 'On' : 'Off'));
-    flagParts.push('] [');
-    flagParts.push(this.colorize('STATUS_FLAGS', 'Nicks'));
-    flagParts.push(' ');
-    flagParts.push(this.colorize(this._showNickList ? 'NICKS_SHOWN' : 'NICKS_HIDDEN', this._showNickList ? 'Shown' : 'Hidden'));
-    flagParts.push(']'); var statusText = statusParts.join('');
-    var flagsText = flagParts.join('');
-    var fullText = statusText + (statusText && flagsText ? ' ' : '') + flagsText;
-
-    var width = this.footerFrame.width;
-    this.footerFrame.gotoxy(1, 1);
-    this.footerFrame.putmsg(fullText.substr(0, width));
-
-    // Use cursor-aware input rendering
+    // Just render the input prompt (no status line)
     this._refreshFooterInput();
 };
 
@@ -1472,9 +1861,17 @@ MRC.prototype._refreshFooterInput = function () {
     var width = this.footerFrame.width;
     if (width <= 0) return;
     
-    var prefix = '> ';
+    // Build counter prefix: (len/140)> 
+    var len = this._inputBuffer.length;
+    var counter = '(' + len + '/' + MRC_MAX_MESSAGE_LENGTH + ')';
+    var atMax = (len >= MRC_MAX_MESSAGE_LENGTH);
+    var prefix = counter + '> ';
     var prefixLen = prefix.length;
     var contentWidth = Math.max(1, width - prefixLen);
+    
+    // Store counter info for rendering
+    this._counterLen = counter.length;
+    this._counterAtMax = atMax;
     
     // Ensure cursor is within bounds
     if (this._inputCursor < 0) this._inputCursor = 0;
@@ -1521,10 +1918,21 @@ MRC.prototype._renderInputWithCursor = function (prefix, text, cursorPos, width,
     var cursorAttr = ((baseAttr & 0x07) << 4) | ((baseAttr >> 4) & 0x07) | (baseAttr & 0x88);
     if (cursorAttr === baseAttr) cursorAttr = (BG_WHITE | BLACK); // fallback if same
     
+    // Counter color: bright red when at max, normal otherwise
+    var counterLen = this._counterLen || 0;
+    var counterAttr = this._counterAtMax ? (BG_BLUE | LIGHTRED) : baseAttr;
+    
     var fullText = prefix + text;
     for (var i = 0; i < width; i++) {
         var ch = (i < fullText.length) ? fullText.charAt(i) : ' ';
-        var attr = (i === cursorPos) ? cursorAttr : baseAttr;
+        var attr;
+        if (i === cursorPos) {
+            attr = cursorAttr;
+        } else if (i < counterLen) {
+            attr = counterAttr;  // Counter portion
+        } else {
+            attr = baseAttr;
+        }
         try { this.footerFrame.setData(i, row, ch, attr, false); } catch (e) { }
     }
     if (typeof this.footerFrame.cycle === 'function') {
@@ -1538,20 +1946,25 @@ MRC.prototype._renderMessages = function () {
     var wrappedLines = this._getWrappedMessageLines(width);
     var attr = this.messagesFrame.attr || this.paletteAttr('CHAT_OUTPUT', BG_BLACK | LIGHTGRAY);
     this.messagesFrame.attr = attr;
-    this.messagesFrame.clear(attr);
     var height = this.messagesFrame.height;
     var total = wrappedLines.length;
     if (total <= 0) total = 0;
+    
+    // Calculate visible window
     var maxOffset = Math.max(0, total - height);
     if (this._scrollOffset > maxOffset) this._scrollOffset = maxOffset;
     var start = Math.max(0, total - height - this._scrollOffset);
     var end = Math.max(0, total - this._scrollOffset);
+    
+    // Clear and render visible lines using gotoxy (original working approach)
+    this.messagesFrame.clear(attr);
     var y = 1;
     for (var i = start; i < end; i++) {
         if (y > height) break;
         this.messagesFrame.gotoxy(1, y++);
         this.messagesFrame.putmsg(wrappedLines[i]);
     }
+    
     if (this.messageScroll) this.messageScroll.cycle();
     this.messagesFrame.cycle();
 };
@@ -1559,6 +1972,12 @@ MRC.prototype._renderMessages = function () {
 MRC.prototype._invalidateWrappedMessageLines = function () {
     this._wrappedLineCache = null;
     this._wrappedLineCacheWidth = 0;
+};
+
+// Lightweight scroll - with gotoxy approach, just re-render the visible window
+MRC.prototype._scrollOnly = function () {
+    // Simply re-render messages with updated scroll offset
+    this._renderMessages();
 };
 
 MRC.prototype._getWrappedMessageLines = function (width) {
@@ -1676,41 +2095,26 @@ MRC.prototype._renderButtons = function () {
     if (!this.controlsFrame) return;
     var attr = this.controlsFrame.attr || this.paletteAttr('CHAT_CONTROLS', BG_BLACK | LIGHTGRAY);
     this.controlsFrame.attr = attr;
-    this.controlsFrame.clear(attr);
-    if (this.buttonsFrame) {
-        // Colorized help text
-        var helpParts = [];
-        helpParts.push('[');
-        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'Ctrl+Q'));
-        helpParts.push(this.colorize('CONTROLS_HELP', ' Exit'));
-        helpParts.push('] [');
-        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'F1'));
-        helpParts.push(this.colorize('CONTROLS_HELP', ' Help'));
-        helpParts.push('] [');
-        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'PgUp/PgDn'));
-        helpParts.push(this.colorize('CONTROLS_HELP', ' Scroll'));
-        helpParts.push('] [');
-        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'Ctrl+T'));
-        helpParts.push(this.colorize('CONTROLS_HELP', ' Toast'));
-        helpParts.push('] [');
-        helpParts.push(this.colorize('CONTROLS_KEYHELP', 'Ctrl+N'));
-        helpParts.push(this.colorize('CONTROLS_HELP', ' Nicks'));
-        helpParts.push(']');
-        var info = helpParts.join('');
-        this.controlsFrame.gotoxy(1, 1);
-        this.controlsFrame.putmsg(info.substr(0, this.controlsFrame.width));
-    }
-    this.controlsFrame.cycle();
-    if (this.buttonsFrame) {
-        this.buttonsFrame.clear(attr);
-    }
+    
+    // Always register hotspots (they may change)
     this._registerHotspots();
-    for (var i = 0; i < this._buttons.length; i++) {
-        if (this._buttons[i] && typeof this._buttons[i].render === 'function') {
-            try { this._buttons[i].render(); } catch (_) { }
+    
+    // Only clear/render button graphics on first render or explicit refresh
+    if (!this._buttonsRendered) {
+        this.controlsFrame.clear(attr);
+        // Info row removed - users count moved to header, room/topic already in header
+        this.controlsFrame.cycle();
+        if (this.buttonsFrame) {
+            this.buttonsFrame.clear(attr);
         }
+        for (var i = 0; i < this._buttons.length; i++) {
+            if (this._buttons[i] && typeof this._buttons[i].render === 'function') {
+                try { this._buttons[i].render(); } catch (_) { }
+            }
+        }
+        if (this.buttonsFrame) this.buttonsFrame.cycle();
+        this._buttonsRendered = true;
     }
-    if (this.buttonsFrame) this.buttonsFrame.cycle();
 };
 
 MRC.prototype.draw = function () {
@@ -1757,12 +2161,38 @@ MRC.prototype.draw = function () {
     if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
         try { this.parentFrame.cycle(); } catch (_) { }
     }
+    
+    // Ensure active modal stays on top
+    if (this._activeBannerModal && this._activeBannerModal.frame) {
+        try { this._activeBannerModal.frame.top(); } catch (_) { }
+        try { this._activeBannerModal.frame.cycle(); } catch (_) { }
+    }
+    
+    // System modal on top
+    if (this._systemModal && this._systemModal.frame) {
+        try { this._systemModal.frame.top(); } catch (_) { }
+        try { this._systemModal.frame.cycle(); } catch (_) { }
+    }
+    
     this._lastRenderTs = nowTs;
 };
 
 MRC.prototype.handleKey = function (key) {
     if (key === null || typeof key === 'undefined' || key === '') return true;
     this._lastKeyTs = Date.now();
+    
+    // If system modal is open, route keys to it
+    if (this._systemModal && this._systemModal.isOpen) {
+        if (key === '\x1b' || key.toLowerCase() === 'q' || key.toLowerCase() === 'c') {
+            this._systemModal.close();
+            this._systemModal = null;
+            this._needsRedraw = true;
+            return true;
+        }
+        // Absorb all other keys while modal is open
+        return true;
+    }
+    
     var frameHeight = this.messagesFrame ? Math.max(1, this.messagesFrame.height) : 6;
     var page = Math.max(1, frameHeight - 1);
     var fallbackWidth = 80;
@@ -1777,31 +2207,46 @@ MRC.prototype.handleKey = function (key) {
         this.exit();
         return false;
     }
-    if (this._processButtonHotspotInput(key)) return true;
+    if (this._processHotspotKey(key)) return true;
     var needsFullRedraw = false;
     
-    // Message scroll keys (Up/Down/PgUp/PgDn)
+    // Message scroll keys - use lightweight scroll
+    // Note: KEY_HOME/KEY_END are '\x02'/'\x05' per key_defs.js
+    // For scroll-to-top/bottom, use Ctrl+Home (same as KEY_HOME) with modifier detection isn't reliable,
+    // so we use '<' and '>' for jump to oldest/newest messages
     switch (key) {
         case KEY_UP:
             this._scrollOffset = Math.min(this._scrollOffset + 1, maxOffset);
             this._userScrolled = this._scrollOffset > 0;
-            needsFullRedraw = true;
-            break;
+            this._scrollOnly();
+            return true;
         case KEY_DOWN:
             this._scrollOffset = Math.max(0, this._scrollOffset - 1);
             this._userScrolled = this._scrollOffset > 0;
-            needsFullRedraw = true;
-            break;
-        case KEY_PGUP:
+            this._scrollOnly();
+            return true;
+        case KEY_PAGEUP:
+        case '\x1b[5~':  // ANSI PgUp
             this._scrollOffset = Math.min(this._scrollOffset + page, maxOffset);
             this._userScrolled = this._scrollOffset > 0;
-            needsFullRedraw = true;
-            break;
-        case KEY_PGDN:
+            this._scrollOnly();
+            return true;
+        case KEY_PAGEDN:
+        case '\x1b[6~':  // ANSI PgDn
             this._scrollOffset = Math.max(0, this._scrollOffset - page);
             this._userScrolled = this._scrollOffset > 0;
-            needsFullRedraw = true;
-            break;
+            this._scrollOnly();
+            return true;
+        case '<':  // Jump to oldest (top) of message buffer
+            this._scrollOffset = maxOffset;
+            this._userScrolled = this._scrollOffset > 0;
+            this._scrollOnly();
+            return true;
+        case '>':  // Jump to newest (bottom) of message buffer
+            this._scrollOffset = 0;
+            this._userScrolled = false;
+            this._scrollOnly();
+            return true;
     }
     if (needsFullRedraw) {
         this._needsRedraw = true;
@@ -1921,8 +2366,12 @@ MRC.prototype.handleKey = function (key) {
         return true;
     }
     
-    // Printable characters - insert at cursor position
+    // Printable characters - insert at cursor position (max 140 chars for MRC)
     if (typeof key === 'string' && key.length === 1 && key >= ' ') {
+        if (this._inputBuffer.length >= MRC_MAX_MESSAGE_LENGTH) {
+            // At max length - reject input
+            return true;
+        }
         this._inputBuffer = this._inputBuffer.slice(0, this._inputCursor) + key + this._inputBuffer.slice(this._inputCursor);
         this._inputCursor++;
         this.service.pauseTypingFor(1000);
@@ -1957,13 +2406,34 @@ MRC.prototype._autoComplete = function () {
 };
 
 MRC.prototype.cleanup = function () {
+    // First call our own _cleanup to clear hotspots, modals, buttons
+    if (this._cleanup && typeof this._cleanup === 'function') {
+        try { this._cleanup(); } catch (e) { 
+            try { if (typeof dbug === 'function') dbug('[MRC] _cleanup error: ' + e, 'mrc'); } catch (_) { }
+        }
+    }
+    
     if (this._throttlePending && typeof this._throttlePending === 'object') {
         try { this._throttlePending.abort = true; } catch (_) { }
     }
     this._throttlePending = null;
     this._lastRenderTs = 0;
-    this.service.removeListener(this);
-    this._destroyButtons();
+    
+    // Remove listener proxy from controller (controller is persistent, MRC instance is not)
+    if (this._listenerProxy && this.controller && typeof this.controller.removeListener === 'function') {
+        try { 
+            this.controller.removeListener(this._listenerProxy); 
+            if (typeof dbug === 'function') dbug('[MRC] Removed listener proxy from controller in cleanup', 'mrc');
+        } catch (_) { }
+    }
+    this._listenerProxy = null;
+    
+    // Remove from service listeners
+    if (this.service && typeof this.service.removeListener === 'function') {
+        try { this.service.removeListener(this); } catch (_) { }
+    }
+    
+    // Call parent cleanup to close frames, detach timer, etc.
     Subprogram.prototype.cleanup.call(this);
 };
 

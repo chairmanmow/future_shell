@@ -270,7 +270,8 @@ if (typeof load === 'function') {
         if (!def) return false;
         if (!force && this.current && this.current.name === name) return true;
         this._stopCurrent();
-        var frame = this.getFrame ? this.getFrame() : null;
+        // Pass animation name to getFrame so it can return appropriate frame for overlay vs background
+        var frame = this.getFrame ? this.getFrame(name) : null;
         if (!frame || (typeof frame.is_open !== 'undefined' && !frame.is_open)) {
             this.current = null;
             return false;
@@ -327,6 +328,7 @@ if (typeof load === 'function') {
 
     ShellScreenSaver.prototype._stopCurrent = function () {
         if (!this.current) return;
+        var stoppingFrame = this.current.frame;
         try {
             if (this.current.type === 'matrix') {
                 if (this._matrix) {
@@ -344,6 +346,11 @@ if (typeof load === 'function') {
                     }
                     this.current.ownedFrames.length = 0;
                 }
+            }
+            // Clear the frame when animation stops
+            if (stoppingFrame) {
+                try { stoppingFrame.clear(); } catch (_) { }
+                try { stoppingFrame.cycle(); } catch (_) { }
             }
         } finally {
             this.current = null;
@@ -364,14 +371,14 @@ if (typeof load === 'function') {
 
     ShellScreenSaver.prototype._ensureActiveFrame = function () {
         if (!this.current) return true;
-        var resolved = this.getFrame ? this.getFrame() : null;
+        var name = this.current ? this.current.name : null;
+        var resolved = this.getFrame ? this.getFrame(name) : null;
         if (!this._frameIsValid(resolved)) {
             this._stopCurrent();
             return false;
         }
         var currentFrame = this.current.frame;
         if (currentFrame === resolved && this._frameIsValid(currentFrame)) return true;
-        var name = this.current ? this.current.name : null;
         if (!name) {
             this._stopCurrent();
             return false;

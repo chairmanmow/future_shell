@@ -48,6 +48,28 @@ function getMrcController(opts) {
 
     mrcLog('[mrc-factory] Node ' + nodeNum + ': looking for ' + controllerKey);
 
+    // Allow force recreation via opts.forceNew or by detecting code version mismatch
+    // MrcController.CODE_VERSION is defined in controller.js
+    var currentVersion = (typeof MrcController !== 'undefined' && MrcController.CODE_VERSION) ? MrcController.CODE_VERSION : 0;
+    var needsRecreation = opts.forceNew;
+    
+    mrcLog('[mrc-factory] Current code version: ' + currentVersion);
+    
+    if (bbs[controllerKey] && bbs[controllerKey]._codeVersion !== currentVersion) {
+        mrcLog('[mrc-factory] Code version mismatch: cached=' + bbs[controllerKey]._codeVersion + ', current=' + currentVersion);
+        needsRecreation = true;
+    }
+    
+    if (needsRecreation && bbs[controllerKey]) {
+        mrcLog('[mrc-factory] Destroying old controller for recreation');
+        try { 
+            if (typeof bbs[controllerKey].disconnect === 'function') {
+                bbs[controllerKey].disconnect(); 
+            }
+        } catch (_) { }
+        delete bbs[controllerKey];
+    }
+
     // Return existing controller if present for this node
     if (bbs[controllerKey] && typeof bbs[controllerKey].tick === 'function') {
         // Controller exists - update shell and timer references
@@ -58,6 +80,18 @@ function getMrcController(opts) {
         if (opts.timer && typeof bbs[controllerKey].attachTimer === 'function') {
             try { bbs[controllerKey].attachTimer(opts.timer); } catch (_) { }
         }
+        
+        // Ensure controller is connected - reconnect if disconnected
+        // This handles cases where the connection was lost or disconnected
+        if (!bbs[controllerKey]._connected && typeof bbs[controllerKey].connect === 'function') {
+            mrcLog('[mrc-factory] Node ' + nodeNum + ': reconnecting disconnected controller');
+            try {
+                bbs[controllerKey].connect();
+            } catch (reconnErr) {
+                mrcLog('[mrc-factory] Node ' + nodeNum + ': reconnect failed: ' + reconnErr);
+            }
+        }
+        
         return bbs[controllerKey];
     }
 
@@ -128,6 +162,9 @@ function getMrcController(opts) {
         if (!bbs[controllerKey]) {
             throw new Error('Controller creation returned null/undefined');
         }
+        
+        // Store code version for hot-reload detection
+        bbs[controllerKey]._codeVersion = currentVersion;
 
         mrcLog('[mrc-factory] Node ' + nodeNum + ': created new controller for ' + controllerOpts.user);
 

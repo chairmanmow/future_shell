@@ -12,6 +12,17 @@ IconShell.prototype.runExternal = function (fn, opts) {
     var broadcastLaunch = opts.broadcast !== false;
     var activeBefore = this.activeSubprogram || null;
     var shouldResumeSub = !!(activeBefore && activeBefore.running);
+
+    // Award points for running external program
+    if (this._pointsSystem && typeof this._pointsSystem.award === 'function') {
+        try {
+            this._pointsSystem.award('ranExternal');
+            // Extra points for door games
+            if (programId && programId !== 'unknown') {
+                this._pointsSystem.award('playedDoor');
+            }
+        } catch (e) { dbug('[launch] points award error: ' + e, 'points'); }
+    }
     if (broadcastLaunch && LaunchQueue && typeof LaunchQueue.record === 'function' && programId && programId !== 'unknown') {
         try {
             dbug('[launch_queue] recording launch programId=' + programId + ' label=' + (opts.label || programId) + ' icon=' + (opts.icon || ''), 'launch');
@@ -161,6 +172,22 @@ IconShell.prototype.queueSubprogramLaunch = function (name, instance) {
 // Launch a subprogram (e.g., chat)
 IconShell.prototype.launchSubprogram = function (name, handlers) {
     dbug("Launch subprogram " + name, "subprogram");
+
+    // Clean up any currently-active subprogram before launching the new one.
+    // This prevents orphaned frames when e.g. a toast click launches a new
+    // subprogram while another is still running.
+    if (this.activeSubprogram && this.activeSubprogram.running) {
+        dbug('Cleaning up active subprogram before launching ' + name, 'subprogram');
+        try { this.activeSubprogram.exit(); } catch (e) {
+            dbug('launchSubprogram: old sub exit error: ' + e, 'subprogram');
+            // Fallback: at least try cleanup directly
+            try { this.activeSubprogram.cleanup(); } catch (ce) {
+                dbug('launchSubprogram: old sub cleanup fallback error: ' + ce, 'subprogram');
+            }
+        }
+        this.activeSubprogram = null;
+    }
+
     // If launching chat, always use the persistent instance
     if (name === "chat" && this.chat) {
         this.activeSubprogram = this.chat;
@@ -182,8 +209,19 @@ IconShell.prototype.launchSubprogram = function (name, handlers) {
 // Exit subprogram and return to shell
 IconShell.prototype.exitSubprogram = function () {
     dbug("Exit subprogram", "subprogram");
-    if (this.activeSubprogram && typeof this.activeSubprogram.detachShellTimer === 'function') {
-        this.activeSubprogram.detachShellTimer();
+    if (this.activeSubprogram) {
+        if (typeof this.activeSubprogram.detachShellTimer === 'function') {
+            this.activeSubprogram.detachShellTimer();
+        }
+        // Defensive: if the subprogram still considers itself running, its
+        // cleanup() was never called (e.g. it was orphaned). Run it now.
+        if (this.activeSubprogram.running) {
+            dbug('exitSubprogram: sub still running, calling cleanup()', 'subprogram');
+            try { this.activeSubprogram.cleanup(); } catch (e) {
+                dbug('exitSubprogram: defensive cleanup error: ' + e, 'subprogram');
+            }
+            this.activeSubprogram.running = false;
+        }
     }
     this.activeSubprogram = null;
     // Mark shelved state false so folder will rebuild cleanly

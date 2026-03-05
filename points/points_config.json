@@ -1,0 +1,32 @@
+{
+    "actions": {
+        "loggedIn": 5,
+        "loggedOff": 1,
+        "ranExternal": 1,
+        "postedMessage": 3,
+        "sentEmail": 2,
+        "readMessage": 1,
+        "downloadedFile": 2,
+        "uploadedFile": 10,
+        "joinedChat": 2,
+        "sentChatMessage": 1,
+        "setAvatar": 5,
+        "setEmail": 5,
+        "viewedUserList": 1,
+        "viewedStats": 1,
+        "playedDoor": 2,
+        "firstLoginOfDay": 10,
+        "consecutiveLoginDays": 5
+    },
+    "multipliers": {
+        "newUser": 2.0,
+        "sysop": 0
+    },
+    "limits": {
+        "maxPointsPerSession": 1000,
+        "maxPointsPerAction": {
+            "sentChatMessage": 50,
+            "readMessage": 20
+        }
+    }
+}

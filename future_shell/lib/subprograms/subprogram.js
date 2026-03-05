@@ -1,5 +1,3 @@
-"use strict";
-
 load('sbbsdefs.js');
 if (typeof lazyLoadModule !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (e) { }
@@ -203,6 +201,9 @@ Subprogram.prototype.cleanup = function () {
     }
     if (this.hostFrame) {
         var oldHost = this.hostFrame;
+        // Clear the frame content before closing to avoid visual artifacts
+        try { oldHost.clear(); } catch (e) { }
+        try { oldHost.cycle(); } catch (e) { }
         try { oldHost.close(); } catch (e) { }
         var idx = this._myFrames.indexOf(oldHost);
         if (idx !== -1) this._myFrames.splice(idx, 1);
@@ -214,11 +215,21 @@ Subprogram.prototype.cleanup = function () {
             try { this.parentFrame.close(); } catch (e) { }
             this.parentFrame = null;
         } else {
+            // Clear and cycle parent frame to remove any residual artifacts
+            try { this.parentFrame.clear(); } catch (e) { }
             try { this.parentFrame.cycle(); } catch (e) { }
         }
     }
     this.detachShellTimer();
     this._myFrames = [];
+    // Release any remaining frame references that subclass _cleanup() may have missed
+    if (typeof this._releaseFrameRefs === 'function') {
+        try { this._releaseFrameRefs(); } catch (e) { }
+    }
+    // Reset console attributes to default to prevent color bleed
+    if (typeof console !== 'undefined' && typeof console.attributes !== 'undefined') {
+        try { console.attributes = 7; } catch (e) { } // default lightgray on black
+    }
 };
 
 Subprogram.prototype._teardownHostFrame = function () {
@@ -309,6 +320,20 @@ Subprogram.prototype.pauseForReason = function (reason) {
 
 Subprogram.prototype.resumeForReason = function (reason) {
     this.restoreHotspots();
+};
+
+// Clear any screensaver overlay frame - called when screensavers switch or stop.
+// Subprograms that provide a dedicated overlay for screensavers should override this.
+Subprogram.prototype.clearScreensaverOverlay = function () {
+    // Default: clear the background frame if it exists
+    if (this.__bg_frame && typeof this.__bg_frame.clear === 'function') {
+        try {
+            this.__bg_frame.clear();
+            if (typeof this.__bg_frame.cycle === 'function') {
+                this.__bg_frame.cycle();
+            }
+        } catch (e) { }
+    }
 };
 
 Subprogram.prototype.restoreHotspots = function () {
@@ -408,7 +433,11 @@ Subprogram.prototype._showToast = function (opts) {
     return null;
 };
 
-function extend(Sub, Super) {
+// In strict mode, make extend globally accessible
+var extend = function(Sub, Super) {
     Sub.prototype = Object.create(Super.prototype);
     Sub.prototype.constructor = Sub;
-}
+};
+// Export to global scope
+if (typeof this !== 'undefined') this.extend = extend;
+if (typeof global !== 'undefined') global.extend = extend;
