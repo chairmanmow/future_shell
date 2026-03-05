@@ -264,8 +264,9 @@ IconShell.prototype.init = function () {
     js.on_exit(
         "try {" +
         "  var shell = (typeof global !== 'undefined' && global.__ICSH_ACTIVE_SHELL__) || (typeof globalThis !== 'undefined' && globalThis.__ICSH_ACTIVE_SHELL__);" +
-        "  if (shell && shell.jsonchat) {" +
-        "    if (shell.jsonchat.client) {" +
+        "  if (shell) {" +
+        "    if (shell._ticker && typeof shell._ticker.detach === 'function') { try { shell._ticker.detach(); } catch(e) {} shell._ticker = null; }" +
+        "    if (shell.jsonchat && shell.jsonchat.client) {" +
         "      try { shell.jsonchat.client.disconnect(); } catch(e) {}" +
         "      if (shell.jsonchat.client.socket) {" +
         "        try { shell.jsonchat.client.socket.close(); } catch(e) {}" +
@@ -2801,6 +2802,11 @@ IconShell.prototype._cleanupMainLoop = function () {
     this._chatRedrawEvent = this._resizePollEvent = this._nodeMsgEvent = null;
     this._chatPollEvent = this._subprogramCycleEvent = this._inactivityEvent = null;
     this._toastCycleEvent = this._folderFlushEvent = null;
+    // Detach the RSS ticker BEFORE disposing frames to prevent use-after-free
+    if (this._ticker && typeof this._ticker.detach === 'function') {
+        try { this._ticker.detach(); } catch (_) { }
+        this._ticker = null;
+    }
     this._stopScreenSaver();
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
 };

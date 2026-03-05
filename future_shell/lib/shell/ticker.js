@@ -91,6 +91,7 @@ function ShellTicker(opts) {
     this._fetching = false;
     this._initialized = false;
     this._timerEvent = null;
+    this._destroyed = false;      // Set true on detach to prevent use-after-free
 
     // Load per-user prefs and resolve feed URLs
     this._loadUserPrefs();
@@ -116,13 +117,22 @@ ShellTicker.prototype.attach = function (timer) {
 };
 
 /**
- * Detach from timer (cleanup).
+ * Detach from timer and clean up all resources.
+ * Must be called before the shell exits to prevent use-after-free.
  */
 ShellTicker.prototype.detach = function () {
+    this._destroyed = true;
     if (this._timerEvent) {
         this._timerEvent.abort = true;
         this._timerEvent = null;
     }
+    // Abandon any in-flight background fetch thread.
+    // The thread will write to parent_queue and exit on its own;
+    // we just stop polling so we never read from a stale queue.
+    this._fetching = false;
+    this._fetchQueue = null;
+    this._headlines = [];
+    this.shell = null;
 };
 
 // ---------------------------------------------------------------------------
@@ -228,6 +238,7 @@ ShellTicker.prototype._readNewsreaderFavorites = function () {
  * Refreshes feed URLs and settings without restarting the timer.
  */
 ShellTicker.prototype.reloadPrefs = function () {
+    if (this._destroyed) return;
     this._userFeedUrls = null;
     this._loadUserPrefs();
     this._resolveFeeds();
@@ -244,7 +255,7 @@ ShellTicker.prototype.reloadPrefs = function () {
  * Main tick — called every ~1 second by the timer.
  */
 ShellTicker.prototype._tick = function () {
-    if (!this.enabled || !this.shell) return;
+    if (this._destroyed || !this.enabled || !this.shell) return;
 
     var now = Date.now();
 
@@ -305,9 +316,11 @@ ShellTicker.prototype._switchMode = function (now) {
  * Render the standard gradient BBS banner into the header frame.
  */
 ShellTicker.prototype._renderBanner = function () {
+    if (this._destroyed) return;
     var shell = this.shell;
     if (!shell || !shell.headerFrame) return;
-    // Delegate to the shell's existing header refresh
+    // Guard against writing to a disposed/closed frame
+    if (typeof shell.headerFrame.is_open !== 'undefined' && !shell.headerFrame.is_open) return;
     if (typeof shell._refreshHeaderFrame === 'function') {
         shell._refreshHeaderFrame();
     }
@@ -319,9 +332,12 @@ ShellTicker.prototype._renderBanner = function () {
  * explicit high-contrast text coloring for legibility.
  */
 ShellTicker.prototype._renderHeadline = function () {
+    if (this._destroyed) return;
     var shell = this.shell;
     if (!shell || !shell.headerFrame) return;
     var frame = shell.headerFrame;
+    // Guard against writing to a disposed/closed frame (use-after-free)
+    if (typeof frame.is_open !== 'undefined' && !frame.is_open) return;
     var width = frame.width || 80;
 
     var headline = this._headlines[this._headlineIndex];
@@ -377,7 +393,7 @@ ShellTicker.prototype._renderHeadline = function () {
  * Start a background RSS fetch for the current feed URL.
  */
 ShellTicker.prototype._startFetch = function () {
-    if (this._fetching) return;
+    if (this._destroyed || this._fetching) return;
     var url = this._feedUrls[this._feedUrlIndex];
     if (!url) return;
     try {
@@ -394,7 +410,7 @@ ShellTicker.prototype._startFetch = function () {
  * Non-blocking poll for background fetch results.
  */
 ShellTicker.prototype._pollFetchResult = function () {
-    if (!this._fetching || !this._fetchQueue) return;
+    if (this._destroyed || !this._fetching || !this._fetchQueue) return;
     // poll(0) = non-blocking check for data
     var hasData = false;
     try { hasData = this._fetchQueue.poll(0); } catch (e) { return; }
