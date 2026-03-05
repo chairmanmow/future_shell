@@ -275,6 +275,14 @@ var BUILTIN_ACTIONS = {
 			}
 		}
 	}),
+	ticker_settings: new SubprogramActionHandler('TickerSettings', {
+		module: 'future_shell/lib/subprograms/ticker_settings.js',
+		queueName: 'ticker-settings',
+		instanceProperty: 'tickerSettingsSub',
+		loadFailureMessage: 'Failed loading ticker_settings.js ',
+		missingMessage: 'TickerSettings class missing after load',
+		options: function () { return { parentFrame: this.root }; }
+	}),
 	privatemsg: new SubprogramActionHandler('PrivateMsg', {
 		module: 'future_shell/lib/subprograms/private_msg.js',
 		queueName: 'private-msg',
@@ -876,6 +884,58 @@ var ICSH_SETTINGS = (function () {
 				}
 				if (Object.keys(animOpts).length) cfg.animationOptions = animOpts;
 				if (Object.keys(cfg).length) out.screensaver = cfg;
+			}
+
+			// [Ticker] section — RSS headline ticker in the header bar
+			if (ini.Ticker) {
+				var tk = ini.Ticker;
+				var tickerCfg = {};
+				if (tk.enabled !== undefined) {
+					var enb = _parseBool(tk.enabled);
+					if (enb !== undefined) tickerCfg.enabled = enb;
+				}
+				if (tk.feeds !== undefined) {
+					tickerCfg.feedKeys = tk.feeds.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+				}
+				if (tk.headline_duration !== undefined) {
+					var hd = _parseNumber(tk.headline_duration);
+					if (hd !== undefined) tickerCfg.headline_duration = Math.max(1000, hd | 0);
+				}
+				if (tk.banner_duration !== undefined) {
+					var bd = _parseNumber(tk.banner_duration);
+					if (bd !== undefined) tickerCfg.banner_duration = Math.max(1000, bd | 0);
+				}
+				if (tk.refresh_interval !== undefined) {
+					var ri = _parseNumber(tk.refresh_interval);
+					if (ri !== undefined) tickerCfg.refresh_interval = Math.max(30000, ri | 0);
+				}
+				// Resolve feed keys to URLs from newsreader.ini
+				if (tickerCfg.feedKeys && tickerCfg.feedKeys.length) {
+					try {
+						var nrRaw = readConfigIni('newsreader.ini');
+						if (nrRaw) {
+							var nrIni = parseIni(nrRaw);
+							var resolved = [];
+							for (var fi = 0; fi < tickerCfg.feedKeys.length; fi++) {
+								var fkey = tickerCfg.feedKeys[fi];
+								var secName = null;
+								// Try exact section name first, then case-insensitive
+								if (nrIni['Feed.' + fkey]) secName = 'Feed.' + fkey;
+								else {
+									var lk = 'feed.' + fkey.toLowerCase();
+									for (var sn in nrIni) {
+										if (Object.prototype.hasOwnProperty.call(nrIni, sn) && sn.toLowerCase() === lk) { secName = sn; break; }
+									}
+								}
+								if (secName && nrIni[secName] && nrIni[secName].url) {
+									resolved.push(nrIni[secName].url);
+								}
+							}
+							tickerCfg._resolvedUrls = resolved;
+						}
+					} catch (nrErr) { _icsh_warn('Ticker: error resolving feed URLs: ' + nrErr); }
+				}
+				out.ticker = tickerCfg;
 			}
 		}
 	} catch (e) { _icsh_warn('Error loading ICSH_SETTINGS: ' + e); }

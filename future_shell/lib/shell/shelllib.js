@@ -17,6 +17,7 @@ try { load('future_shell/lib/subprograms/subprogram.js'); } catch (e) { }
 try { load('future_shell/lib/subprograms/mrc.js'); } catch (e) { dbug('shell init unable to preload mrc.js: ' + e, 'mrc'); }
 try { load('future_shell/lib/util/launch_queue.js'); } catch (e) { dbug('shell init unable to load launch_queue.js: ' + e, 'launch'); }
 try { load('future_shell/lib/util/hotspot_manger.js'); } catch (e) { dbug('shell init unable to load hotspot_manger.js: ' + e, 'hotspot'); }
+try { load('future_shell/lib/shell/ticker.js'); } catch (e) { dbug('shell init unable to load ticker.js: ' + e, 'ticker'); }
 
 var SHELL_KEY_TOKEN_UP = (typeof KEY_UP !== 'undefined') ? KEY_UP : '\x1B[A';
 var SHELL_KEY_TOKEN_DOWN = (typeof KEY_DOWN !== 'undefined') ? KEY_DOWN : '\x1B[B';
@@ -363,6 +364,22 @@ IconShell.prototype.init = function () {
         this._refreshScreenSaverFrame();
         this._applyScreensaverPreferences();
     }
+    // Initialize RSS headline ticker
+    this._ticker = null;
+    if (typeof ShellTicker === 'function') {
+        var tickerConfig = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.ticker) ? ICSH_SETTINGS.ticker : {};
+        try {
+            this._ticker = new ShellTicker({ shell: this, config: tickerConfig });
+            if (this._ticker.enabled && this.timer) {
+                this._ticker.attach(this.timer);
+                dbug('[shell] Ticker initialized with ' + this._ticker._feedUrls.length + ' feed(s)', 'ticker');
+            }
+        } catch (tickerErr) {
+            this._ticker = null;
+            try { dbug('[shell] Ticker init error: ' + tickerErr, 'ticker'); } catch (_) { }
+        }
+    }
+
     // Enable mouse mode for hotspots
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = true;
 
