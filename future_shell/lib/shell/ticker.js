@@ -61,7 +61,7 @@ function ShellTicker(opts) {
     this.headlineDurationMs = (typeof cfg.headline_duration === 'number') ? cfg.headline_duration : 15000;
 
     // How often to re-fetch RSS data (ms) — default 5 minutes
-    this.refreshIntervalMs = (typeof cfg.refresh_interval === 'number') ? cfg.refresh_interval : 300000;
+    this.refreshIntervalMs = (typeof cfg.refresh_interval === 'number') ? cfg.refresh_interval : 900000;
 
     // Global config feed URLs (fallback when no per-user prefs exist)
     this._globalFeedUrls = [];
@@ -262,10 +262,13 @@ ShellTicker.prototype._tick = function () {
     // Poll for background fetch results (non-blocking) — always poll even if subprogram active
     this._pollFetchResult();
 
-    // Check if it's time to re-fetch
+    // Check if it's time to re-fetch (skip while subprogram active to avoid wasting threads)
     if (!this._fetching && this._lastFetchTs > 0 && (now - this._lastFetchTs) >= this.refreshIntervalMs) {
-        this._advanceFeedUrl();
-        this._startFetch();
+        var sub = this.shell.activeSubprogram;
+        if (!sub || !sub.running) {
+            this._advanceFeedUrl();
+            this._startFetch();
+        }
     }
 
     // Don't switch the header display while a subprogram owns the screen
@@ -441,6 +444,8 @@ ShellTicker.prototype._pollFetchResult = function () {
         this._headlines = result.headlines;
         this._headlineIndex = 0;
         this._lastFetchTs = Date.now();
+        // Hint GC to reclaim background thread memory
+        try { js.gc(false); } catch (_) {}
         try { dbug('ticker: loaded ' + result.headlines.length + ' headlines', 'ticker'); } catch (_) { }
     }
 };

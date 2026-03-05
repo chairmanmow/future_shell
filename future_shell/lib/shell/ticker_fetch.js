@@ -78,14 +78,26 @@ try {
     var feed = new Feed(url, 5);
     var channel = (feed.channels && feed.channels.length) ? feed.channels[0] : null;
     if (channel && channel.items) {
-        var source = channel.title || '';
-        for (var i = 0; i < channel.items.length; i++) {
+        var source = _sanitizeTitle(channel.title || '');
+        var maxItems = Math.min(channel.items.length, 50);
+        for (var i = 0; i < maxItems; i++) {
             var item = channel.items[i];
             var title = _sanitizeTitle(item.title || '');
-            if (!title) continue;
-            result.headlines.push({ title: title, source: source });
+            if (!title) {
+                channel.items[i] = null;
+                continue;
+            }
+            var link = (item.link || '').replace(/[\x00-\x1F]/g, '').trim();
+            result.headlines.push({ title: title, link: link, source: source });
+            item.body = item.content = item.author = item.enclosures = null;
+            channel.items[i] = null;
         }
     }
+    // Release the full feed/channel/XML trees before queue write
+    if (channel) { channel.items = null; }
+    channel = null;
+    if (feed) { feed.channels = null; }
+    feed = null;
 } catch (e) {
     result.error = true;
     result.message = String(e);
