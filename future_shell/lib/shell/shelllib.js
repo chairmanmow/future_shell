@@ -266,6 +266,7 @@ IconShell.prototype.init = function () {
         "  var shell = (typeof global !== 'undefined' && global.__ICSH_ACTIVE_SHELL__) || (typeof globalThis !== 'undefined' && globalThis.__ICSH_ACTIVE_SHELL__);" +
         "  if (shell) {" +
         "    if (shell._ticker && typeof shell._ticker.detach === 'function') { try { shell._ticker.detach(); } catch(e) {} shell._ticker = null; }" +
+        "    if (shell._screenSaver && typeof shell._screenSaver.destroy === 'function') { try { shell._screenSaver.destroy(); } catch(e) {} }" +
         "    if (shell.jsonchat && shell.jsonchat.client) {" +
         "      try { shell.jsonchat.client.disconnect(); } catch(e) {}" +
         "      if (shell.jsonchat.client.socket) {" +
@@ -2796,6 +2797,7 @@ if (!IconShell.prototype._drawFolderOrig) {
 IconShell.prototype._cleanupMainLoop = function () {
     if (this._chatRedrawEvent && this._chatRedrawEvent.abort !== undefined) this._chatRedrawEvent.abort = true;
     if (this._resizePollEvent && this._resizePollEvent.abort !== undefined) this._resizePollEvent.abort = true;
+    if (this._nodeMsgEvent && this._nodeMsgEvent.abort !== undefined) this._nodeMsgEvent.abort = true;
     if (this._chatPollEvent && this._chatPollEvent.abort !== undefined) this._chatPollEvent.abort = true;
     if (this._subprogramCycleEvent && this._subprogramCycleEvent.abort !== undefined) this._subprogramCycleEvent.abort = true;
     if (this._inactivityEvent && this._inactivityEvent.abort !== undefined) this._inactivityEvent.abort = true;
@@ -2809,6 +2811,9 @@ IconShell.prototype._cleanupMainLoop = function () {
         try { this._ticker.detach(); } catch (_) { }
         this._ticker = null;
     }
-    this._stopScreenSaver();
+    // Destroy screensaver (detach timer + prevent further ticks) BEFORE frame disposal
+    if (this._screenSaver && typeof this._screenSaver.destroy === 'function') {
+        try { this._screenSaver.destroy(); } catch (_) { }
+    }
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
 };

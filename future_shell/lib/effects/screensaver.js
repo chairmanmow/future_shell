@@ -50,6 +50,7 @@ if (typeof load === 'function') {
         this._throttleSamples = 0;
         this._throttleCooldown = 0;
         this.active = false;
+        this._destroyed = false;      // Set true on destroy to prevent use-after-free
         this.current = null;
         this.sequence = ['matrix_rain'];
         this.random = true;
@@ -228,6 +229,7 @@ if (typeof load === 'function') {
     ShellScreenSaver.prototype.isActive = function () { return !!this.active; };
 
     ShellScreenSaver.prototype.activate = function (name) {
+        if (this._destroyed) return false;
         if (this.active && !name) return true;
         var available = this._availableNames();
         if (!available.length) return false;
@@ -249,9 +251,18 @@ if (typeof load === 'function') {
 
     ShellScreenSaver.prototype.deactivate = function () {
         if (!this.active && !this.current) return;
+        this.active = false;          // Clear flag BEFORE disposing frames to prevent race
         this._stopCurrent();
-        this.active = false;
         this._lastSwitchMs = 0;
+    };
+
+    // Permanently destroy: detach timer and prevent any further ticks.
+    // Call this during shell cleanup to prevent use-after-free.
+    ShellScreenSaver.prototype.destroy = function () {
+        this._destroyed = true;
+        this.active = false;
+        this.detachTimer();
+        this._stopCurrent();
     };
 
     ShellScreenSaver.prototype.refreshFrame = function () {
@@ -261,6 +272,7 @@ if (typeof load === 'function') {
     };
 
     ShellScreenSaver.prototype.pump = function () {
+        if (this._destroyed) return;
         if (this.usingTimer) return;
         this._tick();
     };
@@ -388,6 +400,7 @@ if (typeof load === 'function') {
     };
 
     ShellScreenSaver.prototype._tick = function () {
+        if (this._destroyed) return;
         if (!this.active) {
             return;
         }
