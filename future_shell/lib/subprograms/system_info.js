@@ -671,8 +671,8 @@ SystemInfo.prototype.handleKey = function (k) {
 		}
 	}
 
-	// Handle ESC - exit immediately unless on close tab
-	if (k === '\x1B') {
+	// Handle ESC / BACKSPACE - exit immediately unless on close tab
+	if (k === '\x1B' || k === '\b' || k === '\x7f') {
 		if (this.currentView === 'close') {
 			// ESC from close tab goes back to system tab
 			this._switchView('system');

@@ -550,6 +550,11 @@ Mail.prototype.handleKey = function (k) {
 		if (this.mode === 'promptRecipient') { this._commitRecipientPrompt(false); return; }
 		this.exit(); return;
 	}
+	// BACKSPACE as ESC alternative (except in promptRecipient where it edits the buffer)
+	if ((k === '\b' || k === '\x7f') && this.mode !== 'promptRecipient') {
+		if (this.mode === 'confirm') { this.mode = 'icon'; this.confirmFor = null; this.draw(); return; }
+		this.exit(); return;
+	}
 	if (k === 'Q' || k === 'q') { this.exit(); return; }
 	if (this.mode === 'promptRecipient') {
 		if (k === '\r' || k === '\n') { this._commitRecipientPrompt(true); return; }

@@ -473,7 +473,7 @@ TelnetGateway.prototype.handleKey = function (k) {
         }
         return;
     }
-    if (k === '\x1B') { this.exit(); return; }
+    if (k === '\x1B' || k === '\b' || k === '\x7f') { this.exit(); return; }
     if (k === KEY_LEFT) { this._moveSelection(-1); return; }
     if (k === KEY_RIGHT) { this._moveSelection(1); return; }
     if (k === KEY_UP) { this._moveSelection(-(this._gridLayout ? this._gridLayout.cols : 1)); return; }

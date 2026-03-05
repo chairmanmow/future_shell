@@ -1600,6 +1600,8 @@ IconShell.prototype._handleNavigationKey = function (ch) {
             this.openSelection();
             return true;
         case '\x1B': // ESC: up a level (if possible)
+        case '\b':   // BACKSPACE: same as ESC
+        case '\x7f': // DEL: same as ESC
             if (this.stack.length > 1) {
                 if (this._resetTypeahead) this._resetTypeahead();
                 this.changeFolder(null, { direction: 'up' });

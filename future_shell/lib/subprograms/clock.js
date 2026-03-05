@@ -124,7 +124,7 @@ function padSplit(left, right, width) {
     return left + padFill('', middle, ' ') + right;
 }
 
-ClockSub.prototype.handleKey = function (k) { if (!k) return; if (k === '\x1B' || k === 'Q' || k === 'q') { this.exit(); return; } };
+ClockSub.prototype.handleKey = function (k) { if (!k) return; if (k === '\x1B' || k === '\b' || k === '\x7f' || k === 'Q' || k === 'q') { this.exit(); return; } };
 
 ClockSub.prototype.cleanup = function () {
     try { if (this._timerEvent) this._timerEvent.abort = true; } catch (e) { }

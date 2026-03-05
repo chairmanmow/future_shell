@@ -704,7 +704,7 @@ UsageViewer.prototype.handleKey = function (key) {
         }
     }
     switch (key) {
-        case '\x1B': this._activateBackButton(); return;
+        case '\x1B': case '\b': case '\x7f': this._activateBackButton(); return;
         case 'Q': case 'q': this.exit(); return;
         case 'R': case 'r': this._loadData(); this.draw(); return;
         case 'S': this._activateSortButton(); return;

@@ -1095,6 +1095,10 @@ MessageBoard.prototype._handleKey = function (key) {
             this.exit(); return false;
         }
     }
+    // BACKSPACE as ESC alternative for group view (other views handle backspace in their own controllers)
+    if ((key === '\b' || key === '\x08' || key === '\x7f') && this.view === 'group') {
+        this.exit(); return false;
+    }
     if (this.view === 'threads' && (key === '/' || key === 's' || key === 'S')) {
         this._promptSearch(this.cursub || this._lastActiveSubCode || null, 'threads');
         return false;

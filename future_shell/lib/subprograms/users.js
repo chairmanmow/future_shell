@@ -1018,7 +1018,7 @@ Users.prototype._handleMainKey = function (k) {
     var tileCount = tiles.length;
     var meta = this._tileMeta;
     switch (k) {
-        case '\x1B': case 'Q': case 'q': this.exit(); return;
+        case '\x1B': case '\b': case '\x7f': case 'Q': case 'q': this.exit(); return;
         case 'O': case 'o': this._toggleWhichUsers(); this.page = 0; this.selectedIndex = 0; this.draw(); return;
         case 'N': case 'n': this.sortMode = 'N'; this.page = 0; this.selectedIndex = 0; this.draw(); return;
         case 'L': case 'l': this.sortMode = 'L'; this.page = 0; this.selectedIndex = 0; this.draw(); return;
