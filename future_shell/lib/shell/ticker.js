@@ -63,14 +63,22 @@ function ShellTicker(opts) {
     // How often to re-fetch RSS data (ms) — default 5 minutes
     this.refreshIntervalMs = (typeof cfg.refresh_interval === 'number') ? cfg.refresh_interval : 300000;
 
-    // Feed URLs to rotate through; resolved from config feed keys
-    this._feedUrls = [];
+    // Global config feed URLs (fallback when no per-user prefs exist)
+    this._globalFeedUrls = [];
     if (Array.isArray(cfg._resolvedUrls) && cfg._resolvedUrls.length) {
-        this._feedUrls = cfg._resolvedUrls.slice();
+        this._globalFeedUrls = cfg._resolvedUrls.slice();
     }
 
-    // Enabled flag
-    this.enabled = (cfg.enabled !== false) && (this._feedUrls.length > 0);
+    // Per-user settings (loaded from JSON prefs file)
+    this._randomOrder = !!(cfg.random_order);
+    this._useFavorites = !!(cfg.use_favorites);
+
+    // Feed URLs to rotate through (resolved at init / reload)
+    this._feedUrls = [];
+
+    // Enabled flag — re-evaluated after prefs load
+    this._cfgEnabled = (cfg.enabled !== false);
+    this.enabled = false; // set by _resolveFeeds()
 
     // State
     this._headlines = [];         // Array of { title, source }
@@ -83,6 +91,10 @@ function ShellTicker(opts) {
     this._fetching = false;
     this._initialized = false;
     this._timerEvent = null;
+
+    // Load per-user prefs and resolve feed URLs
+    this._loadUserPrefs();
+    this._resolveFeeds();
 }
 
 /**
@@ -111,6 +123,121 @@ ShellTicker.prototype.detach = function () {
         this._timerEvent.abort = true;
         this._timerEvent = null;
     }
+};
+
+// ---------------------------------------------------------------------------
+// Per-user preferences
+// ---------------------------------------------------------------------------
+
+ShellTicker.prototype._userPrefsPath = function () {
+    var base = '';
+    try { if (system && system.mods_dir) base = system.mods_dir; } catch (_) {}
+    if (!base && typeof js !== 'undefined' && js && js.exec_dir) base = js.exec_dir;
+    if (!base) base = '.';
+    if (base.charAt(base.length - 1) !== '/' && base.charAt(base.length - 1) !== '\\') base += '/';
+    var key = 'guest';
+    try {
+        if (typeof user === 'object' && user) {
+            if (typeof user.number === 'number' && user.number > 0) key = 'user' + user.number;
+            else if (user.alias) key = 'alias_' + String(user.alias).toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        }
+    } catch (_) {}
+    return base + 'future_shell/data/ticker/prefs_' + key + '.json';
+};
+
+ShellTicker.prototype._loadUserPrefs = function () {
+    try {
+        var path = this._userPrefsPath();
+        var f = new File(path);
+        if (!f.exists) return; // no per-user prefs; use global config
+        if (!f.open('r')) return;
+        var text = '';
+        try { text = f.readAll().join('\n'); } catch (_) {}
+        f.close();
+        if (!text) return;
+        var prefs = JSON.parse(text);
+        if (!prefs || typeof prefs !== 'object') return;
+        if (prefs.random_order !== undefined) this._randomOrder = !!prefs.random_order;
+        if (prefs.use_favorites !== undefined) this._useFavorites = !!prefs.use_favorites;
+        if (Array.isArray(prefs.feeds) && prefs.feeds.length) {
+            this._userFeedUrls = [];
+            for (var i = 0; i < prefs.feeds.length; i++) {
+                if (prefs.feeds[i] && prefs.feeds[i].url) {
+                    this._userFeedUrls.push(prefs.feeds[i].url);
+                }
+            }
+        }
+    } catch (e) {
+        try { dbug('ticker: error loading user prefs: ' + e, 'ticker'); } catch (_) {}
+    }
+};
+
+ShellTicker.prototype._resolveFeeds = function () {
+    var urls = [];
+
+    // Per-user feed list takes priority over global config
+    if (this._userFeedUrls && this._userFeedUrls.length) {
+        urls = this._userFeedUrls.slice();
+    } else {
+        urls = this._globalFeedUrls.slice();
+    }
+
+    // Merge in newsreader favorites if enabled
+    if (this._useFavorites) {
+        var favUrls = this._readNewsreaderFavorites();
+        for (var i = 0; i < favUrls.length; i++) {
+            if (urls.indexOf(favUrls[i]) === -1) urls.push(favUrls[i]);
+        }
+    }
+
+    this._feedUrls = urls;
+    this.enabled = this._cfgEnabled && (urls.length > 0);
+};
+
+ShellTicker.prototype._readNewsreaderFavorites = function () {
+    var urls = [];
+    try {
+        var base = '';
+        try { if (system && system.mods_dir) base = system.mods_dir; } catch (_) {}
+        if (!base) base = '.';
+        if (base.charAt(base.length - 1) !== '/') base += '/';
+        var key = 'guest';
+        try {
+            if (typeof user === 'object' && user) {
+                if (typeof user.number === 'number' && user.number > 0) key = 'user' + user.number;
+                else if (user.alias) key = 'alias_' + String(user.alias).toLowerCase().replace(/[^a-z0-9]+/g, '_');
+            }
+        } catch (_) {}
+        var path = base + 'future_shell/data/newsreader/favorites_' + key + '.json';
+        var f = new File(path);
+        if (!f.exists) return urls;
+        if (!f.open('r')) return urls;
+        var text = '';
+        try { text = f.readAll().join('\n'); } catch (_) {}
+        f.close();
+        if (!text) return urls;
+        var parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && Array.isArray(parsed.feeds)) return parsed.feeds;
+    } catch (_) {}
+    return urls;
+};
+
+/**
+ * Reload per-user preferences (called by ticker_settings after saving).
+ * Refreshes feed URLs and settings without restarting the timer.
+ */
+ShellTicker.prototype.reloadPrefs = function () {
+    this._userFeedUrls = null;
+    this._loadUserPrefs();
+    this._resolveFeeds();
+
+    // If feeds changed, reset fetch state so we re-fetch
+    this._feedUrlIndex = 0;
+    this._lastFetchTs = 0;
+    if (!this._fetching) this._startFetch();
+
+    try { dbug('ticker: prefs reloaded, ' + this._feedUrls.length + ' feeds, random=' + this._randomOrder, 'ticker'); } catch (_) {}
 };
 
 /**
@@ -154,9 +281,18 @@ ShellTicker.prototype._switchMode = function (now) {
         // If no headlines yet, stay on banner (will retry next tick)
     } else {
         // Switch back to banner, advance headline index
-        this._headlineIndex++;
-        if (this._headlineIndex >= this._headlines.length) {
-            this._headlineIndex = 0;
+        if (this._randomOrder && this._headlines.length > 1) {
+            // Pick a random headline different from the current one
+            var prev = this._headlineIndex;
+            this._headlineIndex = Math.floor(Math.random() * this._headlines.length);
+            if (this._headlineIndex === prev) {
+                this._headlineIndex = (prev + 1) % this._headlines.length;
+            }
+        } else {
+            this._headlineIndex++;
+            if (this._headlineIndex >= this._headlines.length) {
+                this._headlineIndex = 0;
+            }
         }
         this._mode = 'banner';
         this._renderBanner();

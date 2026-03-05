@@ -281,7 +281,7 @@ var BUILTIN_ACTIONS = {
 		instanceProperty: 'tickerSettingsSub',
 		loadFailureMessage: 'Failed loading ticker_settings.js ',
 		missingMessage: 'TickerSettings class missing after load',
-		options: function () { return { parentFrame: this.root }; }
+		options: function () { return { parentFrame: this.root, shell: this }; }
 	}),
 	privatemsg: new SubprogramActionHandler('PrivateMsg', {
 		module: 'future_shell/lib/subprograms/private_msg.js',
@@ -896,6 +896,14 @@ var ICSH_SETTINGS = (function () {
 				}
 				if (tk.feeds !== undefined) {
 					tickerCfg.feedKeys = tk.feeds.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+				}
+				if (tk.random_order !== undefined) {
+					var ro = _parseBool(tk.random_order);
+					if (ro !== undefined) tickerCfg.random_order = ro;
+				}
+				if (tk.use_favorites !== undefined) {
+					var uf = _parseBool(tk.use_favorites);
+					if (uf !== undefined) tickerCfg.use_favorites = uf;
 				}
 				if (tk.headline_duration !== undefined) {
 					var hd = _parseNumber(tk.headline_duration);
