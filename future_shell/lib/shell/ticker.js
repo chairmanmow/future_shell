@@ -451,6 +451,15 @@ ShellTicker.prototype._pollFetchResult = function () {
 };
 
 /**
+ * Get the link URL for the currently displayed headline.
+ * Returns the URL string, or null if no headline is active.
+ */
+ShellTicker.prototype.getCurrentHeadlineLink = function () {
+    var headline = this._headlines[this._headlineIndex];
+    return (headline && headline.link) ? headline.link : null;
+};
+
+/**
  * Advance to the next feed URL (round-robin across configured feeds).
  */
 ShellTicker.prototype._advanceFeedUrl = function () {

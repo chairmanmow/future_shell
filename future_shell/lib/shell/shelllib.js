@@ -7,6 +7,7 @@ if (typeof dbug !== 'function') {
 }
 
 load("event-timer.js");
+load('key_defs.js');
 var ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
 var MAX_TOASTS_PER_TYPE = 5;
 try { load('future_shell/lib/effects/screensaver.js'); } catch (e) { }
@@ -18,6 +19,15 @@ try { load('future_shell/lib/subprograms/mrc.js'); } catch (e) { dbug('shell ini
 try { load('future_shell/lib/util/launch_queue.js'); } catch (e) { dbug('shell init unable to load launch_queue.js: ' + e, 'launch'); }
 try { load('future_shell/lib/util/hotspot_manger.js'); } catch (e) { dbug('shell init unable to load hotspot_manger.js: ' + e, 'hotspot'); }
 try { load('future_shell/lib/shell/ticker.js'); } catch (e) { dbug('shell init unable to load ticker.js: ' + e, 'ticker'); }
+var _TextBrowserModule = null;
+function _getTextBrowser() {
+    if (!_TextBrowserModule) {
+        try { _TextBrowserModule = load("future_shell/lib/util/text_browser.js"); } catch (e) {
+            try { dbug("TextBrowser load error: " + e, "browser"); } catch (_) {}
+        }
+    }
+    return _TextBrowserModule;
+}
 
 var SHELL_KEY_TOKEN_UP = (typeof KEY_UP !== 'undefined') ? KEY_UP : '\x1B[A';
 var SHELL_KEY_TOKEN_DOWN = (typeof KEY_DOWN !== 'undefined') ? KEY_DOWN : '\x1B[B';
@@ -755,6 +765,29 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         this._handleSubprogramKey(ch);
         return;
     }
+    // CTRL-B: Open current ticker headline in TextBrowser
+    if (ch === CTRL_B) {
+        if (this._ticker && typeof this._ticker.getCurrentHeadlineLink === 'function') {
+            var headlineLink = this._ticker.getCurrentHeadlineLink();
+            if (headlineLink) {
+                try {
+                    var tbMod = _getTextBrowser();
+                    if (tbMod && tbMod.TextBrowser) {
+                        var browser = new tbMod.TextBrowser();
+                        browser.open(headlineLink);
+                        browser = null;
+                    }
+                } catch (tbErr) {
+                    try { dbug('TextBrowser error: ' + tbErr, 'browser'); } catch (_) {}
+                }
+                // Force shell frames to repaint after independent overlay closed
+                try { this.root.invalidate(); this.root.cycle(); this.drawFolder(); } catch (_) {}
+                return true;
+            }
+        }
+        return true;
+    }
+
     if (this._handleNavigationKey(ch)) return true;
     if (this._handleTypeaheadKey(ch)) return true;
     if (this._handleHotkeyAction(ch)) return true;
