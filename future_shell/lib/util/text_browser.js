@@ -1,6 +1,9 @@
 // text_browser.js — Reusable modal for rendering web content on the BBS terminal
-// Usage: var browser = new TextBrowser({ parentFrame: shell.view });
+// Non-blocking: shell dispatches keys via handleKey(). No internal input loop.
+// Usage: var browser = new TextBrowser();
 //        browser.open('https://example.com/article');
+//        // Shell dispatches keys to browser.handleKey(ch) while browser._running
+//        // When browser._running becomes false, shell cleans up and repaints
 
 load('sbbsdefs.js');
 load('key_defs.js');
@@ -25,13 +28,12 @@ function _ensureHttp() {
 
 var _USER_AGENT = 'Mozilla/5.0 (compatible; SynchronetBBS/3.21; +https://synchro.net)';
 
-var NORMAL    = '\x01n';
+var NORMAL     = '\x01n';
 var STATUS_CLR = '\x01n\x01h\x01k';
 var ERROR_CLR  = '\x01n\x01h\x01r';
 
 function TextBrowser(opts) {
     opts = opts || {};
-    this._parentFrame = opts.parentFrame || null;
     this._width = opts.width || 0;
     this._height = opts.height || 0;
     this._useTdf = (opts.tdf !== false) && _tdfAvailable;
@@ -42,8 +44,13 @@ function TextBrowser(opts) {
     this._links = [];
     this._scrollPos = 0;
     this._running = false;
+    this._errorMode = false;
+    this._viewH = 0;
+    this._maxScroll = 0;
 }
 
+// Non-blocking open: fetches, renders, displays content. Sets _running = true.
+// The shell should then dispatch keys to handleKey() until _running becomes false.
 TextBrowser.prototype.open = function (url) {
     if (!url) return;
 
@@ -53,14 +60,14 @@ TextBrowser.prototype.open = function (url) {
     var html = this._fetch(url);
     if (html === null) {
         this._showError('Failed to fetch URL');
-        this._waitForDismiss();
-        this._destroyFrames();
+        this._errorMode = true;
+        this._running = true;
         return;
     }
     if (!html || !html.length) {
         this._showError('Empty response from server');
-        this._waitForDismiss();
-        this._destroyFrames();
+        this._errorMode = true;
+        this._running = true;
         return;
     }
 
@@ -71,8 +78,8 @@ TextBrowser.prototype.open = function (url) {
 
     if (!extracted.tokens || !extracted.tokens.length) {
         this._showError('No readable content found');
-        this._waitForDismiss();
-        this._destroyFrames();
+        this._errorMode = true;
+        this._running = true;
         return;
     }
 
@@ -90,29 +97,83 @@ TextBrowser.prototype.open = function (url) {
 
     if (!this._lines.length) {
         this._showError('No readable content found');
-        this._waitForDismiss();
-        this._destroyFrames();
+        this._errorMode = true;
+        this._running = true;
         return;
     }
 
+    this._viewH = this._contentFrame ? this._contentFrame.height : 24;
+    this._maxScroll = Math.max(0, this._lines.length - this._viewH);
     this._scrollPos = 0;
     this._renderContent();
     this._updateStatus();
-    this._scrollLoop();
+    this._running = true;
+};
+
+// Handle a single key press. Returns true if the key was consumed.
+TextBrowser.prototype.handleKey = function (ch) {
+    if (!this._running) return false;
+
+    // In error mode, only dismiss keys work
+    if (this._errorMode) {
+        if (ch === KEY_ESC || ch === 'q' || ch === 'Q' || ch === '\x08') {
+            this.close();
+        }
+        return true;
+    }
+
+    var oldPos = this._scrollPos;
+
+    switch (ch) {
+        case KEY_ESC:
+        case 'q':
+        case 'Q':
+            this.close();
+            return true;
+        case KEY_UP:
+            if (this._scrollPos > 0) this._scrollPos--;
+            break;
+        case KEY_DOWN:
+        case ' ':
+            if (this._scrollPos < this._maxScroll) this._scrollPos++;
+            break;
+        case KEY_PAGEUP:
+            this._scrollPos = Math.max(0, this._scrollPos - this._viewH);
+            break;
+        case KEY_PAGEDN:
+            this._scrollPos = Math.min(this._maxScroll, this._scrollPos + this._viewH);
+            break;
+        case KEY_HOME:
+            this._scrollPos = 0;
+            break;
+        case KEY_END:
+            this._scrollPos = this._maxScroll;
+            break;
+        default:
+            break;
+    }
+
+    if (this._scrollPos !== oldPos) {
+        this._renderContent();
+        this._updateStatus();
+    }
+    return true;
+};
+
+// Close the browser and destroy frames. Sets _running = false.
+TextBrowser.prototype.close = function () {
     this._destroyFrames();
 };
 
 TextBrowser.prototype._createFrames = function () {
     var w = this._width || console.screen_columns;
     var h = this._height || console.screen_rows;
-    var attr = 7; // white on black
-    // Create an independent root frame (no parent) like Subprogram.enter() does.
-    // This avoids corrupting the shell's frame tree.
+    var attr = 7;
     this._frame = new Frame(1, 1, w, h, attr);
     this._frame.open();
     this._contentFrame = new Frame(1, 1, w, h - 1, attr, this._frame);
     this._contentFrame.open();
-    var statusAttr = (1 << 4) | 15; // bright white on blue
+    var statusAttr = (1 << 4) | 15;
     this._statusFrame = new Frame(1, h, w, 1, statusAttr, this._frame);
     this._statusFrame.open();
     this._frame.cycle();
@@ -120,8 +181,9 @@ TextBrowser.prototype._createFrames = function () {
 
 TextBrowser.prototype._destroyFrames = function () {
     this._running = false;
-    try { if (this._contentFrame) { this._contentFrame.clear(); this._contentFrame.close(); } } catch (_) {}
-    try { if (this._statusFrame) { this._statusFrame.clear(); this._statusFrame.close(); } } catch (_) {}
+    this._errorMode = false;
+    // Close only the root frame. Its children are closed recursively by frame.js.
+    // Closing children first can double-close and corrupt frame/display state.
     try { if (this._frame) { this._frame.clear(); this._frame.close(); } } catch (_) {}
     this._statusFrame = null;
     this._contentFrame = null;
@@ -129,8 +191,6 @@ TextBrowser.prototype._destroyFrames = function () {
     this._lines = [];
     this._links = [];
 };
-
-
 
 TextBrowser.prototype._fetch = function (url) {
     try {
@@ -202,60 +262,6 @@ TextBrowser.prototype._showError = function (msg) {
     frame.gotoxy(1, y + 2);
     frame.center(STATUS_CLR + 'Press ESC to close' + NORMAL);
     frame.cycle();
-};
-
-TextBrowser.prototype._waitForDismiss = function () {
-    while (true) {
-        var ch = console.inkey(K_NONE, 500);
-        if (!ch || ch === '') continue;
-        if (ch === KEY_ESC || ch === 'q' || ch === 'Q' || ch === '\x08') break;
-    }
-};
-
-TextBrowser.prototype._scrollLoop = function () {
-    this._running = true;
-    var viewH = this._contentFrame ? this._contentFrame.height : 24;
-    var maxScroll = Math.max(0, this._lines.length - viewH);
-
-    while (this._running) {
-        var ch = console.inkey(K_NONE, 200);
-        if (!ch || ch === '') continue;
-        var oldPos = this._scrollPos;
-
-        switch (ch) {
-            case KEY_ESC:
-            case 'q':
-            case 'Q':
-                this._running = false;
-                return;
-            case KEY_UP:
-                if (this._scrollPos > 0) this._scrollPos--;
-                break;
-            case KEY_DOWN:
-            case ' ':
-                if (this._scrollPos < maxScroll) this._scrollPos++;
-                break;
-            case KEY_PAGEUP:
-                this._scrollPos = Math.max(0, this._scrollPos - viewH);
-                break;
-            case KEY_PAGEDN:
-                this._scrollPos = Math.min(maxScroll, this._scrollPos + viewH);
-                break;
-            case KEY_HOME:
-                this._scrollPos = 0;
-                break;
-            case KEY_END:
-                this._scrollPos = maxScroll;
-                break;
-            default:
-                break;
-        }
-
-        if (this._scrollPos !== oldPos) {
-            this._renderContent();
-            this._updateStatus();
-        }
-    }
 };
 
 function _visibleLen(str) {

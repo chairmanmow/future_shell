@@ -112,10 +112,12 @@ function _renderTdfHeading(text, width) {
     try {
         if (typeof loadfont !== 'function' || typeof output !== 'function') return null;
         if (typeof getwidth !== 'function') return null;
-        var fontNames = ['future', 'small', 'thin', 'tiny', 'mini', 'simple'];
+        var fontNames = ['future2x', 'thin2', 'thinx', 'tiny'];
         var font = null;
         for (var i = 0; i < fontNames.length; i++) {
             try {
+                var fontPath = system.ctrl_dir + 'tdfonts/' + fontNames[i] + '.tdf';
+                if (!file_exists(fontPath)) { font = null; continue; }
                 font = loadfont(fontNames[i]);
                 if (font) {
                     var fw = getwidth(text, font);
