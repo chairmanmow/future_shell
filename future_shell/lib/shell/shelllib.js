@@ -759,8 +759,17 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         this._handleSubprogramKey(ch);
         return;
     }
-    // CTRL-B: Open current ticker headline in text browser
-    if (ch === '\x02') {
+    // Ticker headline click: buffer chars and match '|TK|' token
+    // Uses pipe-delimited token to avoid prefix conflict with grid tokens (~gN~).
+    // Control chars < 32 are silently dropped by the C stuff_str function,
+    // so we use a printable multi-char token that survives injection.
+    var _tkToken = '|TK|';
+    this._tickerHotspotBuf = (this._tickerHotspotBuf || '') + ch;
+    if (this._tickerHotspotBuf.length > 8) {
+        this._tickerHotspotBuf = this._tickerHotspotBuf.slice(-8);
+    }
+    if (this._tickerHotspotBuf.indexOf(_tkToken) !== -1) {
+        this._tickerHotspotBuf = '';
         if (this._ticker && typeof this._ticker.getCurrentHeadlineLink === 'function') {
             var headlineLink = this._ticker.getCurrentHeadlineLink();
             if (headlineLink) {
@@ -770,6 +779,11 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         }
         return true;
     }
+    var _tkSliceLen = Math.min(_tkToken.length, this._tickerHotspotBuf.length);
+    if (_tkSliceLen > 0 && _tkToken.substring(0, _tkSliceLen) === this._tickerHotspotBuf.slice(-_tkSliceLen)) {
+        return true;
+    }
+    this._tickerHotspotBuf = '';
     if (this._handleNavigationKey(ch)) return true;
     if (this._handleTypeaheadKey(ch)) return true;
     if (this._handleHotkeyAction(ch)) return true;

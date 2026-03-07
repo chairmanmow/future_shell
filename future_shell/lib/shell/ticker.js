@@ -404,13 +404,13 @@ ShellTicker.prototype._renderHeadline = function () {
         if (this._hotspotManager && this._hotspotLayerId) {
             try {
                 this._hotspotManager.setLayerHotspots(this._hotspotLayerId, [
-                    { key: '\x02', swallow: false, x1: 0, x2: width - 1, y1: 0 }
+                    { key: '|TK|', swallow: false, x1: 0, x2: width - 1, y1: 0 }
                 ]);
                 this._headlineHotspotActive = true;
             } catch (_hsErr) { }
         } else if (typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
             try {
-                console.add_hotspot('\x02', false, 0, width - 1, 0);
+                console.add_hotspot('|TK|', false, 0, width - 1, 0);
                 this._headlineHotspotActive = true;
             } catch (_hsErr) { }
         }
