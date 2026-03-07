@@ -750,7 +750,14 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         return true;
     }
     if (this._handleGridHotspotKey && this._handleGridHotspotKey(ch)) return true;
-    // CTRL-B: Open current ticker headline in text browser (works even with active subprogram)
+    if (this.activeSubprogram) {
+        if (typeof dbug === 'function') {
+            try { dbug('processKey:forward-to-sub key=' + JSON.stringify(ch) + ' sub=' + (this.activeSubprogram.id || this.activeSubprogram.name || 'unknown'), 'keylog'); } catch (_) { }
+        }
+        this._handleSubprogramKey(ch);
+        return;
+    }
+    // CTRL-B: Open current ticker headline in text browser
     if (ch === '\x02') {
         if (this._ticker && typeof this._ticker.getCurrentHeadlineLink === 'function') {
             var headlineLink = this._ticker.getCurrentHeadlineLink();
@@ -760,13 +767,6 @@ IconShell.prototype.processKeyboardInput = function (ch) {
             }
         }
         return true;
-    }
-    if (this.activeSubprogram) {
-        if (typeof dbug === 'function') {
-            try { dbug('processKey:forward-to-sub key=' + JSON.stringify(ch) + ' sub=' + (this.activeSubprogram.id || this.activeSubprogram.name || 'unknown'), 'keylog'); } catch (_) { }
-        }
-        this._handleSubprogramKey(ch);
-        return;
     }
     if (this._handleNavigationKey(ch)) return true;
     if (this._handleTypeaheadKey(ch)) return true;
