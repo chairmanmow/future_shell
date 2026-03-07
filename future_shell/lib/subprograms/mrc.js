@@ -71,6 +71,23 @@ function ctrlA(text) {
     return text;
 }
 
+// URL detection regex — matches http/https URLs in plain text
+var _urlPattern = /https?:\/\/[^\s<>"'\x01|]+/gi;
+
+function findUrls(plainText) {
+    if (!plainText || typeof plainText !== 'string') return [];
+    var results = [];
+    var m;
+    _urlPattern.lastIndex = 0;
+    while ((m = _urlPattern.exec(plainText)) !== null) {
+        var url = m[0];
+        // Strip trailing punctuation that's likely not part of the URL
+        url = url.replace(/[).,;:!?]+$/, '');
+        results.push({ url: url, index: m.index, length: url.length });
+    }
+    return results;
+}
+
 function nowTimestamp() {
     var d = new Date();
     return format('%02d:%02d:%02d', d.getHours(), d.getMinutes(), d.getSeconds());
@@ -320,6 +337,8 @@ MRCService.prototype._bindSessionEvents = function () {
 
 MRCService.prototype._handlePrivateEcho = function (target, msg) {
     var epoch = Date.now();
+    var _pmPlain = stripSyncColors(msg);
+    var _pmUrls = findUrls(_pmPlain);
     var display = format('\x01n\x01h[%s]\x01n \x01c%s\x01n -> \x01c%s\x01n %s', nowTimestamp(), user.alias, target, ctrlA(msg));
     this._pushMessage({
         id: ++this._messageSeq,
@@ -330,7 +349,8 @@ MRCService.prototype._handlePrivateEcho = function (target, msg) {
         mention: false,
         system: false,
         body: ctrlA(msg),
-        plain: stripSyncColors(msg),
+        plain: _pmPlain,
+        urls: _pmUrls,
         display: display,
         wrapColor: this._resolveWrapColor(user.alias, msg)
     });
@@ -372,6 +392,7 @@ MRCService.prototype._handleIncoming = function (msg, opts) {
         mention ? '\x01h\x01r! ' : '',
         ctrlA(msg.body || '')
     );
+    var _inUrls = findUrls(plain);
     var payload = {
         id: ++this._messageSeq,
         from: msg.from_user || 'System',
@@ -382,6 +403,7 @@ MRCService.prototype._handleIncoming = function (msg, opts) {
         system: false,
         body: ctrlA(msg.body || ''),
         plain: plain,
+        urls: _inUrls,
         display: display,
         wrapColor: this._resolveWrapColor(msg.from_user, msg.body),
         backlog: opts.backlog === true
@@ -399,6 +421,8 @@ MRCService.prototype._handleServerText = function (text, opts) {
     opts = opts || {};
     if (!text) return;
     var epoch = (typeof opts.ts === 'number') ? opts.ts : Date.now();
+    var _srvPlain = stripSyncColors(text);
+    var _srvUrls = findUrls(_srvPlain);
     var display = format('\x01n\x01h[%s]\x01n \x01c%s\x01n %s', nowTimestamp(), 'System', ctrlA(text));
     this._pushMessage({
         id: ++this._messageSeq,
@@ -409,7 +433,8 @@ MRCService.prototype._handleServerText = function (text, opts) {
         mention: false,
         system: true,
         body: ctrlA(text),
-        plain: stripSyncColors(text),
+        plain: _srvPlain,
+        urls: _srvUrls,
         display: display,
         wrapColor: '',
         backlog: opts.backlog === true,
@@ -1742,6 +1767,44 @@ MRC.prototype._registerHotspots = function () {
     }
 };
 
+MRC.prototype._registerUrlHotspots = function (wrappedLines, start, end) {
+    // Clear previous URL hotspot tokens (keep button hotspots)
+    var oldTokens = [];
+    for (var t in this._hotspotHandlers) {
+        if (this._hotspotHandlers.hasOwnProperty(t) && t.charAt(0) === '|') {
+            oldTokens.push(t);
+        }
+    }
+    for (var ot = 0; ot < oldTokens.length; ot++) {
+        delete this._hotspotHandlers[oldTokens[ot]];
+    }
+    if (!this.messagesFrame) return;
+    // messagesFrame.x and .y are 1-based; hotspot coords are 0-based
+    var frameX = (this.messagesFrame.x || 1) - 1;
+    var frameY = (this.messagesFrame.y || 1) - 1;
+    var frameW = Math.max(1, this.messagesFrame.width);
+    this._urlHotspotCounter = this._urlHotspotCounter || 0;
+    var screenRow = 0;
+    for (var li = start; li < end; li++) {
+        var line = wrappedLines[li];
+        if (!line) { screenRow++; continue; }
+        // Strip Ctrl-A codes to get visible text for URL matching
+        var visible = line.replace(/./g, '');
+        var urls = findUrls(visible);
+        for (var u = 0; u < urls.length; u++) {
+            var urlInfo = urls[u];
+            var token = '|u' + (this._urlHotspotCounter++).toString(36) + '|';
+            this._hotspotHandlers[token] = { type: 'url', url: urlInfo.url };
+            var minX = frameX + urlInfo.index;
+            var maxX = frameX + urlInfo.index + urlInfo.length - 1;
+            if (maxX >= frameX + frameW) maxX = frameX + frameW - 1;
+            var absY = frameY + screenRow;
+            try { console.add_hotspot(token, false, minX, maxX, absY); } catch (_) { }
+        }
+        screenRow++;
+    }
+};
+
 MRC.prototype._cleanup = function () {
     this._clearHotspots();
     if (this._systemModal && typeof this._systemModal.close === 'function') {
@@ -1781,10 +1844,16 @@ MRC.prototype._processHotspotKey = function (key) {
     // Check for complete token match
     for (var token in this._hotspotHandlers) {
         if (this._hotspotHandlers.hasOwnProperty(token) && this._hotspotBuffer.indexOf(token) !== -1) {
-            var button = this._hotspotHandlers[token];
+            var handler = this._hotspotHandlers[token];
             this._hotspotBuffer = '';
-            if (button && typeof button.press === 'function') {
-                try { button.press(); } catch (_) { }
+            if (handler && handler.type === 'url' && handler.url) {
+                if (this.shell && typeof this.shell.openWebsite === 'function') {
+                    try { this.shell.openWebsite(handler.url); } catch (_) { }
+                }
+                return true;
+            }
+            if (handler && typeof handler.press === 'function') {
+                try { handler.press(); } catch (_) { }
             }
             return true;
         }
@@ -1965,6 +2034,8 @@ MRC.prototype._renderMessages = function () {
         this.messagesFrame.putmsg(wrappedLines[i]);
     }
     
+    // Register URL hotspots for visible message lines
+    this._registerUrlHotspots(wrappedLines, start, end);
     if (this.messageScroll) this.messageScroll.cycle();
     this.messagesFrame.cycle();
 };
