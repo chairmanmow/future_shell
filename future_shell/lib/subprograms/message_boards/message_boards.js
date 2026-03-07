@@ -1403,6 +1403,7 @@ MessageBoard.prototype._resetState = function () {
     this._readBodyText = '';
     this._readBodyLineCache = null;
     this._readBodyLineCacheWidth = 0;
+    this._readUrlList = [];
     this._frameCycleEvent = null;
     // Legacy frame-based notice properties removed; using Modal-only path
     this._readNoticeModal = null; // spinner modal instance
@@ -2454,7 +2455,29 @@ MessageBoard.prototype._formatReadStatus = function (dispStart, dispEnd, totalLi
     if (readMode === 'flat' && totalLines > 0) {
         status += '  [J]=Jump to #';
     }
+    if (this._readUrlList && this._readUrlList.length) {
+        status += '  [O]=Open URL';
+        if (this._readUrlList.length > 1) status += ' (' + this._readUrlList.length + ')';
+    }
     return status;
+};
+
+MessageBoard.prototype._extractUrlsFromBody = function (text) {
+    if (!text || typeof text !== 'string') return [];
+    var pattern = /https?:\/\/[^\s<>"'\x01|]+/gi;
+    var results = [];
+    var seen = {};
+    var m;
+    pattern.lastIndex = 0;
+    while ((m = pattern.exec(text)) !== null) {
+        var url = m[0];
+        url = url.replace(/[).,;:!?]+$/, '');
+        if (!seen[url]) {
+            seen[url] = true;
+            results.push(url);
+        }
+    }
+    return results;
 };
 
 MessageBoard.prototype._jumpToThreadViewFromRead = function () {

@@ -748,6 +748,7 @@ if (typeof lazyLoadModule !== 'function') {
             // Persist current header/body for reply quoting regardless of later frame destruction
             board.currentMessageHeader = fullHeader;
             board.currentMessageBody = displayBody;
+            board._readUrlList = board._extractUrlsFromBody ? board._extractUrlsFromBody(board.currentMessageRawBody || displayBody) : [];
             if (!board.currentMessageRawBody) board.currentMessageRawBody = displayBody; // fallback if raw missing
             if (board._paintRead) board._paintRead();
         } finally {
@@ -866,6 +867,42 @@ if (typeof lazyLoadModule !== 'function') {
                 return true;
             case 'S': case 's': case '/':
                 board._promptSearch(board.cursub || board._lastActiveSubCode || null, 'read');
+                return false;
+            case 'O': case 'o':
+                if (!board._readUrlList || !board._readUrlList.length) {
+                    if (board._writeStatus) board._writeStatus('No URLs found in this message.');
+                    return false;
+                }
+                if (board._readUrlList.length === 1) {
+                    if (board.shell && typeof board.shell.openWebsite === 'function') {
+                        board.shell.openWebsite(board._readUrlList[0]);
+                    }
+                    return false;
+                }
+                var urlParent = board._readBodyFrame || board.outputFrame || board.parentFrame;
+                if (typeof Modal === 'function' && urlParent) {
+                    var urlItems = [];
+                    for (var ui = 0; ui < board._readUrlList.length; ui++) {
+                        urlItems.push({ label: (ui + 1) + '. ' + board._readUrlList[ui], value: board._readUrlList[ui] });
+                    }
+                    var urlModal = new Modal({
+                        parentFrame: urlParent,
+                        overlay: true,
+                        type: 'list',
+                        title: 'Open URL',
+                        items: urlItems,
+                        onSelect: function (item) {
+                            if (item && item.value && board.shell && typeof board.shell.openWebsite === 'function') {
+                                board.shell.openWebsite(item.value);
+                            }
+                        },
+                        onCancel: function () {}
+                    });
+                } else {
+                    if (board.shell && typeof board.shell.openWebsite === 'function') {
+                        board.shell.openWebsite(board._readUrlList[0]);
+                    }
+                }
                 return false;
             default:
                 return undefined; // Allow fallthrough to board._handleReadKey for other keys
