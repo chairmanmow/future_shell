@@ -399,17 +399,18 @@ ShellTicker.prototype._renderHeadline = function () {
 
     // Register clickable hotspot on the header row (reuses CTRL-B cmd)
     // Must go via HotSpotManager so it survives grid redraws (which clear_hotspots + re-apply).
+    // Coordinates are 0-based (terminal internal row/column), NOT 1-based gotoxy.
     if (headline.link) {
         if (this._hotspotManager && this._hotspotLayerId) {
             try {
                 this._hotspotManager.setLayerHotspots(this._hotspotLayerId, [
-                    { key: '\x02', swallow: false, x1: 1, x2: width, y1: 1 }
+                    { key: '\x02', swallow: false, x1: 0, x2: width - 1, y1: 0 }
                 ]);
                 this._headlineHotspotActive = true;
             } catch (_hsErr) { }
         } else if (typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
             try {
-                console.add_hotspot('\x02', false, 1, width, 1);
+                console.add_hotspot('\x02', false, 0, width - 1, 0);
                 this._headlineHotspotActive = true;
             } catch (_hsErr) { }
         }
