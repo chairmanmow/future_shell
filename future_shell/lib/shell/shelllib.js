@@ -284,7 +284,7 @@ IconShell.prototype.init = function () {
 
     this.chatNotifications = [];
     // Chat subprogram gets reference to persistent backend
-    this.chat = new Chat(this.jsonchat);
+    this.chat = new Chat(this.jsonchat, { openWebsite: function(url) { self.openWebsite(url); } });
     var origUpdate = this.jsonchat.update;
     var self = this;
     this.jsonchat.update = function (packet) {

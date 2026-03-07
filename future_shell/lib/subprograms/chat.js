@@ -35,6 +35,7 @@ function Chat(jsonchat, opts) {
     });
     this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'chat', layerName: 'chat-controls', priority: 70 });
     this._urlHotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'chat-urls', layerName: 'chat-urls', priority: 69 });
+    this._openWebsite = opts.openWebsite || null;
     this.jsonchat = jsonchat; // persistent backend instance
     this.input = "";
     this._inputCursor = 0;      // cursor position in input string
@@ -2510,14 +2511,8 @@ Chat.prototype._registerControlHotspots = function () {
 Chat.prototype._registerUrlHotspots = function (layoutLines, startLine, endLine) {
     this._urlHotspotHandlers = {};
     this._urlHotspotCounter = 0;
-    if (!this.leftMsgFrame || !this.rightMsgFrame) {
-        if (this._urlHotspots) this._urlHotspots.set([]);
-        return;
-    }
-    if (!layoutLines || !layoutLines.length) {
-        if (this._urlHotspots) this._urlHotspots.set([]);
-        return;
-    }
+    if (!this.leftMsgFrame || !this.rightMsgFrame) return;
+    if (!layoutLines || !layoutLines.length) return;
     var leftFrameX = (this.leftMsgFrame.x || 1) - 1;
     var leftFrameY = (this.leftMsgFrame.y || 1) - 1;
     var rightFrameX = (this.rightMsgFrame.x || 1) - 1;
@@ -2565,6 +2560,7 @@ Chat.prototype._registerUrlHotspots = function (layoutLines, startLine, endLine)
         }
     }
     if (this._urlHotspots) this._urlHotspots.set(defs);
+
 };
 
 Chat.prototype._activateControlAction = function (action) {
@@ -2646,8 +2642,13 @@ Chat.prototype._processControlHotspotInput = function (key) {
             if (!this._urlHotspotHandlers.hasOwnProperty(ut)) continue;
             if (!ut || !ut.length) continue;
             if (this._hotspotBuffer.slice(-ut.length) === ut) {
-                if (this.shell && typeof this.shell.openWebsite === 'function') {
-                    this.shell.openWebsite(this._urlHotspotHandlers[ut]);
+                var _url = this._urlHotspotHandlers[ut];
+                this._statusText = 'Opening: ' + (_url || '(empty)').substr(0, 40);
+                this._lastStatusUpdateTs = Date.now();
+                this._lastInputRendered = '';
+                try { this._refreshHeaderAndInput(true); } catch (_) { }
+                if (typeof this._openWebsite === 'function') {
+                    this._openWebsite(_url);
                 }
                 this._hotspotBuffer = '';
                 handled = true;
@@ -2862,6 +2863,7 @@ Chat.prototype.draw = function () {
         this.lastRow = 0;
     }
 
+    this._registerControlHotspots();
     this._registerUrlHotspots(layout.lines, windowInfo.startLine, windowInfo.endLine);
     this._renderAvatars(groups);
     this._lastInputRendered = '';
