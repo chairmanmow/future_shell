@@ -54,6 +54,8 @@ var _TICKER_HEADLINE_STYLES = [
 function ShellTicker(opts) {
     opts = opts || {};
     this.shell = opts.shell || null;
+    this._hotspotManager = opts.hotspotManager || null;
+    this._hotspotLayerId = opts.hotspotLayerId || null;
     var cfg = opts.config || {};
 
     // Display durations (ms)
@@ -134,6 +136,8 @@ ShellTicker.prototype.detach = function () {
     this._fetchQueue = null;
     this._headlines = [];
     this.shell = null;
+    this._hotspotManager = null;
+    this._hotspotLayerId = null;
 };
 
 // ---------------------------------------------------------------------------
@@ -394,13 +398,21 @@ ShellTicker.prototype._renderHeadline = function () {
     frame.cycle();
 
     // Register clickable hotspot on the header row (reuses CTRL-B cmd)
-    if (headline.link && typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
-        try {
-            var absY = (typeof frame.screen_y === 'number') ? frame.screen_y : ((typeof frame.y === 'number') ? frame.y : 1);
-            var absX = (typeof frame.screen_x === 'number') ? frame.screen_x : ((typeof frame.x === 'number') ? frame.x : 1);
-            console.add_hotspot('\x02', false, absX, absX + width - 1, absY);
-            this._headlineHotspotActive = true;
-        } catch (_hsErr) { }
+    // Must go via HotSpotManager so it survives grid redraws (which clear_hotspots + re-apply).
+    if (headline.link) {
+        if (this._hotspotManager && this._hotspotLayerId) {
+            try {
+                this._hotspotManager.setLayerHotspots(this._hotspotLayerId, [
+                    { key: '\x02', swallow: false, x1: 1, x2: width, y1: 1 }
+                ]);
+                this._headlineHotspotActive = true;
+            } catch (_hsErr) { }
+        } else if (typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
+            try {
+                console.add_hotspot('\x02', false, 1, width, 1);
+                this._headlineHotspotActive = true;
+            } catch (_hsErr) { }
+        }
     }
 };
 
@@ -477,9 +489,9 @@ ShellTicker.prototype.getCurrentHeadlineLink = function () {
 ShellTicker.prototype._clearHeadlineHotspot = function () {
     if (!this._headlineHotspotActive) return;
     this._headlineHotspotActive = false;
-    // We cannot selectively remove one hotspot; clear_hotspots would nuke everything.
-    // Instead we simply stop tracking — the next add_hotspot or grid redraw will overwrite.
-    // The hotspot region becomes stale, but CTRL-B is benign when no headline link exists.
+    if (this._hotspotManager && this._hotspotLayerId) {
+        try { this._hotspotManager.clearLayer(this._hotspotLayerId); } catch (_) { }
+    }
 };
 
 /**

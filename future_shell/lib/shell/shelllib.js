@@ -207,12 +207,14 @@ IconShell.prototype.init = function () {
     this._gridHotspotLayerId = null;
     this._toastHotspotLayerId = null;
     this._screensaverHotspotLayerId = null;
+    this._tickerHotspotLayerId = null;
     if (typeof HotSpotManager === 'function') {
         try {
             this.hotspotManager = new HotSpotManager({ console: console, baseLayerName: 'shell-grid', baseLayerPriority: 10 });
             this._gridHotspotLayerId = this.hotspotManager.getBaseLayerId();
             this._toastHotspotLayerId = this.hotspotManager.ensureLayer('toast-overlay', 100, { active: false });
             this._screensaverHotspotLayerId = this.hotspotManager.ensureLayer('screensaver', 200, { active: false });
+            this._tickerHotspotLayerId = this.hotspotManager.ensureLayer('ticker', 5, { active: true });
         } catch (hotspotErr) {
             this.hotspotManager = null;
             try { dbug('hotspot manager init error: ' + hotspotErr, 'hotspot'); } catch (_) { }
@@ -372,7 +374,7 @@ IconShell.prototype.init = function () {
     if (typeof ShellTicker === 'function') {
         var tickerConfig = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.ticker) ? ICSH_SETTINGS.ticker : {};
         try {
-            this._ticker = new ShellTicker({ shell: this, config: tickerConfig });
+            this._ticker = new ShellTicker({ shell: this, config: tickerConfig, hotspotManager: this.hotspotManager, hotspotLayerId: this._tickerHotspotLayerId });
             if (this._ticker.enabled && this.timer) {
                 this._ticker.attach(this.timer);
                 dbug('[shell] Ticker initialized with ' + this._ticker._feedUrls.length + ' feed(s)', 'ticker');
