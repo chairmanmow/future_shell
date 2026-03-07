@@ -122,6 +122,7 @@ ShellTicker.prototype.attach = function (timer) {
  */
 ShellTicker.prototype.detach = function () {
     this._destroyed = true;
+    this._clearHeadlineHotspot();
     if (this._timerEvent) {
         this._timerEvent.abort = true;
         this._timerEvent = null;
@@ -327,6 +328,7 @@ ShellTicker.prototype._renderBanner = function () {
     if (typeof shell._refreshHeaderFrame === 'function') {
         shell._refreshHeaderFrame();
     }
+    this._clearHeadlineHotspot();
 };
 
 /**
@@ -390,6 +392,16 @@ ShellTicker.prototype._renderHeadline = function () {
         frame.center(text);
     }
     frame.cycle();
+
+    // Register clickable hotspot on the header row (reuses CTRL-B cmd)
+    if (headline.link && typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
+        try {
+            var absY = (typeof frame.screen_y === 'number') ? frame.screen_y : ((typeof frame.y === 'number') ? frame.y : 1);
+            var absX = (typeof frame.screen_x === 'number') ? frame.screen_x : ((typeof frame.x === 'number') ? frame.x : 1);
+            console.add_hotspot('\x02', false, absX, absX + width - 1, absY);
+            this._headlineHotspotActive = true;
+        } catch (_hsErr) { }
+    }
 };
 
 /**
@@ -457,6 +469,17 @@ ShellTicker.prototype._pollFetchResult = function () {
 ShellTicker.prototype.getCurrentHeadlineLink = function () {
     var headline = this._headlines[this._headlineIndex];
     return (headline && headline.link) ? headline.link : null;
+};
+
+/**
+ * Remove the header-row clickable hotspot (when switching to banner or detaching).
+ */
+ShellTicker.prototype._clearHeadlineHotspot = function () {
+    if (!this._headlineHotspotActive) return;
+    this._headlineHotspotActive = false;
+    // We cannot selectively remove one hotspot; clear_hotspots would nuke everything.
+    // Instead we simply stop tracking — the next add_hotspot or grid redraw will overwrite.
+    // The hotspot region becomes stale, but CTRL-B is benign when no headline link exists.
 };
 
 /**

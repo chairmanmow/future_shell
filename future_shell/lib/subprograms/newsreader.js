@@ -2969,14 +2969,15 @@ NewsReader.prototype._handleArticleButtonActivation = function (link) {
         this._setStatus('No link available for this article.');
         return;
     }
-    var message = 'TODO: fetch link and sanitize it -> ' + link;
-    if (typeof log === 'function') {
-        try { log(message); } catch (_eLog) { }
+    if (!/^https?:\/\//i.test(link)) {
+        this._setStatus('Unsupported link type.');
+        return;
     }
-    if (typeof console !== 'undefined' && typeof console.putmsg === 'function') {
-        try { console.putmsg('\r\n' + message + '\r\n'); } catch (_eCon) { }
+    if (this.shell && typeof this.shell.openWebsite === 'function') {
+        this.shell.openWebsite(link);
+    } else {
+        this._setStatus('Browser not available.');
     }
-    this._setStatus('Logged link (TODO sanitize): ' + this._toDisplayText(link));
 };
 
 NewsReader.prototype._renderArticleListWithDates = function () {
