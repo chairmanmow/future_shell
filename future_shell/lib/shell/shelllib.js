@@ -7,7 +7,6 @@ if (typeof dbug !== 'function') {
 }
 
 load("event-timer.js");
-load('key_defs.js');
 var ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -\/]*[@-~]/g;
 var MAX_TOASTS_PER_TYPE = 5;
 try { load('future_shell/lib/effects/screensaver.js'); } catch (e) { }
@@ -207,14 +206,12 @@ IconShell.prototype.init = function () {
     this._gridHotspotLayerId = null;
     this._toastHotspotLayerId = null;
     this._screensaverHotspotLayerId = null;
-    this._tickerHotspotLayerId = null;
     if (typeof HotSpotManager === 'function') {
         try {
             this.hotspotManager = new HotSpotManager({ console: console, baseLayerName: 'shell-grid', baseLayerPriority: 10 });
             this._gridHotspotLayerId = this.hotspotManager.getBaseLayerId();
             this._toastHotspotLayerId = this.hotspotManager.ensureLayer('toast-overlay', 100, { active: false });
             this._screensaverHotspotLayerId = this.hotspotManager.ensureLayer('screensaver', 200, { active: false });
-            this._tickerHotspotLayerId = this.hotspotManager.ensureLayer('ticker', 5, { active: true });
         } catch (hotspotErr) {
             this.hotspotManager = null;
             try { dbug('hotspot manager init error: ' + hotspotErr, 'hotspot'); } catch (_) { }
@@ -284,7 +281,7 @@ IconShell.prototype.init = function () {
 
     this.chatNotifications = [];
     // Chat subprogram gets reference to persistent backend
-    this.chat = new Chat(this.jsonchat, { openWebsite: function(url) { self.openWebsite(url); } });
+    this.chat = new Chat(this.jsonchat);
     var origUpdate = this.jsonchat.update;
     var self = this;
     this.jsonchat.update = function (packet) {
@@ -374,7 +371,7 @@ IconShell.prototype.init = function () {
     if (typeof ShellTicker === 'function') {
         var tickerConfig = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.ticker) ? ICSH_SETTINGS.ticker : {};
         try {
-            this._ticker = new ShellTicker({ shell: this, config: tickerConfig, hotspotManager: this.hotspotManager, hotspotLayerId: this._tickerHotspotLayerId });
+            this._ticker = new ShellTicker({ shell: this, config: tickerConfig });
             if (this._ticker.enabled && this.timer) {
                 this._ticker.attach(this.timer);
                 dbug('[shell] Ticker initialized with ' + this._ticker._feedUrls.length + ' feed(s)', 'ticker');
@@ -674,7 +671,6 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         }
         return true;
     }
-
     if (ch === this._toastDismissCmd) {
         if (this.toasts && this.toasts.length) {
             this._dismissAllToasts();
@@ -759,54 +755,11 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         this._handleSubprogramKey(ch);
         return;
     }
-    // Ticker headline click: buffer chars and match '|TK|' token
-    // Uses pipe-delimited token to avoid prefix conflict with grid tokens (~gN~).
-    // Control chars < 32 are silently dropped by the C stuff_str function,
-    // so we use a printable multi-char token that survives injection.
-    var _tkToken = '|TK|';
-    this._tickerHotspotBuf = (this._tickerHotspotBuf || '') + ch;
-    if (this._tickerHotspotBuf.length > 8) {
-        this._tickerHotspotBuf = this._tickerHotspotBuf.slice(-8);
-    }
-    if (this._tickerHotspotBuf.indexOf(_tkToken) !== -1) {
-        this._tickerHotspotBuf = '';
-        if (this._ticker && typeof this._ticker.getCurrentHeadlineLink === 'function') {
-            var headlineLink = this._ticker.getCurrentHeadlineLink();
-            if (headlineLink) {
-                this.openWebsite(headlineLink);
-                return true;
-            }
-        }
-        return true;
-    }
-    var _tkSliceLen = Math.min(_tkToken.length, this._tickerHotspotBuf.length);
-    if (_tkSliceLen > 0 && _tkToken.substring(0, _tkSliceLen) === this._tickerHotspotBuf.slice(-_tkSliceLen)) {
-        return true;
-    }
-    this._tickerHotspotBuf = '';
     if (this._handleNavigationKey(ch)) return true;
     if (this._handleTypeaheadKey(ch)) return true;
     if (this._handleHotkeyAction(ch)) return true;
     if (this._handleHotkeyItemSelection(ch)) return true;
     return false;
-};
-
-/**
- * Open a URL in the standalone text browser (external program).
- * Writes the URL to a temp file in the node directory, then launches
- * the WEBBROWSER xtrn via runExternal().
- *
- * @param {string} url  The URL to open
- */
-IconShell.prototype.openWebsite = function (url) {
-    if (!url) return;
-    var self = this;
-    self.runExternal(function () {
-        var urlFile = system.node_dir + 'browser_url.txt';
-        var f = new File(urlFile);
-        if (f.open('w')) { f.writeln(url); f.close(); }
-        bbs.exec_xtrn('WEBBROWSER');
-    }, { programId: 'WEBBROWSER' });
 };
 
 IconShell.prototype._processChatUpdate = function (packet) {
@@ -1616,9 +1569,6 @@ IconShell.prototype._nextGridHotspotToken = function () {
     this._reservedHotspotCommands[token] = true;
     return token;
 };
-
-
-
 
 IconShell.prototype._handleSubprogramKey = function (ch) {
     dbug("received key " + ch + " to proxy to active subprogram", "subprogram");

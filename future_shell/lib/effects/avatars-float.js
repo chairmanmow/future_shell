@@ -54,13 +54,11 @@ var AVATAR_LIB = (function () {
 		return maxEntities > minimumEntities ? maxEntities : minimumEntities;
 	}
 	function AvatarsFloat() {
-		log("AvatarsFloat:ctor:start");
 		this.f = null; this.entities = []; this.tickCount = 0; this.lastGreetingTick = 0;
 		this.maxEntities = getMaxEntities(); this.speed = 1; this.greetingDuration = 20; // frames (shorter)
 		this._avatarLib = AVATAR_LIB; this._opts = {}; this._debug = true; // forced on for now
 		this._loadAttempted = false; // ensure we only try after opts available
 		this._initLogged = false; this._firstTickLogged = false;
-		log("AvatarsFloat:ctor:end");
 
 	}
 

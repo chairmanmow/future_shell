@@ -9,22 +9,6 @@ if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 
-var _urlPattern = /https?:\/\/[^\s<>"'\x01|]+/gi;
-
-function findUrls(plainText) {
-    if (!plainText || typeof plainText !== 'string') return [];
-    var results = [];
-    var m;
-    _urlPattern.lastIndex = 0;
-    while ((m = _urlPattern.exec(plainText)) !== null) {
-        var url = m[0];
-        url = url.replace(/[).,;:!?]+$/, '');
-        results.push({ url: url, index: m.index, length: url.length });
-    }
-    return results;
-}
-
-
 function Chat(jsonchat, opts) {
     opts = opts || {};
     Subprogram.call(this, {
@@ -34,8 +18,6 @@ function Chat(jsonchat, opts) {
         timer: opts.timer
     });
     this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'chat', layerName: 'chat-controls', priority: 70 });
-    this._urlHotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'chat-urls', layerName: 'chat-urls', priority: 69 });
-    this._openWebsite = opts.openWebsite || null;
     this.jsonchat = jsonchat; // persistent backend instance
     this.input = "";
     this._inputCursor = 0;      // cursor position in input string
@@ -56,8 +38,6 @@ function Chat(jsonchat, opts) {
     this._hotspotActionMap = {};
     this._hotspotBuffer = '';
     this._hotspotTokenSeq = 0;
-    this._urlHotspotHandlers = {};
-    this._urlHotspotCounter = 0;
     this._activeRosterModal = null;
     this.done = null;
     this.lastSender = null; // State tracking for last sender
@@ -2442,9 +2422,6 @@ Chat.prototype._clearControlHotspots = function (opts) {
         if (opts && opts.hard) this.hotspots.clear();
         else this.hotspots.deactivate();
     }
-    if (opts && opts.hard && this._urlHotspots) {
-        this._urlHotspots.clear();
-    }
     this._hotspotActionMap = {};
     this._controlButtonHotkeyMap = {};
     this._hotspotBuffer = '';
@@ -2508,61 +2485,6 @@ Chat.prototype._registerControlHotspots = function () {
     this._controlHotspotsDirty = false;
 };
 
-Chat.prototype._registerUrlHotspots = function (layoutLines, startLine, endLine) {
-    this._urlHotspotHandlers = {};
-    this._urlHotspotCounter = 0;
-    if (!this.leftMsgFrame || !this.rightMsgFrame) return;
-    if (!layoutLines || !layoutLines.length) return;
-    var leftFrameX = (this.leftMsgFrame.x || 1) - 1;
-    var leftFrameY = (this.leftMsgFrame.y || 1) - 1;
-    var rightFrameX = (this.rightMsgFrame.x || 1) - 1;
-    var rightFrameY = (this.rightMsgFrame.y || 1) - 1;
-    var defs = [];
-    for (var i = 0; i < layoutLines.length; i++) {
-        var line = layoutLines[i];
-        if (!line || line.type !== 'message' || !line.text) continue;
-        if (line.index < startLine || line.index >= endLine) continue;
-        var row = line.index - startLine;
-        var side = line.side;
-        var frame = (side === 'left') ? this.leftMsgFrame : this.rightMsgFrame;
-        var fX = (side === 'left') ? leftFrameX : rightFrameX;
-        var fY = (side === 'left') ? leftFrameY : rightFrameY;
-        var width = frame.width || 0;
-        var displayText = line.text;
-        var textStartCol;
-        if (side === 'right') {
-            var maxContent = Math.max(0, width - 2);
-            if (displayText.length > maxContent) displayText = displayText.substr(displayText.length - maxContent);
-            var textEnd = width - 2;
-            var startCol = Math.max(1, textEnd - displayText.length + 1);
-            textStartCol = startCol - 1;
-        } else {
-            var available = Math.max(1, width - 2);
-            if (displayText.length > available) displayText = displayText.substr(0, available);
-            textStartCol = 2;
-        }
-        var urls = findUrls(displayText);
-        for (var u = 0; u < urls.length; u++) {
-            var urlInfo = urls[u];
-            var token = '~u' + (this._urlHotspotCounter++).toString(36) + '~';
-            this._urlHotspotHandlers[token] = urlInfo.url;
-            var hotX = fX + textStartCol + urlInfo.index;
-            var hotY = fY + row;
-            defs.push({
-                key: token,
-                x: hotX,
-                y: hotY,
-                width: urlInfo.length,
-                height: 1,
-                swallow: false,
-                owner: 'chat:url'
-            });
-        }
-    }
-    if (this._urlHotspots) this._urlHotspots.set(defs);
-
-};
-
 Chat.prototype._activateControlAction = function (action) {
     if (typeof log === 'function') {
         try { dbug('[Chat] _activateControlAction action=' + action, 'chat'); } catch (_) { }
@@ -2617,11 +2539,6 @@ Chat.prototype._processControlHotspotInput = function (key) {
             break;
         }
     }
-    if (!hasToken && this._urlHotspotHandlers) {
-        for (var up in this._urlHotspotHandlers) {
-            if (this._urlHotspotHandlers.hasOwnProperty(up)) { hasToken = true; break; }
-        }
-    }
     if (!hasToken) {
         this._hotspotBuffer = '';
         return false;
@@ -2637,25 +2554,6 @@ Chat.prototype._processControlHotspotInput = function (key) {
             this._hotspotBuffer = '';
         }
     }
-    if (!handled && this._urlHotspotHandlers) {
-        for (var ut in this._urlHotspotHandlers) {
-            if (!this._urlHotspotHandlers.hasOwnProperty(ut)) continue;
-            if (!ut || !ut.length) continue;
-            if (this._hotspotBuffer.slice(-ut.length) === ut) {
-                var _url = this._urlHotspotHandlers[ut];
-                this._statusText = 'Opening: ' + (_url || '(empty)').substr(0, 40);
-                this._lastStatusUpdateTs = Date.now();
-                this._lastInputRendered = '';
-                try { this._refreshHeaderAndInput(true); } catch (_) { }
-                if (typeof this._openWebsite === 'function') {
-                    this._openWebsite(_url);
-                }
-                this._hotspotBuffer = '';
-                handled = true;
-                break;
-            }
-        }
-    }
     if (handled) return true;
     if (this._hotspotBuffer.length) {
         var keep = false;
@@ -2665,12 +2563,6 @@ Chat.prototype._processControlHotspotInput = function (key) {
             if (t.indexOf(this._hotspotBuffer) === 0) {
                 keep = true;
                 break;
-            }
-        }
-        if (!keep && this._urlHotspotHandlers) {
-            for (var ut2 in this._urlHotspotHandlers) {
-                if (!this._urlHotspotHandlers.hasOwnProperty(ut2)) continue;
-                if (ut2.indexOf(this._hotspotBuffer) === 0) { keep = true; break; }
             }
         }
         if (!keep) {
@@ -2863,8 +2755,6 @@ Chat.prototype.draw = function () {
         this.lastRow = 0;
     }
 
-    this._registerControlHotspots();
-    this._registerUrlHotspots(layout.lines, windowInfo.startLine, windowInfo.endLine);
     this._renderAvatars(groups);
     this._lastInputRendered = '';
     this._refreshHeaderAndInput();
@@ -3304,7 +3194,7 @@ Chat.prototype._writeLineToFrames = function (primary, secondary, row, text, isH
         var textEnd = width - 2;
         if (trimmed.length > 0 && textEnd >= 1) {
             var startCol = Math.max(1, textEnd - trimmed.length + 1);
-            this._writeTextWithUrls(primary, row, startCol, trimmed);
+            this._writeChars(primary, row, startCol, trimmed);
         }
     } else {
         var available = Math.max(1, width - 2);
@@ -3313,32 +3203,11 @@ Chat.prototype._writeLineToFrames = function (primary, secondary, row, text, isH
         this._writeChars(primary, row, 1, '>', attr);
         var textStart = width >= 3 ? 3 : Math.min(width, 2);
         if (displayText.length > 0 && textStart <= width) {
-            this._writeTextWithUrls(primary, row, textStart, displayText);
+            this._writeChars(primary, row, textStart, displayText);
         }
     }
 
     this._clearFrameLine(secondary, row);
-};
-
-Chat.prototype._writeTextWithUrls = function (frame, row, col, text, defaultAttr) {
-    if (!text || !text.length) return this._writeChars(frame, row, col, text, defaultAttr);
-    var urls = findUrls(text);
-    if (!urls.length) return this._writeChars(frame, row, col, text, defaultAttr);
-    var urlAttr = CYAN;
-    var pos = 0;
-    var currentCol = col;
-    for (var i = 0; i < urls.length; i++) {
-        var urlInfo = urls[i];
-        if (urlInfo.index > pos) {
-            currentCol = this._writeChars(frame, row, currentCol, text.substring(pos, urlInfo.index), defaultAttr);
-        }
-        currentCol = this._writeChars(frame, row, currentCol, text.substring(urlInfo.index, urlInfo.index + urlInfo.length), urlAttr);
-        pos = urlInfo.index + urlInfo.length;
-    }
-    if (pos < text.length) {
-        currentCol = this._writeChars(frame, row, currentCol, text.substring(pos), defaultAttr);
-    }
-    return currentCol;
 };
 
 Chat.prototype._writeChars = function (frame, row, column, text, attr) {

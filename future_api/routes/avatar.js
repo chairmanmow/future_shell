@@ -209,12 +209,15 @@ function make_avatar_route(ctx) {
 
 	function match(packet) {
 		var loc = String(packet.location || "");
+		if (loc.indexOf("avatar") !== -1 || loc.indexOf("user/") === 0) log("FUTURE_API AVATAR match check: " + loc);
+		var loc = String(packet.location || "");
 		return (loc.indexOf("avatar/") === 0 ||
 			loc.indexOf("user/") === 0 && loc.indexOf("/avatar") > 0 ||
 			loc === "__avatar_probe");
 	}
 
 	function handle(ctx, client, packet) {
+		log("FUTURE_API AVATAR handle: location=" + String(packet.location || ""));
 		var location = String(packet.location || "");
 
 		// Probe endpoint

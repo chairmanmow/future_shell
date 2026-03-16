@@ -43,6 +43,130 @@ var _TICKER_HEADLINE_STYLES = [
     { name: 'neon',           text: '\x01n\x01h\x01w' },   // bright white on neon colors
     { name: 'laser_grid',     text: '\x01n\x01h\x01w' }    // bright white on neon purple
 ];
+// ---------------------------------------------------------------------------
+// Inline RSS parsing helpers (replaces background ticker_fetch.js to avoid
+// cross-thread SEGV in SpiderMonkey's JS_IsRunning — see js_global.c:190).
+// ---------------------------------------------------------------------------
+var _tickerUnicodeMap = {
+    '\u2018': "'",  '\u2019': "'",
+    '\u201C': '"',  '\u201D': '"',
+    '\u201A': "'",  '\u201B': "'",
+    '\u201E': '"',  '\u201F': '"',
+    '\u2032': "'",  '\u2033': '"',
+    '\u2013': '-',  '\u2014': '--',
+    '\u2015': '--',
+    '\u2026': '...',
+    '\u2022': '*',
+    '\u00B7': '.',
+    '\u2027': '.',
+    '\u00A0': ' ',
+    '\u2002': ' ',  '\u2003': ' ',
+    '\u2009': ' ',  '\u200A': ' ',
+    '\u00AB': '<<', '\u00BB': '>>',
+    '\u2039': '<',  '\u203A': '>',
+    '\u00AE': '(R)',
+    '\u00A9': '(C)',
+    '\u2122': '(TM)',
+    '\u00B0': 'deg',
+    '\u00BD': '1/2', '\u00BC': '1/4', '\u00BE': '3/4',
+    '\u00D7': 'x',
+    '\u00F7': '/',
+    '\u2190': '<-', '\u2192': '->', '\u2191': '^', '\u2193': 'v',
+    '\u00E9': 'e',  '\u00E8': 'e',  '\u00EA': 'e', '\u00EB': 'e',
+    '\u00E0': 'a',  '\u00E1': 'a',  '\u00E2': 'a', '\u00E3': 'a', '\u00E4': 'a',
+    '\u00F2': 'o',  '\u00F3': 'o',  '\u00F4': 'o', '\u00F5': 'o', '\u00F6': 'o',
+    '\u00EC': 'i',  '\u00ED': 'i',  '\u00EE': 'i', '\u00EF': 'i',
+    '\u00F9': 'u',  '\u00FA': 'u',  '\u00FB': 'u', '\u00FC': 'u',
+    '\u00F1': 'n',  '\u00E7': 'c',  '\u00DF': 'ss',
+    '\u00C9': 'E',  '\u00C8': 'E',  '\u00CA': 'E',
+    '\u00C0': 'A',  '\u00C1': 'A',  '\u00C2': 'A',
+    '\u200B': '',   '\u200C': '',   '\u200D': '',   '\uFEFF': ''
+};
+
+function _tickerSanitize(str) {
+    if (!str) return '';
+    str = str.replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(parseInt(n, 10)); });
+    str = str.replace(/&#x([0-9A-Fa-f]+);/g, function (_, h) { return String.fromCharCode(parseInt(h, 16)); });
+    str = str.replace(/&amp;/gi, '&');
+    str = str.replace(/&lt;/gi, '<');
+    str = str.replace(/&gt;/gi, '>');
+    str = str.replace(/&quot;/gi, '"');
+    str = str.replace(/&apos;/gi, "'");
+    str = str.replace(/&nbsp;/gi, ' ');
+    var out = '';
+    for (var i = 0; i < str.length; i++) {
+        var ch = str.charAt(i);
+        if (_tickerUnicodeMap[ch] !== undefined) { out += _tickerUnicodeMap[ch]; }
+        else if (ch.charCodeAt(0) > 126) { /* skip */ }
+        else { out += ch; }
+    }
+    return out.replace(/  +/g, ' ').trim();
+}
+
+function _tickerGetTag(xml, tagName) {
+    var open = '<' + tagName;
+    var close = '</' + tagName + '>';
+    var start = xml.indexOf(open);
+    if (start < 0) return '';
+    var gt = xml.indexOf('>', start + open.length);
+    if (gt < 0) return '';
+    var end = xml.indexOf(close, gt + 1);
+    if (end < 0) return '';
+    return xml.substring(gt + 1, end);
+}
+
+function _tickerSplitItems(xml) {
+    var items = [];
+    var tagName = (xml.indexOf('<entry') >= 0) ? 'entry' : 'item';
+    var open = '<' + tagName;
+    var close = '</' + tagName + '>';
+    var pos = 0;
+    while (pos < xml.length && items.length < 50) {
+        var start = xml.indexOf(open, pos);
+        if (start < 0) break;
+        var end = xml.indexOf(close, start);
+        if (end < 0) break;
+        items.push(xml.substring(start, end + close.length));
+        pos = end + close.length;
+    }
+    return items;
+}
+
+function _tickerGetLink(itemXml) {
+    var link = _tickerGetTag(itemXml, 'link');
+    if (link) return link.replace(/[\x00-\x1F]/g, '').trim();
+    var m = itemXml.match(/<link[^>]+href\s*=\s*["']([^"']+)["']/i);
+    return m ? m[1].replace(/[\x00-\x1F]/g, '').trim() : '';
+}
+
+function _tickerFetchRSS(url) {
+    if (typeof HTTPRequest === 'undefined') {
+        try { load('http.js'); } catch (e) { return { error: true, message: 'http.js: ' + e }; }
+    }
+    try {
+        var http = new HTTPRequest();
+        http.timeout = 3;
+        var doc = http.Get(url);
+        if (!doc || !doc.length) return { error: true, message: 'Empty response' };
+        var source = '';
+        var channelBlock = _tickerGetTag(doc, 'channel');
+        if (channelBlock) { source = _tickerSanitize(_tickerGetTag(channelBlock, 'title')); }
+        else { source = _tickerSanitize(_tickerGetTag(doc, 'title')); }
+        var itemBlocks = _tickerSplitItems(channelBlock || doc);
+        var headlines = [];
+        for (var i = 0; i < itemBlocks.length; i++) {
+            var title = _tickerSanitize(_tickerGetTag(itemBlocks[i], 'title'));
+            if (!title) continue;
+            var link = _tickerGetLink(itemBlocks[i]);
+            headlines.push({ title: title, link: link, source: source });
+        }
+        return { error: false, headlines: headlines };
+    } catch (e) {
+        return { error: true, message: String(e) };
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 /**
  * ShellTicker — manages the header ticker rotation.
@@ -89,7 +213,6 @@ function ShellTicker(opts) {
     this._mode = 'banner';        // 'banner' | 'headline'
     this._lastSwitchTs = 0;       // Timestamp of last mode switch
     this._lastFetchTs = 0;        // Timestamp of last successful fetch
-    this._fetchQueue = null;      // Queue returned by background load()
     this._fetching = false;
     this._initialized = false;
     this._timerEvent = null;
@@ -129,15 +252,20 @@ ShellTicker.prototype.detach = function () {
         this._timerEvent.abort = true;
         this._timerEvent = null;
     }
-    // Abandon any in-flight background fetch thread.
-    // The thread will write to parent_queue and exit on its own;
-    // we just stop polling so we never read from a stale queue.
     this._fetching = false;
-    this._fetchQueue = null;
-    this._headlines = [];
-    this.shell = null;
-    this._hotspotManager = null;
-    this._hotspotLayerId = null;
+    // Release individual headline objects then the array
+    if (this._headlines && this._headlines.length) {
+        for (var i = 0; i < this._headlines.length; i++) {
+            delete this._headlines[i];
+        }
+    }
+    delete this._headlines;
+    delete this._feedUrls;
+    delete this._globalFeedUrls;
+    delete this._userFeedUrls;
+    delete this.shell;
+    delete this._hotspotManager;
+    delete this._hotspotLayerId;
 };
 
 // ---------------------------------------------------------------------------
@@ -264,10 +392,7 @@ ShellTicker.prototype._tick = function () {
 
     var now = Date.now();
 
-    // Poll for background fetch results (non-blocking) — always poll even if subprogram active
-    this._pollFetchResult();
-
-    // Check if it's time to re-fetch (skip while subprogram active to avoid wasting threads)
+    // Check if it's time to re-fetch
     if (!this._fetching && this._lastFetchTs > 0 && (now - this._lastFetchTs) >= this.refreshIntervalMs) {
         var sub = this.shell.activeSubprogram;
         if (!sub || !sub.running) {
@@ -418,62 +543,40 @@ ShellTicker.prototype._renderHeadline = function () {
 };
 
 /**
- * Start a background RSS fetch for the current feed URL.
+ * Fetch RSS synchronously in the main thread.
+ * Uses a short HTTP timeout (3s) to avoid long UI freezes.
+ * This avoids spawning a background thread, which would crash due to a
+ * race condition in SpiderMonkey's JS_IsRunning (js_global.c:190) where
+ * the bg thread reads the parent's JSContext activation chain concurrently.
  */
 ShellTicker.prototype._startFetch = function () {
     if (this._destroyed || this._fetching) return;
     var url = this._feedUrls[this._feedUrlIndex];
     if (!url) return;
+    this._fetching = true;
+    try { dbug('ticker: fetching ' + url, 'ticker'); } catch (_) { }
+    var result = null;
     try {
-        this._fetchQueue = load(true, 'future_shell/lib/shell/ticker_fetch.js', url);
-        this._fetching = true;
-        try { dbug('ticker: fetching ' + url, 'ticker'); } catch (_) { }
+        result = _tickerFetchRSS(url);
     } catch (e) {
         this._fetching = false;
-        try { dbug('ticker: fetch spawn error: ' + e, 'ticker'); } catch (_) { }
-    }
-};
-
-/**
- * Non-blocking poll for background fetch results.
- */
-ShellTicker.prototype._pollFetchResult = function () {
-    if (this._destroyed || !this._fetching || !this._fetchQueue) return;
-    // poll(0) = non-blocking check for data
-    var hasData = false;
-    try { hasData = this._fetchQueue.poll(0); } catch (e) { return; }
-    if (!hasData && hasData !== true) {
-        // Check if the background thread orphaned (crashed/finished without writing)
-        if (this._fetchQueue.orphan) {
-            this._fetching = false;
-            this._fetchQueue = null;
-            try { dbug('ticker: fetch thread orphaned', 'ticker'); } catch (_) { }
-        }
-        return;
-    }
-    var result = null;
-    try { result = this._fetchQueue.read(0); } catch (e) {
-        this._fetching = false;
-        this._fetchQueue = null;
+        try { dbug('ticker: fetch error: ' + e, 'ticker'); } catch (_) { }
         return;
     }
     this._fetching = false;
-    this._fetchQueue = null;
-
-    if (!result) return;
-    if (result.error) {
-        try { dbug('ticker: fetch error: ' + (result.message || 'unknown'), 'ticker'); } catch (_) { }
+    if (!result || result.error) {
+        try { dbug('ticker: fetch error: ' + (result ? result.message : 'null'), 'ticker'); } catch (_) { }
         return;
     }
     if (Array.isArray(result.headlines) && result.headlines.length) {
         this._headlines = result.headlines;
         this._headlineIndex = 0;
         this._lastFetchTs = Date.now();
-        // Hint GC to reclaim background thread memory
-        try { js.gc(false); } catch (_) {}
-        try { dbug('ticker: loaded ' + result.headlines.length + ' headlines', 'ticker'); } catch (_) { }
+        try { dbug('ticker: loaded ' + this._headlines.length + ' headlines', 'ticker'); } catch (_) { }
     }
 };
+
+
 
 /**
  * Get the link URL for the currently displayed headline.

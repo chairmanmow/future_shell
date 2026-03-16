@@ -979,6 +979,10 @@ MessageBoard.prototype.draw = function () {
         this.overlay.refresh();
         return;
     }
+    if (this.view === 'read' && this.lastReadMsg) {
+        this._renderCurrentView('read', this.lastReadMsg);
+        return;
+    }
     this._renderCurrentView(this.view);
 };
 
@@ -1134,6 +1138,15 @@ MessageBoard.prototype._handleKey = function (key) {
             var targetSub = this.cursub || this._lastActiveSubCode || this._cachedSubCode || null;
             if (targetSub) this._renderFlatView({ subCode: targetSub });
             else this._renderFlatView();
+            return false;
+        }
+        if (typeof idx === 'string' && idx.indexOf('read-url:') === 0) {
+            var urlToOpen = idx.substring(9);
+            if (urlToOpen && this.shell && typeof this.shell.openWebsite === 'function') {
+                this.shell.openWebsite(urlToOpen);
+                // Drain stale input buffer after browser exit
+                while (console.inkey(K_NONE, 0) !== '') {}
+            }
             return false;
         }
         if (typeof idx === 'number') {
@@ -1996,6 +2009,8 @@ MessageBoard.prototype._renderReadBodyContent = function (text) {
     this._readBodyTotalLines = canvas.data_height || 0;
     this._readBodyLineCache = null;
     this._readBodyLineCacheWidth = 0;
+    this._scanCanvasForUrls();
+    this._colorizeUrlRegions();
     try { canvas.cycle(); } catch (_cycleErr) { }
     if (canvas.parent) {
         try { canvas.parent.cycle(); } catch (_parentCycleErr) { }
@@ -2406,6 +2421,7 @@ MessageBoard.prototype._paintRead = function () {
         var dispStart = totalLines ? (start + 1) : 0;
         var dispEnd = totalLines ? Math.min(totalLines, start + (maxVisible || 0)) : 0;
         this._writeStatus(this._formatReadStatus(dispStart, dispEnd, totalLines));
+        this._updateReadUrlHotspots();
         return;
     }
     var f = this._readBodyFrame || this.outputFrame; if (!f) return; f.clear();
@@ -2472,12 +2488,122 @@ MessageBoard.prototype._extractUrlsFromBody = function (text) {
     while ((m = pattern.exec(text)) !== null) {
         var url = m[0];
         url = url.replace(/[).,;:!?]+$/, '');
+        var eHostStart = url.indexOf('://');
+        if (eHostStart === -1 || url.substring(eHostStart + 3).indexOf('.') === -1) continue;
         if (!seen[url]) {
             seen[url] = true;
             results.push(url);
         }
     }
     return results;
+};
+
+MessageBoard.prototype._scanCanvasForUrls = function () {
+    var canvas = this._readBodyCanvas;
+    this._readUrlRegions = [];
+    if (!canvas) return;
+    var data = canvas.__properties__ && canvas.__properties__.data;
+    if (!data) return;
+    var totalRows = canvas.data_height || 0;
+    var defaultAttr = (typeof canvas.attr === 'number') ? canvas.attr : 7;
+    var highAttr = defaultAttr | 8;
+    var urlPattern = /https?:\/\/[^\s<>"'\x01|]+/gi;
+    for (var row = 0; row < totalRows; row++) {
+        var dataRow = data[row];
+        if (!dataRow) continue;
+        var text = '';
+        for (var col = 0; col < canvas.width; col++) {
+            var cell = dataRow[col];
+            text += (cell && typeof cell.ch === 'string') ? cell.ch : ' ';
+        }
+        urlPattern.lastIndex = 0;
+        var match;
+        while ((match = urlPattern.exec(text)) !== null) {
+            var raw = match[0];
+            var url = raw.replace(/[).,;:!?]+$/, '');
+            if (!url || url.length < 8) continue;
+            var hostStart = url.indexOf('://');
+            if (hostStart === -1 || url.substring(hostStart + 3).indexOf('.') === -1) continue;
+            var startCol = match.index;
+            var endCol = startCol + url.length - 1;
+            var isStyled = false;
+            for (var c = startCol; c <= endCol; c++) {
+                var ch = dataRow[c];
+                if (ch && typeof ch.attr === 'number' && ch.attr !== defaultAttr && ch.attr !== highAttr) {
+                    isStyled = true;
+                    break;
+                }
+            }
+            this._readUrlRegions.push({
+                url: url,
+                row: row,
+                startCol: startCol,
+                endCol: endCol,
+                isStyled: isStyled
+            });
+        }
+    }
+};
+
+MessageBoard.prototype._colorizeUrlRegions = function () {
+    var canvas = this._readBodyCanvas;
+    if (!canvas || !this._readUrlRegions || !this._readUrlRegions.length) return;
+    var data = canvas.__properties__ && canvas.__properties__.data;
+    if (!data) return;
+    var cyanAttr = (typeof CYAN === 'number' ? CYAN : 3) | (typeof BG_BLACK === 'number' ? BG_BLACK : 0);
+    for (var i = 0; i < this._readUrlRegions.length; i++) {
+        var region = this._readUrlRegions[i];
+        if (region.isStyled) continue;
+        var dataRow = data[region.row];
+        if (!dataRow) continue;
+        for (var c = region.startCol; c <= region.endCol; c++) {
+            var cell = dataRow[c];
+            if (cell) cell.attr = cyanAttr;
+        }
+    }
+};
+
+MessageBoard.prototype._updateReadUrlHotspots = function () {
+    if (this.view !== 'read' || !this._readUrlRegions) return;
+    var filtered = [];
+    var i;
+    for (i = 0; i < (this._pendingHotspotDefs || []).length; i++) {
+        if (this._pendingHotspotDefs[i].owner !== 'mb-read-url') {
+            filtered.push(this._pendingHotspotDefs[i]);
+        }
+    }
+    this._pendingHotspotDefs = filtered;
+    for (var k in this._hotspotMap) {
+        if (this._hotspotMap.hasOwnProperty(k)) {
+            var val = this._hotspotMap[k];
+            if (typeof val === 'string' && val.indexOf('read-url:') === 0) {
+                delete this._hotspotMap[k];
+            }
+        }
+    }
+    var canvas = this._readBodyCanvas;
+    if (!canvas || !this._readUrlRegions.length) {
+        this._applyPendingHotspots();
+        return;
+    }
+    var startRow = this._readScroll || 0;
+    var visibleRows = canvas.height || 0;
+    var bodyX = canvas.x;
+    var bodyY = canvas.y;
+    var urlKeys = '0123456789';
+    var keyIdx = 0;
+    for (i = 0; i < this._readUrlRegions.length && keyIdx < urlKeys.length; i++) {
+        var region = this._readUrlRegions[i];
+        if (region.row < startRow || region.row >= startRow + visibleRows) continue;
+        var key = urlKeys.charAt(keyIdx);
+        var screenY = bodyY + (region.row - startRow) - 1;
+        var minX = bodyX + region.startCol;
+        var maxX = bodyX + region.endCol;
+        this._hotspotMap[key] = 'read-url:' + region.url;
+        this._addHotspotArea(key, false, minX, maxX, screenY, screenY, { owner: 'mb-read-url' });
+        keyIdx++;
+    }
+    this._applyPendingHotspots();
 };
 
 MessageBoard.prototype._jumpToThreadViewFromRead = function () {
