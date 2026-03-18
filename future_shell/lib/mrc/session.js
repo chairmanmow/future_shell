@@ -32,19 +32,19 @@ function MRC_Session(host, port, user, pass, alias) {
         error: []
     };
 
-    function send(to_user, to_site, to_room, body) {
+    function send(to_user, msg_ext, to_room, body) {
         if (body == '' || body == state.alias) return;
         state.output_buffer.push({
             from_room: state.room,
             to_user: to_user,
-            to_site: to_site,
+            msg_ext: msg_ext,
             to_room: to_room,
             body: body
         });
     }
 
-    function send_command(command, to_site) {
-        send('SERVER', to_site || '', state.room, command);
+    function send_command(command, msg_ext) {
+        send('SERVER', msg_ext || '', state.room, command);
     }
 
     function send_message(to_user, to_room, body) {
@@ -65,7 +65,7 @@ function MRC_Session(host, port, user, pass, alias) {
         state.output_buffer.push({
             from_room: CTCP_ROOM,
             to_user: to,
-            to_site: "",
+            msg_ext: "",
             to_room: CTCP_ROOM,
             body: p + " " + user + " " + s
         });
@@ -171,6 +171,9 @@ function MRC_Session(host, port, user, pass, alias) {
                     state.latency = params;
                     emit('latency');
                     break;
+                case 'PROTOCOLVERSION':
+                    // Server announces protocol version on connect; acknowledged silently
+                    break;
                 default:
                     emit('message', msg);
                     break;
@@ -249,8 +252,8 @@ function MRC_Session(host, port, user, pass, alias) {
         emit('sent_privmsg', user, msg);
     }
 
-    this.send_command = function (command, to_site) {
-        send_command(command, to_site || '');
+    this.send_command = function (command, msg_ext) {
+        send_command(command, msg_ext || '');
     }
 
     this.connect = function () {

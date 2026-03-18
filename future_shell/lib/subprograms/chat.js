@@ -86,6 +86,9 @@ function Chat(jsonchat, opts) {
     this._lastBitmapRedrawTs = 0;     // Throttle timestamp for bitmap redraws
     // Configurable group line color and pad character
     this.groupLineColor = (typeof ICSH_VALS !== 'undefined' && ICSH_VALS.CHAT_GROUP_LINE) ? ICSH_VALS.CHAT_GROUP_LINE : MAGENTA;
+    this._lastPrivateSenderNick = null;
+    this._jsonchatOriginalUpdate = null;
+    this._privateMailboxHookInstalled = false;
     // Shared avatar library resolution (reuse singleton to avoid duplicate loads / class mismatch)
     this._avatarLib = (function () {
         try {
@@ -341,6 +344,7 @@ Chat.prototype.enter = function (done) {
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
     this._resetRuntimeState();
     this._frameMetrics = null;
+    this._installPrivateMailboxHook();
     if (typeof Subprogram.prototype.enter === 'function') {
         Subprogram.prototype.enter.call(this, done);
     } else {
@@ -377,6 +381,284 @@ Chat.prototype.exit = function () {
 
 Chat.prototype.attachShellTimer = function (timer) {
     this.timer = timer || null;
+};
+
+Chat.prototype._installPrivateMailboxHook = function () {
+    var self = this;
+    if (!this.jsonchat || typeof this.jsonchat.update !== 'function') return;
+    if (!this._jsonchatOriginalUpdate) {
+        this._jsonchatOriginalUpdate = this.jsonchat.update.bind(this.jsonchat);
+    }
+    this.jsonchat.update = function (packet) {
+        if (self._handlePrivateMailboxPacket(packet)) return true;
+        return self._jsonchatOriginalUpdate ? self._jsonchatOriginalUpdate(packet) : false;
+    };
+    this._privateMailboxHookInstalled = true;
+};
+
+Chat.prototype._restorePrivateMailboxHook = function () {
+    if (!this.jsonchat || !this._privateMailboxHookInstalled || !this._jsonchatOriginalUpdate) return;
+    this.jsonchat.update = this._jsonchatOriginalUpdate;
+    this._privateMailboxHookInstalled = false;
+};
+
+Chat.prototype._normalizePrivateNick = function (nick) {
+    var name = '';
+    if (nick && nick.name) name = String(nick.name).replace(/^\s+|\s+$/g, '');
+    if (!name.length) return null;
+    return {
+        name: name,
+        host: (nick && nick.host) ? String(nick.host).replace(/^\s+|\s+$/g, '') : undefined,
+        ip: (nick && nick.ip) ? String(nick.ip) : undefined,
+        qwkid: (nick && nick.qwkid) ? String(nick.qwkid).replace(/^\s+|\s+$/g, '').toUpperCase() : undefined
+    };
+};
+
+Chat.prototype._buildPrivateMessage = function (sender, recipient, text, timestamp) {
+    return {
+        nick: this._normalizePrivateNick(sender) || sender,
+        str: text,
+        time: timestamp,
+        private: {
+            to: this._normalizePrivateNick(recipient) || recipient
+        }
+    };
+};
+
+Chat.prototype._getMailboxMessagesPath = function () {
+    return 'channels.' + user.alias + '.messages';
+};
+
+Chat.prototype._getMailboxHistoryPath = function () {
+    return 'channels.' + user.alias + '.history';
+};
+
+Chat.prototype._ensureHistoryArray = function (location) {
+    var existing;
+    if (!this.jsonchat || !this.jsonchat.client || typeof this.jsonchat.client.read !== 'function') return;
+    try {
+        existing = this.jsonchat.client.read('chat', location, 1);
+    } catch (_) {
+        existing = null;
+    }
+    if (existing instanceof Array) return;
+    this.jsonchat.client.write('chat', location, [], 2);
+};
+
+Chat.prototype._isPrivateMessage = function (msg) {
+    return !!(msg && msg.private && msg.private.to && msg.private.to.name);
+};
+
+Chat.prototype._resolvePrivateTargetNick = function (name) {
+    var trimmedName = String(name || '').replace(/^\s+|\s+$/g, '');
+    var normalizedTarget = this._normalizePrivateLookupKey(trimmedName);
+    var roster = [];
+    if (!trimmedName.length) return null;
+    try { roster = this._fetchJsonChatRoster() || []; } catch (_) { roster = []; }
+    for (var i = 0; i < roster.length; i++) {
+        var entry = roster[i];
+        var nick = null;
+        if (entry && entry.nick && typeof entry.nick === 'object') {
+            nick = this._normalizePrivateNick({
+                name: entry.nick.name || entry.nick.alias || entry.nick.user,
+                host: entry.nick.host || entry.system || entry.host || entry.bbs,
+                ip: entry.nick.ip || entry.ip,
+                qwkid: entry.nick.qwkid || entry.qwkid
+            });
+        } else if (entry) {
+            nick = this._normalizePrivateNick({
+                name: entry.nick || entry.name || entry.alias || entry.user,
+                host: entry.system || entry.host || entry.bbs,
+                qwkid: entry.qwkid
+            });
+        }
+        if (nick && (nick.name.toUpperCase() === trimmedName.toUpperCase() || this._normalizePrivateLookupKey(nick.name) === normalizedTarget)) return nick;
+    }
+    return null;
+};
+
+Chat.prototype._normalizePrivateLookupKey = function (text) {
+    return String(text || '').replace(/^\s+|\s+$/g, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+};
+
+Chat.prototype._listPrivateTargetNames = function () {
+    var seen = {};
+    var names = [];
+    var roster = [];
+    try { roster = this._fetchJsonChatRoster() || []; } catch (_) { roster = []; }
+    for (var i = 0; i < roster.length; i++) {
+        var entry = roster[i];
+        var name = '';
+        if (entry && entry.nick && typeof entry.nick === 'object') {
+            name = String(entry.nick.name || entry.nick.alias || entry.nick.user || '').replace(/^\s+|\s+$/g, '');
+        } else if (entry) {
+            name = String(entry.nick || entry.name || entry.alias || entry.user || '').replace(/^\s+|\s+$/g, '');
+        }
+        if (name.length && !seen[name.toUpperCase()]) {
+            seen[name.toUpperCase()] = true;
+            names.push(name);
+        }
+    }
+    names.sort(function (left, right) { return right.length - left.length; });
+    return names;
+};
+
+Chat.prototype._parsePrivateCommandInput = function (input) {
+    var text = String(input || '').replace(/^\s+|\s+$/g, '');
+    var args = text.replace(/^\/(?:msg|pm|tell|whisper)\s+/i, '');
+    var closingQuoteIndex;
+    var candidateNames;
+    var recipientName = '';
+    var messageText = '';
+    var spaceIndex;
+
+    if (!args.length || args === text) return null;
+
+    if (args.charAt(0) === '"') {
+        closingQuoteIndex = args.indexOf('"', 1);
+        if (closingQuoteIndex < 2) return null;
+        recipientName = args.substring(1, closingQuoteIndex).replace(/^\s+|\s+$/g, '');
+        messageText = args.substr(closingQuoteIndex + 1).replace(/^\s+|\s+$/g, '');
+        return (recipientName.length && messageText.length) ? { recipientName: recipientName, messageText: messageText } : null;
+    }
+
+    candidateNames = this._listPrivateTargetNames();
+    for (var i = 0; i < candidateNames.length; i++) {
+        var candidateName = candidateNames[i] || '';
+        if (!candidateName.length) continue;
+        if (args.substr(0, candidateName.length).toUpperCase() !== candidateName.toUpperCase()) continue;
+        if (args.length > candidateName.length && args.charAt(candidateName.length) !== ' ') continue;
+        recipientName = candidateName;
+        messageText = args.substr(candidateName.length).replace(/^\s+|\s+$/g, '');
+        if (recipientName.length && messageText.length) {
+            return { recipientName: recipientName, messageText: messageText };
+        }
+    }
+
+    spaceIndex = args.indexOf(' ');
+    if (spaceIndex < 1) return null;
+    recipientName = args.substr(0, spaceIndex).replace(/^\s+|\s+$/g, '');
+    messageText = args.substr(spaceIndex + 1).replace(/^\s+|\s+$/g, '');
+    return (recipientName.length && messageText.length) ? { recipientName: recipientName, messageText: messageText } : null;
+};
+
+Chat.prototype._getActiveDisplayChannel = function () {
+    if (!this.jsonchat || !this.jsonchat.channels) return null;
+    var chan = this.channel ? this.jsonchat.channels[this.channel.toUpperCase()] : null;
+    if (chan) return chan;
+    for (var key in this.jsonchat.channels) {
+        if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
+        if (this.jsonchat.channels[key]) return this.jsonchat.channels[key];
+    }
+    return null;
+};
+
+Chat.prototype._appendPrivateDisplayMessage = function (message, outgoing) {
+    var chan = this._getActiveDisplayChannel();
+    var copy;
+    var target = (message && message.private && message.private.to) ? message.private.to : null;
+    var prefix = '';
+    if (!chan || !Array.isArray(chan.messages) || !message || !message.nick) return false;
+    prefix = outgoing && target && target.name
+        ? ('[PM to ' + target.name + '] ')
+        : '[PM] ';
+    copy = {
+        nick: message.nick,
+        str: prefix + message.str,
+        time: message.time,
+        private: message.private,
+        displaySender: outgoing && target && target.name
+            ? (message.nick.name + ' [PM to ' + target.name + ']')
+            : (message.nick.name + ' [PM]')
+    };
+    chan.messages.push(copy);
+    this._needsRedraw = true;
+    if (this.running) this.draw();
+    return true;
+};
+
+Chat.prototype._handlePrivateMailboxPacket = function (packet) {
+    var message = null;
+    var senderNick = null;
+    if (!packet || packet.oper !== 'WRITE' || packet.location !== this._getMailboxMessagesPath()) return false;
+    message = packet.data;
+    if (!this._isPrivateMessage(message)) return false;
+    senderNick = this._normalizePrivateNick(message.nick || null);
+    if (senderNick) this._lastPrivateSenderNick = senderNick;
+    this._appendPrivateDisplayMessage(message, false);
+    this._statusText = 'Private message from ' + (senderNick ? senderNick.name : 'someone');
+    this._lastStatusUpdateTs = Date.now();
+    this._lastInputRendered = '';
+    this._refreshHeaderAndInput(true);
+    return true;
+};
+
+Chat.prototype._sendPrivateMessage = function (targetNick, text) {
+    var recipient = this._normalizePrivateNick(targetNick);
+    var sender = this._normalizePrivateNick({
+        name: (typeof user !== 'undefined' && user.alias) ? user.alias : 'You',
+        host: (typeof system !== 'undefined' && system && system.name) ? system.name : '',
+        ip: (typeof user !== 'undefined' && user.ip_address) ? user.ip_address : '',
+        qwkid: (typeof system !== 'undefined' && system && system.qwk_id) ? system.qwk_id : ''
+    });
+    var timestamp = (new Date()).getTime();
+    var message = null;
+    if (!recipient || !sender || !this.jsonchat || !this.jsonchat.client) return false;
+    message = this._buildPrivateMessage(sender, recipient, text, timestamp);
+    this._ensureHistoryArray('channels.' + recipient.name + '.history');
+    this._ensureHistoryArray(this._getMailboxHistoryPath());
+    this.jsonchat.client.write('chat', 'channels.' + recipient.name + '.messages', message, 2);
+    this.jsonchat.client.push('chat', 'channels.' + recipient.name + '.history', message, 2);
+    this.jsonchat.client.push('chat', this._getMailboxHistoryPath(), message, 2);
+    this._appendPrivateDisplayMessage(message, true);
+    return true;
+};
+
+Chat.prototype._handlePrivateCommand = function (input) {
+    var parsed = this._parsePrivateCommandInput(input);
+    var targetNick = null;
+    if (!parsed) {
+        this._statusText = 'Usage: /msg <user> <message>';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return true;
+    }
+    targetNick = this._resolvePrivateTargetNick(parsed.recipientName);
+    if (!targetNick) {
+        this._statusText = 'User not found: ' + parsed.recipientName;
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return true;
+    }
+    if (!this._sendPrivateMessage(targetNick, parsed.messageText)) {
+        this._statusText = 'Unable to send private message';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return true;
+    }
+    return true;
+};
+
+Chat.prototype._handlePrivateReplyCommand = function (input) {
+    var match = String(input || '').match(/^\/(?:r|reply)\s+([\s\S]+)$/i);
+    if (!match) {
+        this._statusText = 'Usage: /r <message>';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return true;
+    }
+    if (!this._lastPrivateSenderNick || !this._sendPrivateMessage(this._lastPrivateSenderNick, match[1])) {
+        this._statusText = 'Nobody has private messaged you yet';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return true;
+    }
+    return true;
 };
 
 // Overlay screensavers (avatars_float, figlet) need a frame without children to avoid artifacts
@@ -607,11 +889,17 @@ Chat.prototype.handleKey = function (key) {
     }
     // Enter/Return (string '\r' or '\n')
     if (key === '\r' || key === '\n') {
-        var trimmedInput = this.input.trim().toLowerCase();
+        var rawTrimmedInput = this.input.trim();
+        var trimmedInput = rawTrimmedInput.toLowerCase();
         // Handle slash commands
-        if (trimmedInput.length > 0 && trimmedInput.charAt(0) === '/') {
+        if (rawTrimmedInput.length > 0 && rawTrimmedInput.charAt(0) === '/') {
             var slashCmd = trimmedInput;
             var cmdHandled = false;
+            if (/^\/(?:msg|pm|tell|whisper)\b/i.test(rawTrimmedInput)) {
+                cmdHandled = this._handlePrivateCommand(rawTrimmedInput);
+            } else if (/^\/(?:r|reply)\b/i.test(rawTrimmedInput)) {
+                cmdHandled = this._handlePrivateReplyCommand(rawTrimmedInput);
+            }
             switch (slashCmd) {
                 case '/exit':
                 case '/quit':
@@ -655,20 +943,17 @@ Chat.prototype.handleKey = function (key) {
             }
             // Unknown slash command - fall through to send as regular message
         }
-        if (this.input.trim().length > 0 && this.jsonchat && typeof this.jsonchat.submit === 'function') {
+        if (this.input.trim().length > 0 && this.jsonchat && this.jsonchat.client && typeof this.jsonchat.client.write === 'function' && typeof this.jsonchat.client.push === 'function') {
             var msgText = this.input;
-            var nick = (typeof user !== 'undefined' && user.alias) ? { name: user.alias, number: user.number } : { name: 'You', number: 0 };
-            var packet = {
-                scope: 'CHAT',
-                func: 'UPDATE',
-                oper: 'WRITE',
-                location: 'channels.' + this.channel + '.messages',
-                data: {
-                    nick: nick,
-                    str: msgText,
-                    time: (new Date()).getTime()
-                }
+            var nick = (typeof user !== 'undefined' && user.alias)
+                ? { name: user.alias, host: system.name, ip: user.ip_address, qwkid: system.qwk_id }
+                : { name: 'You', host: (system && system.name) ? system.name : '', qwkid: (system && system.qwk_id) ? system.qwk_id : '' };
+            var message = {
+                nick: nick,
+                str: msgText,
+                time: (new Date()).getTime()
             };
+            var chan = (this.jsonchat.channels && this.channel) ? this.jsonchat.channels[this.channel.toUpperCase()] : null;
             // Award points for sending chat message
             try {
                 var shell = (typeof IconShell !== 'undefined' && IconShell._activeInstance) ? IconShell._activeInstance : null;
@@ -677,8 +962,9 @@ Chat.prototype.handleKey = function (key) {
                 }
             } catch (e) { /* ignore */ }
             // Render immediately for sender
-            // if (typeof this.updateChat === 'function') this.updateChat(packet);
-            this.jsonchat.submit(this.channel, this.input);
+            this.jsonchat.client.write('chat', 'channels.' + this.channel + '.messages', message, 2);
+            this.jsonchat.client.push('chat', 'channels.' + this.channel + '.history', message, 2);
+            if (chan && Array.isArray(chan.messages)) chan.messages.push(message);
             this.draw();
         }
         this.input = "";
@@ -1770,6 +2056,7 @@ Chat.prototype._attrToCtrlA = function (fg, bg) {
 };
 
 Chat.prototype._cleanup = function () {
+    this._restorePrivateMailboxHook();
     if (this._activeRosterModal && typeof this._activeRosterModal.close === 'function') {
         try { this._activeRosterModal.close(); } catch (_) { }
     }
@@ -2224,7 +2511,7 @@ Chat.prototype._showHelpModal = function () {
         try { dbug('[Chat] _showHelpModal invoked', 'chat'); } catch (_) { }
     }
     if (typeof Modal !== 'function') {
-        this._statusText = 'Help: /exit, /who, /help, /info, /channels, /settings';
+        this._statusText = 'Help: /exit, /who, /msg, /r, /help, /info, /channels, /settings';
         this._lastStatusUpdateTs = Date.now();
         this._lastInputRendered = '';
         this._refreshHeaderAndInput(true);
@@ -2235,6 +2522,8 @@ Chat.prototype._showHelpModal = function () {
         '',
         '/exit    - Leave chat',
         '/who     - See who is online',
+        '/msg     - Send a private message',
+        '/r       - Reply to last private message',
         '/img     - View bitmap art',
         '/help    - Show this help',
         '/info    - Channel information',
@@ -2786,6 +3075,7 @@ Chat.prototype._groupMessages = function (messages) {
         var msg = messages[i];
         if (!msg || !msg.nick || typeof msg.nick.name !== 'string') continue;
         var sender = msg.nick.name;
+        var senderDisplay = (typeof msg.displaySender === 'string' && msg.displaySender.length) ? msg.displaySender : sender;
         var text = this._extractMessageText(msg);
         if (!text || text.replace(/\s+/g, '') === '') continue;
         
@@ -2800,10 +3090,11 @@ Chat.prototype._groupMessages = function (messages) {
             continue;
         }
 
-        if (sender !== lastSender) {
+        if (senderDisplay !== lastSender) {
             currentSide = (currentSide === 'left') ? 'right' : 'left';
             groups.push({
-                sender: sender,
+                sender: senderDisplay,
+                nick: msg.nick,
                 side: currentSide,
                 messages: [],
                 lastTime: msg.time || Date.now(),
@@ -2815,9 +3106,10 @@ Chat.prototype._groupMessages = function (messages) {
         }
 
         var group = groups[groups.length - 1];
+        if ((!group.nick || !group.nick.qwkid) && msg.nick) group.nick = msg.nick;
         group.messages.push(msg);
         group.lastTime = msg.time || group.lastTime;
-        lastSender = sender;
+        lastSender = senderDisplay;
     }
 
     return groups;
@@ -3242,6 +3534,28 @@ Chat.prototype._getCrumbContentWidth = function () {
     return Math.max(1, this.chatInputFrame.width - 1);
 };
 
+Chat.prototype._nickLabel = function (entry, fallback) {
+    if (entry && entry.nick && typeof entry.nick === 'object') {
+        return entry.nick.name || entry.nick.alias || entry.nick.user || fallback || '';
+    }
+    if (entry) return entry.nick || entry.name || entry.user || entry.alias || fallback || '';
+    return fallback || '';
+};
+
+Chat.prototype._normalizeQwkId = function (qwkid) {
+    if (qwkid === undefined || qwkid === null) return null;
+    qwkid = String(qwkid).trim();
+    if (!qwkid.length) return null;
+    return qwkid.toUpperCase();
+};
+
+Chat.prototype._resolveAvatarNetaddr = function (nick) {
+    if (!nick || typeof nick !== 'object') return null;
+    var qwkid = this._normalizeQwkId(nick.qwkid);
+    if (qwkid) return qwkid;
+    return nick.host || null;
+};
+
 Chat.prototype._buildCrumbContext = function () {
     var currentUser = (typeof user !== 'undefined' && user && user.alias) ? user.alias : 'You';
     var channelName = this.channel || 'main';
@@ -3255,7 +3569,7 @@ Chat.prototype._buildCrumbContext = function () {
         if (isArray) {
             for (var i = 0; i < rawUsers.length; i++) {
                 var entry = rawUsers[i];
-                var name = entry ? (entry.nick || entry.name || entry.user || entry.alias || '') : '';
+                var name = this._nickLabel(entry, '');
                 if (name && !seen[name]) {
                     seen[name] = true;
                     names.push(name);
@@ -3265,7 +3579,7 @@ Chat.prototype._buildCrumbContext = function () {
             for (var key in rawUsers) {
                 if (!rawUsers.hasOwnProperty(key)) continue;
                 var obj = rawUsers[key];
-                var uname = obj ? (obj.nick || obj.name || obj.user || obj.alias || key) : key;
+                var uname = this._nickLabel(obj, key);
                 if (uname && !seen[uname]) {
                     seen[uname] = true;
                     names.push(uname);
@@ -3391,6 +3705,7 @@ Chat.prototype._renderAvatars = function (groups) {
         placements[sideKey].push({
             key: sideKey + ':' + g,
             user: group.sender,
+            nick: group.nick || null,
             y: desiredTop,
             height: targetHeight,
             minY: minTop,
@@ -3429,7 +3744,12 @@ Chat.prototype._drawAvatarSet = function (frame, avatarList, avatarLib) {
 
         var avatarArt = null;
         var displayUser = placement.user;
+        var nick = placement.nick || null;
         var usernum = 0;
+        var netaddr = null;
+        var bbsid = null;
+        var localQwk = this._normalizeQwkId((typeof system !== 'undefined' && system) ? system.qwk_id : '');
+        var nickQwk = nick ? this._normalizeQwkId(nick.qwkid) : null;
         
         // Check if this is a bridged user (Discord, Blockbrain, etc.) and try to match to BBS user
         var bridge = this._parseBridgeUser(placement.user);
@@ -3441,12 +3761,20 @@ Chat.prototype._drawAvatarSet = function (frame, avatarList, avatarLib) {
             } else {
                 displayUser = bridge.username; // Still use clean name for initials even if no match
             }
-        } else if (typeof system !== 'undefined' && typeof system.matchuser === 'function') {
+        } else if ((!nickQwk || nickQwk === localQwk) && typeof system !== 'undefined' && typeof system.matchuser === 'function') {
             usernum = system.matchuser(placement.user);
         }
+
+        if (nick) {
+            netaddr = this._resolveAvatarNetaddr(nick);
+            bbsid = nick.host || null;
+            if (nick.name) displayUser = nick.name;
+        }
         
-        if (avatarLib && typeof avatarLib.read === 'function' && usernum) {
-            var avatarObj = avatarLib.read(usernum, displayUser);
+        if (avatarLib && typeof avatarLib.read === 'function') {
+            var avatarObj = null;
+            if (usernum) avatarObj = avatarLib.read(usernum, displayUser);
+            else if (netaddr) avatarObj = avatarLib.read(0, displayUser, netaddr, bbsid);
             if (avatarObj && avatarObj.data) avatarArt = base64_decode(avatarObj.data);
         }
 
