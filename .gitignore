@@ -24,3 +24,4 @@ rloginhack.js
 future_shell/lib/3rdp/mrc/*.ini
 !future_shell/lib/3rdp/mrc/*.example.ini
 json-service-private.js
+avatars.js

@@ -166,7 +166,15 @@ function packAvatars(placements, maxRows, opts) {
         }
 
         var finalY = best ? best.y : (bestOverlap ? bestOverlap.y : clamp(req.y, 1, maxTop));
-        packed.push({ user: req.user, y: finalY, height: height, available: req.available });
+        var packedReq = {};
+        for (var prop in req) {
+            if (!Object.prototype.hasOwnProperty.call(req, prop)) continue;
+            packedReq[prop] = req[prop];
+        }
+        packedReq.y = finalY;
+        packedReq.height = height;
+        packedReq.available = req.available;
+        packed.push(packedReq);
     }
     packed.sort(function(a, b) { return a.y - b.y; });
     return packed;

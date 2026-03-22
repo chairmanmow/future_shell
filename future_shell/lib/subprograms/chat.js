@@ -404,14 +404,29 @@ Chat.prototype._restorePrivateMailboxHook = function () {
 
 Chat.prototype._normalizePrivateNick = function (nick) {
     var name = '';
+    var avatar = '';
     if (nick && nick.name) name = String(nick.name).replace(/^\s+|\s+$/g, '');
+    if (nick && nick.avatar) avatar = String(nick.avatar).replace(/^\s+|\s+$/g, '');
     if (!name.length) return null;
     return {
         name: name,
         host: (nick && nick.host) ? String(nick.host).replace(/^\s+|\s+$/g, '') : undefined,
         ip: (nick && nick.ip) ? String(nick.ip) : undefined,
-        qwkid: (nick && nick.qwkid) ? String(nick.qwkid).replace(/^\s+|\s+$/g, '').toUpperCase() : undefined
+        qwkid: (nick && nick.qwkid) ? String(nick.qwkid).replace(/^\s+|\s+$/g, '').toUpperCase() : undefined,
+        avatar: avatar.length ? avatar : undefined
     };
+};
+
+Chat.prototype._getOwnAvatarData = function () {
+    var avatarObj = null;
+    if (!this._avatarLib || typeof this._avatarLib.read !== 'function') return undefined;
+    try {
+        avatarObj = this._avatarLib.read(user.number, user.alias, null, null) || null;
+    } catch (_) {
+        avatarObj = null;
+    }
+    if (!avatarObj || avatarObj.disabled || !avatarObj.data) return undefined;
+    return String(avatarObj.data);
 };
 
 Chat.prototype._buildPrivateMessage = function (sender, recipient, text, timestamp) {
@@ -595,11 +610,13 @@ Chat.prototype._handlePrivateMailboxPacket = function (packet) {
 
 Chat.prototype._sendPrivateMessage = function (targetNick, text) {
     var recipient = this._normalizePrivateNick(targetNick);
+    var ownAvatar = this._getOwnAvatarData();
     var sender = this._normalizePrivateNick({
         name: (typeof user !== 'undefined' && user.alias) ? user.alias : 'You',
         host: (typeof system !== 'undefined' && system && system.name) ? system.name : '',
         ip: (typeof user !== 'undefined' && user.ip_address) ? user.ip_address : '',
-        qwkid: (typeof system !== 'undefined' && system && system.qwk_id) ? system.qwk_id : ''
+        qwkid: (typeof system !== 'undefined' && system && system.qwk_id) ? system.qwk_id : '',
+        avatar: ownAvatar
     });
     var timestamp = (new Date()).getTime();
     var message = null;
@@ -945,9 +962,10 @@ Chat.prototype.handleKey = function (key) {
         }
         if (this.input.trim().length > 0 && this.jsonchat && this.jsonchat.client && typeof this.jsonchat.client.write === 'function' && typeof this.jsonchat.client.push === 'function') {
             var msgText = this.input;
+            var ownAvatar = this._getOwnAvatarData();
             var nick = (typeof user !== 'undefined' && user.alias)
-                ? { name: user.alias, host: system.name, ip: user.ip_address, qwkid: system.qwk_id }
-                : { name: 'You', host: (system && system.name) ? system.name : '', qwkid: (system && system.qwk_id) ? system.qwk_id : '' };
+                ? { name: user.alias, host: system.name, ip: user.ip_address, qwkid: system.qwk_id, avatar: ownAvatar }
+                : { name: 'You', host: (system && system.name) ? system.name : '', qwkid: (system && system.qwk_id) ? system.qwk_id : '', avatar: ownAvatar };
             var message = {
                 nick: nick,
                 str: msgText,
@@ -3770,8 +3788,12 @@ Chat.prototype._drawAvatarSet = function (frame, avatarList, avatarLib) {
             bbsid = nick.host || null;
             if (nick.name) displayUser = nick.name;
         }
-        
-        if (avatarLib && typeof avatarLib.read === 'function') {
+
+        if (nick && nick.avatar) {
+            try { avatarArt = base64_decode(String(nick.avatar).replace(/^\s+|\s+$/g, '')); } catch (_) { avatarArt = null; }
+        }
+
+        if (!avatarArt && avatarLib && typeof avatarLib.read === 'function') {
             var avatarObj = null;
             if (usernum) avatarObj = avatarLib.read(usernum, displayUser);
             else if (netaddr) avatarObj = avatarLib.read(0, displayUser, netaddr, bbsid);
