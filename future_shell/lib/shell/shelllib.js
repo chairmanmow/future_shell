@@ -285,8 +285,12 @@ IconShell.prototype.init = function () {
     var origUpdate = this.jsonchat.update;
     var self = this;
     this.jsonchat.update = function (packet) {
+        // Push message into chan.messages FIRST so it's available during draw().
+        // Previously, _processChatUpdate triggered draw() before origUpdate
+        // pushed the message, causing _pendingMessage duplicates when throttled.
+        var result = origUpdate.call(this, packet);
         self._processChatUpdate(packet);
-        return origUpdate.call(this, packet);
+        return result;
     }
 
     // Inject Timer for periodic chat redraw
@@ -1093,8 +1097,9 @@ IconShell.prototype._resumeJsonChat = function() {
         var origUpdate = this.jsonchat.update;
         var self = this;
         this.jsonchat.update = function (packet) {
+            var result = origUpdate.call(this, packet);
             self._processChatUpdate(packet);
-            return origUpdate.call(this, packet);
+            return result;
         };
         
         // Update chat subprogram reference
@@ -1223,8 +1228,9 @@ IconShell.prototype._attemptChatRecovery = function () {
         var origUpdate = this.jsonchat.update;
         var self = this;
         this.jsonchat.update = function (packet) {
+            var result = origUpdate.call(this, packet);
             self._processChatUpdate(packet);
-            return origUpdate.call(this, packet);
+            return result;
         };
         
         // Update chat subprogram reference if it exists

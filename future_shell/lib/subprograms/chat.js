@@ -23,14 +23,22 @@ function Chat(jsonchat, opts) {
     this._inputCursor = 0;      // cursor position in input string
     this._inputScrollOffset = 0; // horizontal scroll offset for display
     this.running = false;
-    this.channel = "main";
+    this.currentChannel = "main";
+    this.channelOrder = ["main"];
+    this.publicChannelMessageKeys = {};
+    this.publicChannelUnreadCounts = {};
+    this.privateThreads = {};
+    this.privateThreadOrder = [];
+    this.privateMessageKeys = {};
+    this._pmButtonFlashState = false;
+    this._pmButtonFlashTs = 0;
+    this._lastPrivateHistorySyncTs = 0;
     this.headerFrame = null;
     this.chatOutputFrame = null;
     this.chatInputFrame = null;
     this.chatControlsFrame = null;
     this.leftAvatarFrame = null;
-    this.leftMsgFrame = null;
-    this.rightMsgFrame = null;
+    this.chatTranscriptFrame = null;
     this.rightAvatarFrame = null;
     this.messageFrames = [];
     this._controlButtons = [];
@@ -161,6 +169,9 @@ Chat.prototype._resetRuntimeState = function () {
     this._lastHeaderAttrLog = null;
     this._frameMetrics = null;
     this._controlHotspotsDirty = true;
+    this._pmButtonFlashState = false;
+    this._pmButtonFlashTs = 0;
+    this._lastPrivateHistorySyncTs = 0;
 };
 
 Chat.prototype._disposeFrames = function () {
@@ -169,8 +180,7 @@ Chat.prototype._disposeFrames = function () {
         'chatControlsFrame',
         'headerFrame',
         'leftAvatarFrame',
-        'leftMsgFrame',
-        'rightMsgFrame',
+        'chatTranscriptFrame',
         'rightAvatarFrame',
         'chatSpacerFrame',
         'chatOutputFrame',
@@ -265,12 +275,9 @@ Chat.prototype._ensureFrames = function () {
     if (avatarWidth < 2) avatarWidth = 2;
     this.avatarWidth = avatarWidth;
     var messageAreaWidth = Math.max(2, outputWidth - (avatarWidth * 2));
-    var leftMsgWidth = Math.max(2, Math.floor(messageAreaWidth / 2));
-    var rightMsgWidth = Math.max(2, messageAreaWidth - leftMsgWidth);
     var leftAvatarX = 1;
     var rightAvatarX = outputWidth - avatarWidth + 1;
-    var leftMsgX = leftAvatarX + avatarWidth;
-    var rightMsgX = rightAvatarX - rightMsgWidth;
+    var transcriptX = leftAvatarX + avatarWidth;
 
     if (!this.leftAvatarFrame) {
         this.leftAvatarFrame = new Frame(leftAvatarX, messageStartY, avatarWidth, messageHeight, outputAttr, this.chatOutputFrame);
@@ -281,29 +288,14 @@ Chat.prototype._ensureFrames = function () {
     this.leftAvatarFrame.attr = outputAttr;
     this.leftAvatarFrame.transparent = true;
 
-    if (!this.leftMsgFrame) {
-        this.leftMsgFrame = new Frame(leftMsgX, messageStartY, leftMsgWidth, messageHeight, outputAttr, this.chatOutputFrame);
-        this.leftMsgFrame.transparent = true;
-        this.leftMsgFrame.word_wrap = true;
-        this.leftMsgFrame.h_scroll = false;
-        this.leftMsgFrame.v_scroll = false;
-        if (typeof this.registerFrame === 'function') this.registerFrame(this.leftMsgFrame);
+    if (!this.chatTranscriptFrame) {
+        this.chatTranscriptFrame = new Frame(transcriptX, messageStartY, messageAreaWidth, messageHeight, outputAttr, this.chatOutputFrame);
+        this.chatTranscriptFrame.transparent = true;
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.chatTranscriptFrame);
     }
-    this.leftMsgFrame.open();
-    this.leftMsgFrame.attr = outputAttr;
-    this.leftMsgFrame.transparent = true;
-
-    if (!this.rightMsgFrame) {
-        this.rightMsgFrame = new Frame(rightMsgX, messageStartY, rightMsgWidth, messageHeight, outputAttr, this.chatOutputFrame);
-        this.rightMsgFrame.transparent = true;
-        this.rightMsgFrame.word_wrap = true;
-        this.rightMsgFrame.h_scroll = false;
-        this.rightMsgFrame.v_scroll = false;
-        if (typeof this.registerFrame === 'function') this.registerFrame(this.rightMsgFrame);
-    }
-    this.rightMsgFrame.open();
-    this.rightMsgFrame.attr = outputAttr;
-    this.rightMsgFrame.transparent = true;
+    this.chatTranscriptFrame.open();
+    this.chatTranscriptFrame.attr = outputAttr;
+    this.chatTranscriptFrame.transparent = true;
 
     if (!this.rightAvatarFrame) {
         this.rightAvatarFrame = new Frame(rightAvatarX, messageStartY, avatarWidth, messageHeight, outputAttr, this.chatOutputFrame);
@@ -345,6 +337,14 @@ Chat.prototype.enter = function (done) {
     this._resetRuntimeState();
     this._frameMetrics = null;
     this._installPrivateMailboxHook();
+    // Subscribe to personal mailbox for real-time PM delivery
+    if (this.jsonchat && this.jsonchat.client && typeof this.jsonchat.client.subscribe === 'function') {
+        try {
+            this.jsonchat.client.subscribe('chat', this._getMailboxMessagesPath());
+        } catch (_) { }
+    }
+    this._loadPrivateHistory();
+    this._syncChannelOrder();
     if (typeof Subprogram.prototype.enter === 'function') {
         Subprogram.prototype.enter.call(this, done);
     } else {
@@ -559,7 +559,7 @@ Chat.prototype._parsePrivateCommandInput = function (input) {
 
 Chat.prototype._getActiveDisplayChannel = function () {
     if (!this.jsonchat || !this.jsonchat.channels) return null;
-    var chan = this.channel ? this.jsonchat.channels[this.channel.toUpperCase()] : null;
+    var chan = this.currentChannel ? this.jsonchat.channels[this.currentChannel.toUpperCase()] : null;
     if (chan) return chan;
     for (var key in this.jsonchat.channels) {
         if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
@@ -600,8 +600,18 @@ Chat.prototype._handlePrivateMailboxPacket = function (packet) {
     if (!this._isPrivateMessage(message)) return false;
     senderNick = this._normalizePrivateNick(message.nick || null);
     if (senderNick) this._lastPrivateSenderNick = senderNick;
-    this._appendPrivateDisplayMessage(message, false);
-    this._statusText = 'Private message from ' + (senderNick ? senderNick.name : 'someone');
+    // Resolve the thread this message belongs to so we can check if it's active
+    var peerForThread = this._resolvePrivatePeerNick(message);
+    this._appendPrivateMessage(message, true);
+    // If we're currently viewing this PM thread, redraw immediately
+    if (peerForThread && this.running) {
+        var incomingThreadName = this._buildPrivateThreadName(peerForThread);
+        if (incomingThreadName && this.currentChannel.toUpperCase() === incomingThreadName.toUpperCase()) {
+            this._lastMessageSignature = null;
+            try { this.draw(); } catch (_) { }
+        }
+    }
+    this._statusText = 'PM from ' + (senderNick ? senderNick.name : 'someone');
     this._lastStatusUpdateTs = Date.now();
     this._lastInputRendered = '';
     this._refreshHeaderAndInput(true);
@@ -627,7 +637,17 @@ Chat.prototype._sendPrivateMessage = function (targetNick, text) {
     this.jsonchat.client.write('chat', 'channels.' + recipient.name + '.messages', message, 2);
     this.jsonchat.client.push('chat', 'channels.' + recipient.name + '.history', message, 2);
     this.jsonchat.client.push('chat', this._getMailboxHistoryPath(), message, 2);
-    this._appendPrivateDisplayMessage(message, true);
+    // Route to thread + switch view
+    this._rememberPrivateMessage(message);
+    var thread = this._ensurePrivateThread(recipient);
+    thread.messages.push(message);
+    thread.unreadCount = 0;
+    if (thread.messages.length > 200) thread.messages.splice(0, thread.messages.length - 200);
+    this.currentChannel = thread.name;
+    this._markCurrentViewRead(this.currentChannel);
+    this._syncChannelOrder();
+    this._needsRedraw = true;
+    if (this.running) this.draw();
     return true;
 };
 
@@ -735,7 +755,7 @@ Chat.prototype.detachShellTimer = function () {
 };
 Chat.prototype.handleKey = function (key) {
     if (this._processControlHotspotInput(key)) return;
-    var pageStep = (this.leftMsgFrame && this.leftMsgFrame.height) ? Math.max(1, this.leftMsgFrame.height - 1) : 5;
+    var pageStep = 3; // scroll by blocks (bubbles)
     this._lastKeyTs = Date.now();
     var rosterKey = (typeof KEY_F2 !== 'undefined') ? KEY_F2 : null;
 
@@ -939,6 +959,10 @@ Chat.prototype.handleKey = function (key) {
                 case '/rooms':
                     cmdHandled = this._activateControlAction('channels');
                     break;
+                case '/private':
+                case '/threads':
+                    cmdHandled = this._activateControlAction('private');
+                    break;
                 case '/settings':
                 case '/prefs':
                 case '/options':
@@ -951,6 +975,22 @@ Chat.prototype.handleKey = function (key) {
                     cmdHandled = this._activateControlAction('img');
                     break;
             }
+            // Handle /join and /part with arguments
+            if (!cmdHandled && /^\/join\b/i.test(rawTrimmedInput)) {
+                var joinArgs = rawTrimmedInput.replace(/^\/join\s*/i, '').trim();
+                if (joinArgs) {
+                    cmdHandled = this._joinChannel(joinArgs);
+                } else {
+                    this._statusText = 'Usage: /join <channel>';
+                    this._lastStatusUpdateTs = Date.now();
+                    this._lastInputRendered = '';
+                    this._refreshHeaderAndInput(true);
+                    cmdHandled = true;
+                }
+            }
+            if (!cmdHandled && /^\/part\b/i.test(rawTrimmedInput)) {
+                cmdHandled = this._partChannel();
+            }
             if (cmdHandled) {
                 this.input = "";
                 this._inputCursor = 0;
@@ -961,6 +1001,30 @@ Chat.prototype.handleKey = function (key) {
             // Unknown slash command - fall through to send as regular message
         }
         if (this.input.trim().length > 0 && this.jsonchat && this.jsonchat.client && typeof this.jsonchat.client.write === 'function' && typeof this.jsonchat.client.push === 'function') {
+            // If viewing a PM thread, send as private message
+            if (this.currentChannel && this.currentChannel.charAt(0) === '@') {
+                var pmThread = this._getPrivateThreadByName(this.currentChannel);
+                if (pmThread && pmThread.peerNick) {
+                    this._sendPrivateMessage(pmThread.peerNick, this.input);
+                } else {
+                    // Fallback: try to resolve from roster
+                    var pmTarget = this.currentChannel.substr(1);
+                    var pmNick = this._resolvePrivateTargetNick(pmTarget);
+                    if (pmNick) {
+                        this._sendPrivateMessage(pmNick, this.input);
+                    } else {
+                        this._statusText = 'Cannot send PM to ' + pmTarget;
+                        this._lastStatusUpdateTs = Date.now();
+                        this._lastInputRendered = '';
+                        this._refreshHeaderAndInput(true);
+                    }
+                }
+                this.input = "";
+                this._inputCursor = 0;
+                this._inputScrollOffset = 0;
+                this._updateInputDisplay();
+                return;
+            }
             var msgText = this.input;
             var ownAvatar = this._getOwnAvatarData();
             var nick = (typeof user !== 'undefined' && user.alias)
@@ -971,7 +1035,7 @@ Chat.prototype.handleKey = function (key) {
                 str: msgText,
                 time: (new Date()).getTime()
             };
-            var chan = (this.jsonchat.channels && this.channel) ? this.jsonchat.channels[this.channel.toUpperCase()] : null;
+            var chan = (this.jsonchat.channels && this.currentChannel) ? this.jsonchat.channels[this.currentChannel.toUpperCase()] : null;
             // Award points for sending chat message
             try {
                 var shell = (typeof IconShell !== 'undefined' && IconShell._activeInstance) ? IconShell._activeInstance : null;
@@ -980,8 +1044,8 @@ Chat.prototype.handleKey = function (key) {
                 }
             } catch (e) { /* ignore */ }
             // Render immediately for sender
-            this.jsonchat.client.write('chat', 'channels.' + this.channel + '.messages', message, 2);
-            this.jsonchat.client.push('chat', 'channels.' + this.channel + '.history', message, 2);
+            this.jsonchat.client.write('chat', 'channels.' + this.currentChannel + '.messages', message, 2);
+            this.jsonchat.client.push('chat', 'channels.' + this.currentChannel + '.history', message, 2);
             if (chan && Array.isArray(chan.messages)) chan.messages.push(message);
             this.draw();
         }
@@ -2154,6 +2218,8 @@ Chat.prototype._buildControlButtons = function (opts) {
     // Dynamic label for /img button showing image count
     var imgCount = (this._bitmapQueue && this._bitmapQueue.length) ? this._bitmapQueue.length : 0;
     var imgLabel = imgCount > 0 ? '/img(' + imgCount + ')' : '/img';
+    var pmUnread = (typeof this._getUnreadPrivateThreadCount === 'function') ? this._getUnreadPrivateThreadCount() : 0;
+    var pmLabel = pmUnread > 0 ? '/pm(' + pmUnread + ')' : '/private';
     var buttonDefs = [
         {
             id: 'exit',
@@ -2196,6 +2262,13 @@ Chat.prototype._buildControlButtons = function (opts) {
             action: 'channels',
             hotKeys: [],
             hotspotToken: '~ch~'
+        },
+        {
+            id: 'private',
+            label: pmLabel,
+            action: 'private',
+            hotKeys: [],
+            hotspotToken: '~pr~'
         },
         {
             id: 'settings',
@@ -2258,7 +2331,13 @@ Chat.prototype._renderHeaderFrame = function () {
     this.headerFrame.attr = attr;
     try { this.headerFrame.clear(attr); } catch (_) { }
     var title = 'Chat';
-    if (this.channel) title += ' - ' + this.channel;
+    if (this.currentChannel) {
+        if (this.currentChannel.charAt(0) === '@') {
+            title += ' - PM: ' + this.currentChannel.substr(1);
+        } else {
+            title += ' - #' + this.currentChannel;
+        }
+    }
     var text = title;
     var width = this.headerFrame.width || 0;
     if (width <= 0) return;
@@ -2272,7 +2351,7 @@ Chat.prototype._renderHeaderFrame = function () {
 };
 
 Chat.prototype._formatControlsInfo = function () {
-    var channel = this.channel ? this.channel : 'main';
+    var channel = this.currentChannel ? this.currentChannel : 'main';
     return 'Channel: ' + channel;
 };
 
@@ -2309,7 +2388,21 @@ Chat.prototype._handleRosterRequest = function () {
 
 Chat.prototype._fetchJsonChatRoster = function () {
     if (!this.jsonchat || !this.jsonchat.client || typeof this.jsonchat.client.who !== 'function') return [];
-    var channelName = this.channel || 'main';
+    var channelName = this.currentChannel || 'main';
+    // If viewing a PM thread, use first real public channel for roster lookup
+    if (channelName.charAt(0) === '@') {
+        channelName = 'main';
+        if (this.jsonchat && this.jsonchat.channels) {
+            for (var _rk in this.jsonchat.channels) {
+                if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, _rk)) continue;
+                var _rc = this.jsonchat.channels[_rk];
+                if (_rc && _rc.name && _rc.name.charAt(0) !== '@') {
+                    channelName = _rc.name;
+                    break;
+                }
+            }
+        }
+    }
     var seenNames = {};
     var candidates = [];
     function addCandidate(name) {
@@ -2584,14 +2677,14 @@ Chat.prototype._showInfoModal = function () {
         try { dbug('[Chat] _showInfoModal invoked', 'chat'); } catch (_) { }
     }
     if (typeof Modal !== 'function') {
-        this._statusText = 'Channel: ' + (this.channel || 'default');
+        this._statusText = 'Channel: ' + (this.currentChannel || 'default');
         this._lastStatusUpdateTs = Date.now();
         this._lastInputRendered = '';
         this._refreshHeaderAndInput(true);
         return;
     }
     var infoText = [
-        'Channel: ' + (this.channel || 'default'),
+        'Channel: ' + (this.currentChannel || 'default'),
         '',
         'JSON Chat service connected.',
         '',
@@ -2630,33 +2723,46 @@ Chat.prototype._showChannelsModal = function () {
     if (typeof log === 'function') {
         try { dbug('[Chat] _showChannelsModal invoked', 'chat'); } catch (_) { }
     }
-    if (typeof Modal !== 'function') {
-        this._statusText = 'Channels feature coming soon';
+    if (typeof Modal !== 'function' || typeof Modal.createChooser !== 'function') {
+        this._statusText = 'Channels unavailable';
         this._lastStatusUpdateTs = Date.now();
         this._lastInputRendered = '';
         this._refreshHeaderAndInput(true);
         return;
     }
-    var channelsText = [
-        'Available Channels:',
-        '',
-        '* ' + (this.channel || 'default') + ' (current)',
-        '',
-        '(Channel switching coming soon)'
-    ].join('\r\n');
-    var frameAttr = this.paletteAttr('CHAT_MODAL_FRAME', this.chatOutputFrame ? this.chatOutputFrame.attr : 0);
-    var contentAttr = this.paletteAttr('CHAT_MODAL_CONTENT', frameAttr);
+    var entries = this._buildChannelEntries();
+    if (!entries.length) {
+        this._statusText = 'No channels available';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return;
+    }
+    var initialIndex = 0;
+    for (var i = 0; i < entries.length; i++) {
+        if (entries[i] && entries[i].isCurrent) { initialIndex = i; break; }
+    }
+    var items = [];
+    for (var j = 0; j < entries.length; j++) {
+        var e = entries[j];
+        var label = e.name;
+        if (e.isCurrent) label += ' *';
+        if (e.unreadCount > 0) label += ' (new ' + e.unreadCount + ')';
+        label += ' [' + e.userCount + ']';
+        items.push({ label: label, value: e.name, data: e });
+    }
     var self = this;
     try {
-        new Modal({
-            type: 'confirm',
-            title: 'Channels',
-            message: channelsText,
-            parentFrame: this.parentFrame || this.chatOutputFrame || null,
-            captureKeys: true,
-            attr: frameAttr,
-            contentAttr: contentAttr,
-            buttons: [{ id: 'ok', label: 'OK', isDefault: true }],
+        Modal.createChooser({
+            title: 'Channels (Enter=switch, /join /part)',
+            items: items,
+            initialIndex: initialIndex,
+            onChoose: function (value, item, modal) {
+                if (value) {
+                    self._switchToChannel(value);
+                }
+            },
+            onCancel: function () { },
             onClose: function () {
                 self._needsRedraw = true;
                 if (self.running) try { self.draw(); } catch (_) { }
@@ -2813,6 +2919,9 @@ Chat.prototype._activateControlAction = function (action) {
         case 'channels':
             this._showChannelsModal();
             return true;
+        case 'private':
+            this._showPrivateThreadsModal();
+            return true;
         case 'settings':
             this._showSettingsModal();
             return true;
@@ -2922,10 +3031,9 @@ Chat.prototype.cycle = function () {
     if (this.jsonchat && typeof this.jsonchat.cycle === 'function') {
         var client = this.jsonchat.client;
         if (client && client.connected) {
-            // Skip if no data waiting - prevents blocking on partial data
-            if (client.socket && !client.socket.data_waiting) {
-                // No data to read, skip cycle
-            } else {
+            // Only call full jsonchat.cycle() when socket has data
+            // (avoids blocking on partial data / empty recv)
+            if (client.socket && client.socket.data_waiting) {
                 var cycleStart = Date.now();
                 try { this.jsonchat.cycle(); } catch (e) {
                     try { log(LOG_WARNING, '[Chat.cycle] jsonchat cycle error: ' + e); } catch (_) { }
@@ -2933,6 +3041,18 @@ Chat.prototype.cycle = function () {
                 var cycleDuration = Date.now() - cycleStart;
                 if (cycleDuration > 2000) {
                     try { log(LOG_WARNING, '[Chat.cycle] jsonchat cycle took ' + cycleDuration + 'ms - potential blocking!'); } catch (_) { }
+                }
+            }
+            // ALWAYS process queued client.updates even when no new socket data.
+            // Subscription WRITE packets may have been consumed during client.slice()'s
+            // wait() loop and queued in client.updates — they must be processed.
+            if (client.updates && client.updates.length > 0) {
+                try {
+                    while (client.updates.length > 0) {
+                        this.jsonchat.update(client.updates.shift());
+                    }
+                } catch (e) {
+                    try { log(LOG_WARNING, '[Chat.cycle] queued update error: ' + e); } catch (_) { }
                 }
             }
         }
@@ -2964,6 +3084,38 @@ Chat.prototype.cycle = function () {
             if (btnEntry && btnEntry.id === 'img' && btnEntry.button) {
                 btnEntry.button.attr = this.paletteAttr('CHAT_BUTTON', BG_CYAN | WHITE);
                 try { btnEntry.button.render(); } catch (_) { }
+            }
+        }
+    }
+    // Sync public channel unread counts
+    this._syncPublicChannelUnreadCounts(true);
+    // Poll mailbox for new private messages (like avatar_chat's syncPrivateHistory)
+    this._syncPrivateHistory();
+    // Flash /private button when unread PMs exist
+    var unreadPMs = this._getUnreadPrivateThreadCount();
+    if (unreadPMs > 0 && this._controlButtons) {
+        var pmFlashInterval = 600;
+        if (!this._pmButtonFlashTs || (now - this._pmButtonFlashTs) >= pmFlashInterval) {
+            this._pmButtonFlashState = !this._pmButtonFlashState;
+            this._pmButtonFlashTs = now;
+            for (var pi = 0; pi < this._controlButtons.length; pi++) {
+                var pmBtn = this._controlButtons[pi];
+                if (pmBtn && pmBtn.id === 'private' && pmBtn.button) {
+                    var pmNormal = this.paletteAttr('CHAT_BUTTON', BG_CYAN | WHITE);
+                    var pmFlash = this.paletteAttr('CHAT_BUTTON_FLASH', BG_RED | YELLOW);
+                    pmBtn.button.attr = this._pmButtonFlashState ? pmFlash : pmNormal;
+                    try { pmBtn.button.render(); } catch (_) { }
+                }
+            }
+        }
+    } else if (this._pmButtonFlashState) {
+        this._pmButtonFlashState = false;
+        this._pmButtonFlashTs = 0;
+        for (var pi = 0; pi < this._controlButtons.length; pi++) {
+            var pmBtn = this._controlButtons[pi];
+            if (pmBtn && pmBtn.id === 'private' && pmBtn.button) {
+                pmBtn.button.attr = this.paletteAttr('CHAT_BUTTON', BG_CYAN | WHITE);
+                try { pmBtn.button.render(); } catch (_) { }
             }
         }
     }
@@ -3035,27 +3187,49 @@ Chat.prototype.draw = function () {
     var signature = this._computeMessageSignature(channelMessages);
     var renderMessages = channelMessages.slice();
     if (this._pendingMessage) {
-        renderMessages.push(this._pendingMessage);
+        // Guard: only add _pendingMessage if it isn't already in chan.messages.
+        // When draw() is throttled, origUpdate may push the message into
+        // chan.messages before the deferred draw runs, creating a duplicate
+        // that inflates bubble height and pushes other messages off-screen.
+        // Check last few messages (not just last) in case multiple arrived
+        var alreadyInList = false;
+        for (var _pi = channelMessages.length - 1; _pi >= 0 && _pi >= channelMessages.length - 5; _pi--) {
+            if (channelMessages[_pi] === this._pendingMessage) { alreadyInList = true; break; }
+        }
+        if (!alreadyInList) {
+            renderMessages.push(this._pendingMessage);
+        }
     }
 
     var groups = this._groupMessages(renderMessages);
-    this._prepareGroupLayouts(groups);
-    var layout = this._buildLayoutLines(groups);
-    var windowInfo = this._resolveScrollWindow(layout.totalLines);
+
+    // Build bubble-style transcript blocks
+    var transcriptWidth = (this.chatTranscriptFrame) ? this.chatTranscriptFrame.width : 0;
+    var blocks = this._buildTranscriptBlocks(groups, transcriptWidth);
+
+    // Block-level scroll
+    var frameHeight = (this.chatTranscriptFrame) ? this.chatTranscriptFrame.height : 1;
+    this._maxScrollOffset = Math.max(0, blocks.length - 1);
+    if (this.scrollOffset > this._maxScrollOffset) this.scrollOffset = this._maxScrollOffset;
+    if (!this._userScrolled) this.scrollOffset = 0;
+
+    var selected = this._pickVisibleBlocks(blocks, frameHeight, this.scrollOffset);
+    var visibleBlocks = selected.blocks;
+    var totalHeight = this._usedBlockHeight(visibleBlocks);
+    this.scrollOffset = selected.actualScrollOffsetBlocks;
+    if (this.scrollOffset === 0) this._userScrolled = false;
 
     this._clearChatFrames();
     this.messageFrames = [];
 
-    if (layout.totalLines > 0 && windowInfo.endLine > windowInfo.startLine) {
-        this._renderGroups(groups, layout.lines, windowInfo.startLine, windowInfo.endLine);
-        var tailGroup = this._findLastVisibleGroup(groups);
-        if (tailGroup) {
-            this.lastSender = tailGroup.sender;
-            this.lastRow = tailGroup.renderEnd || 0;
-            this._lastRenderedSide = tailGroup.side;
-        } else {
-            this.lastSender = null;
-            this.lastRow = Math.max(0, windowInfo.endLine - windowInfo.startLine);
+    this._renderTranscriptBubbles(visibleBlocks, totalHeight);
+
+    if (visibleBlocks.length > 0) {
+        var tailBlock = visibleBlocks[visibleBlocks.length - 1];
+        if (tailBlock && tailBlock.group) {
+            this.lastSender = tailBlock.group.sender;
+            this.lastRow = tailBlock.group.renderEnd || 0;
+            this._lastRenderedSide = tailBlock.side;
         }
     } else {
         this.lastSender = null;
@@ -3077,17 +3251,528 @@ Chat.prototype.draw = function () {
     if (_perfStart && global.__ICSH_INSTRUMENT_CHAT_REDRAW) try { global.__ICSH_INSTRUMENT_CHAT_REDRAW(_perfStart); } catch (_) { }
 };
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Multi-Channel Methods
+// ═══════════════════════════════════════════════════════════════════════════
+
+Chat.prototype._normalizeChannelName = function (name, fallback) {
+    var trimmed = String(name || '').replace(/^\s+|\s+$/g, '');
+    if (trimmed.length) return trimmed;
+    if (fallback) {
+        var fb = String(fallback).replace(/^\s+|\s+$/g, '');
+        if (fb.length) return fb;
+    }
+    return 'main';
+};
+
+Chat.prototype._channelExists = function (list, target) {
+    var upper = String(target).toUpperCase();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].toUpperCase() === upper) return true;
+    }
+    return false;
+};
+
+Chat.prototype._getChannelByName = function (name) {
+    if (!this.jsonchat || !this.jsonchat.channels || !name) return null;
+    var upper = name.toUpperCase();
+    for (var key in this.jsonchat.channels) {
+        if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
+        var ch = this.jsonchat.channels[key];
+        if (ch && ch.name && ch.name.toUpperCase() === upper) return ch;
+    }
+    return null;
+};
+
+Chat.prototype._syncChannelOrder = function () {
+    var nextOrder = [];
+    var i, key;
+    if (!this.jsonchat) return;
+    // Preserve existing order for channels still joined
+    for (i = 0; i < this.channelOrder.length; i++) {
+        var chName = this.channelOrder[i];
+        if (chName && this._getChannelByName(chName)) {
+            nextOrder.push(this._getChannelByName(chName).name);
+        }
+    }
+    // Add any new channels from jsonchat
+    if (this.jsonchat.channels) {
+        for (key in this.jsonchat.channels) {
+            if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
+            var ch = this.jsonchat.channels[key];
+            if (ch && ch.name && !this._channelExists(nextOrder, ch.name)) {
+                nextOrder.push(ch.name);
+            }
+        }
+    }
+    // Add private threads
+    for (i = 0; i < this.privateThreadOrder.length; i++) {
+        var threadId = this.privateThreadOrder[i];
+        var thread = threadId ? this.privateThreads[threadId] : null;
+        if (thread && !this._channelExists(nextOrder, thread.name)) {
+            nextOrder.push(thread.name);
+        }
+    }
+    this.channelOrder = nextOrder;
+    if (!this.channelOrder.length) {
+        this.currentChannel = '';
+        this.scrollOffset = 0;
+        return;
+    }
+    // Ensure currentChannel is still valid
+    if (!this.currentChannel || (!this._getChannelByName(this.currentChannel) && !this._getPrivateThreadByName(this.currentChannel))) {
+        this.currentChannel = this.channelOrder[0] || '';
+        this._markCurrentViewRead(this.currentChannel);
+    }
+};
+
+Chat.prototype._switchToChannel = function (channelName) {
+    this.currentChannel = channelName;
+    this._markCurrentViewRead(this.currentChannel);
+    this.scrollOffset = 0;
+    this._userScrolled = false;
+    this._needsRedraw = true;
+    this._lastMessageSignature = null;
+    if (this.running) this.draw();
+};
+
+Chat.prototype._joinChannel = function (channelName) {
+    var normalized = this._normalizeChannelName(channelName, 'main');
+    if (!this.jsonchat || !this.jsonchat.getcmd) {
+        this._statusText = 'Not connected to chat';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return true;
+    }
+    this.jsonchat.getcmd(this.currentChannel, '/join ' + normalized);
+    this._syncChannelOrder();
+    var ch = this._getChannelByName(normalized);
+    if (ch) {
+        this._switchToChannel(ch.name);
+    }
+    return true;
+};
+
+Chat.prototype._partChannel = function () {
+    if (!this.jsonchat || !this.jsonchat.getcmd) {
+        this._statusText = 'Not connected to chat';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return true;
+    }
+    if (!this.currentChannel || this.currentChannel.charAt(0) === '@') {
+        this._switchToChannel(this.channelOrder.length ? this.channelOrder[0] : 'main');
+        return true;
+    }
+    this.jsonchat.getcmd(this.currentChannel, '/part');
+    this._syncChannelOrder();
+    if (!this._getChannelByName(this.currentChannel)) {
+        this.currentChannel = this.channelOrder.length ? this.channelOrder[0] || '' : '';
+        this._markCurrentViewRead(this.currentChannel);
+        this.scrollOffset = 0;
+        this._userScrolled = false;
+    }
+    this._needsRedraw = true;
+    this._lastMessageSignature = null;
+    if (this.running) this.draw();
+    return true;
+};
+
+Chat.prototype._cycleChannel = function () {
+    if (this.channelOrder.length < 2) return;
+    var upper = this.currentChannel.toUpperCase();
+    for (var i = 0; i < this.channelOrder.length; i++) {
+        if (this.channelOrder[i] && this.channelOrder[i].toUpperCase() === upper) {
+            var next = this.channelOrder[(i + 1) % this.channelOrder.length] || 'main';
+            this._switchToChannel(next);
+            return;
+        }
+    }
+    this._switchToChannel(this.channelOrder[0] || 'main');
+};
+
+Chat.prototype._buildChannelEntries = function () {
+    var entries = [];
+    if (!this.jsonchat || !this.jsonchat.channels) return entries;
+    for (var key in this.jsonchat.channels) {
+        if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
+        var ch = this.jsonchat.channels[key];
+        if (!ch || !ch.name || ch.name.charAt(0) === '@') continue;
+        var unreadKey = ch.name.toUpperCase();
+        var unreadCount = this.publicChannelUnreadCounts[unreadKey] || 0;
+        entries.push({
+            name: ch.name,
+            userCount: ch.users ? ch.users.length : 0,
+            isCurrent: ch.name.toUpperCase() === this.currentChannel.toUpperCase(),
+            unreadCount: unreadCount
+        });
+    }
+    entries.sort(function (a, b) {
+        if (a.name.toUpperCase() < b.name.toUpperCase()) return -1;
+        if (a.name.toUpperCase() > b.name.toUpperCase()) return 1;
+        return 0;
+    });
+    return entries;
+};
+
+Chat.prototype._buildPublicMessageKey = function (channelName, message) {
+    var sender = this._normalizePrivateNick(message.nick || null);
+    var senderKey = sender ? this._normalizePrivateLookupKey(sender.name) + '|' + (sender.qwkid || String(sender.host || '').toUpperCase()) : 'NOTICE';
+    return [
+        this._normalizeChannelName(channelName).toUpperCase(),
+        String(message.time || 0),
+        senderKey,
+        String(message.str || '')
+    ].join('|');
+};
+
+Chat.prototype._rememberPublicChannelMessage = function (channelName, message) {
+    var key = this._buildPublicMessageKey(channelName, message);
+    if (this.publicChannelMessageKeys[key]) return false;
+    this.publicChannelMessageKeys[key] = true;
+    return true;
+};
+
+Chat.prototype._syncPublicChannelUnreadCounts = function (markUnread) {
+    if (!this.jsonchat || !this.jsonchat.channels) return;
+    for (var key in this.jsonchat.channels) {
+        if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
+        var ch = this.jsonchat.channels[key];
+        if (!ch || !ch.name || ch.name.charAt(0) === '@') continue;
+        var unreadKey = ch.name.toUpperCase();
+        if (this.publicChannelUnreadCounts[unreadKey] === undefined) {
+            this.publicChannelUnreadCounts[unreadKey] = 0;
+        }
+        for (var i = 0; i < ch.messages.length; i++) {
+            var msg = ch.messages[i];
+            if (!msg || !this._rememberPublicChannelMessage(ch.name, msg)) continue;
+            if (markUnread && ch.name.toUpperCase() !== this.currentChannel.toUpperCase() && msg.nick && msg.nick.name && msg.nick.name.toUpperCase() !== ((typeof user !== 'undefined' && user.alias) ? user.alias.toUpperCase() : '')) {
+                this.publicChannelUnreadCounts[unreadKey] += 1;
+            }
+        }
+    }
+};
+
+Chat.prototype._markCurrentViewRead = function (viewName) {
+    this._markPublicChannelRead(viewName);
+    this._markPrivateThreadRead(viewName);
+};
+
+Chat.prototype._markPublicChannelRead = function (viewName) {
+    var normalized = String(viewName || '').replace(/^\s+|\s+$/g, '').toUpperCase();
+    if (!normalized.length || normalized.charAt(0) === '@') return;
+    if (!this.publicChannelUnreadCounts[normalized]) return;
+    this.publicChannelUnreadCounts[normalized] = 0;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Private Message Thread Methods
+// ═══════════════════════════════════════════════════════════════════════════
+
+Chat.prototype._buildPrivateThreadId = function (nick) {
+    var normalized = this._normalizePrivateNick(nick);
+    // Use only the name key — qwkid/host vary across messages from the same
+    // person (outgoing vs incoming, different relay paths) which splits threads
+    var nameKey = normalized ? String(normalized.name).replace(/[^A-Za-z0-9]/g, '').toUpperCase() : '';
+    return nameKey;
+};
+
+Chat.prototype._buildPrivateThreadName = function (nick) {
+    var normalized = this._normalizePrivateNick(nick);
+    return '@' + (normalized ? normalized.name : '');
+};
+
+Chat.prototype._resolvePrivatePeerNick = function (message) {
+    var ownAlias = (typeof user !== 'undefined' && user.alias) ? user.alias : '';
+    var sender = this._normalizePrivateNick(message.nick || null);
+    var recipient = this._normalizePrivateNick(message.private ? message.private.to : null);
+    if (!sender || !recipient) return null;
+    if (sender.name.toUpperCase() === ownAlias.toUpperCase()) return recipient;
+    return sender;
+};
+
+Chat.prototype._ensurePrivateThread = function (peerNick) {
+    var normalized = this._normalizePrivateNick(peerNick) || peerNick;
+    // Use normalized nick directly - don't call _resolvePrivateTargetNick
+    // as that depends on roster which requires public channel context
+    var canonical = normalized;
+    var threadId = this._buildPrivateThreadId(canonical);
+    var thread = this.privateThreads[threadId];
+    if (!thread) {
+        thread = {
+            id: threadId,
+            name: this._buildPrivateThreadName(canonical),
+            peerNick: canonical,
+            messages: [],
+            unreadCount: 0
+        };
+        this.privateThreads[threadId] = thread;
+        this.privateThreadOrder.push(threadId);
+    } else {
+        var prevName = thread.name;
+        // Update peerNick with richer metadata if available
+        if (canonical && canonical.name) {
+            if (!thread.peerNick || !thread.peerNick.qwkid && canonical.qwkid) {
+                thread.peerNick = canonical;
+            } else if (!thread.peerNick.host && canonical.host) {
+                thread.peerNick = canonical;
+            }
+        }
+        thread.name = this._buildPrivateThreadName(thread.peerNick || canonical);
+        if (prevName && this.currentChannel.toUpperCase() === prevName.toUpperCase()) {
+            this.currentChannel = thread.name;
+        }
+    }
+    return thread;
+};
+
+Chat.prototype._getPrivateThreadByName = function (name) {
+    if (!name) return null;
+    var upper = name.toUpperCase();
+    for (var i = 0; i < this.privateThreadOrder.length; i++) {
+        var threadId = this.privateThreadOrder[i];
+        var thread = threadId ? this.privateThreads[threadId] : null;
+        if (thread && thread.name.toUpperCase() === upper) return thread;
+    }
+    return null;
+};
+
+Chat.prototype._buildPrivateMessageKey = function (message) {
+    var sender = this._normalizePrivateNick(message.nick || null);
+    var recipient = this._normalizePrivateNick(message.private ? message.private.to : null);
+    var senderKey = sender ? this._normalizePrivateLookupKey(sender.name) + '|' + (sender.qwkid || String(sender.host || '').toUpperCase()) : '';
+    var recipientKey = recipient ? this._normalizePrivateLookupKey(recipient.name) + '|' + (recipient.qwkid || String(recipient.host || '').toUpperCase()) : '';
+    return [
+        String(message.time || 0),
+        senderKey,
+        recipientKey,
+        String(message.str || '')
+    ].join('|');
+};
+
+Chat.prototype._rememberPrivateMessage = function (message) {
+    var key = this._buildPrivateMessageKey(message);
+    if (this.privateMessageKeys[key]) return false;
+    this.privateMessageKeys[key] = true;
+    return true;
+};
+
+Chat.prototype._appendPrivateMessage = function (message, markUnread) {
+    var peerNick = this._resolvePrivatePeerNick(message);
+    if (!peerNick) return;
+    if (!this._rememberPrivateMessage(message)) return;
+    var thread = this._ensurePrivateThread(peerNick);
+    thread.messages.push(message);
+    if (thread.messages.length > 200) thread.messages.splice(0, thread.messages.length - 200);
+    var ownAlias = (typeof user !== 'undefined' && user.alias) ? user.alias.toUpperCase() : '';
+    if (markUnread && message.nick && message.nick.name && message.nick.name.toUpperCase() !== ownAlias && this.currentChannel.toUpperCase() !== thread.name.toUpperCase()) {
+        thread.unreadCount += 1;
+        this._lastPrivateSenderNick = peerNick;
+    }
+    if (message.nick && message.nick.name && message.nick.name.toUpperCase() !== ownAlias) {
+        this._lastPrivateSenderNick = peerNick;
+    }
+    this._syncChannelOrder();
+    this._needsRedraw = true;
+};
+
+Chat.prototype._loadPrivateHistory = function () {
+    var historyLimit = 200;
+    var history = [];
+    if (!this.jsonchat || !this.jsonchat.client || typeof this.jsonchat.client.slice !== 'function') return;
+    this._ensureHistoryArray(this._getMailboxHistoryPath());
+    try {
+        history = this.jsonchat.client.slice('chat', this._getMailboxHistoryPath(), -historyLimit, undefined, 1) || [];
+    } catch (_) { history = []; }
+    for (var i = 0; i < history.length; i++) {
+        var msg = history[i];
+        if (!this._isPrivateMessage(msg)) continue;
+        this._appendPrivateMessage(msg, false);
+    }
+};
+
+Chat.prototype._syncPrivateHistory = function () {
+    var now = Date.now();
+    // Throttle to once per second (matches avatar_chat's syncPrivateHistory)
+    if (this._lastPrivateHistorySyncTs && (now - this._lastPrivateHistorySyncTs) < 1000) return;
+    this._lastPrivateHistorySyncTs = now;
+
+    var historyLimit = 200;
+    var history = [];
+    if (!this.jsonchat || !this.jsonchat.client) return;
+    var client = this.jsonchat.client;
+    if (!client.connected || typeof client.slice !== 'function') return;
+
+    var histPath = this._getMailboxHistoryPath();
+
+    // Ensure the history array exists (may have been lost on JSON service restart)
+    try { this._ensureHistoryArray(histPath); } catch (_) { }
+
+    try {
+        history = client.slice('chat', histPath, -historyLimit, undefined, 1) || [];
+    } catch (sliceErr) {
+        try { log(LOG_WARNING, '[Chat._syncPrivateHistory] slice error on ' + histPath + ': ' + sliceErr); } catch (_) { }
+        return;
+    }
+
+    // After slice(), process any subscription packets that were consumed
+    // during the wait() loop and queued in client.updates
+    if (client.updates && client.updates.length > 0 && this.jsonchat && typeof this.jsonchat.update === 'function') {
+        try {
+            while (client.updates.length > 0) {
+                this.jsonchat.update(client.updates.shift());
+            }
+        } catch (_) { }
+    }
+
+    var hadNew = false;
+    var newCount = 0;
+    for (var i = 0; i < history.length; i++) {
+        var msg = history[i];
+        if (!this._isPrivateMessage(msg)) continue;
+        var peerNick = this._resolvePrivatePeerNick(msg);
+        if (!peerNick) continue;
+        if (!this._rememberPrivateMessage(msg)) continue;
+        // This is a genuinely new message
+        var thread = this._ensurePrivateThread(peerNick);
+        thread.messages.push(msg);
+        if (thread.messages.length > 200) thread.messages.splice(0, thread.messages.length - 200);
+        var ownAlias = (typeof user !== 'undefined' && user.alias) ? user.alias.toUpperCase() : '';
+        if (msg.nick && msg.nick.name && msg.nick.name.toUpperCase() !== ownAlias) {
+            this._lastPrivateSenderNick = peerNick;
+            if (this.currentChannel.toUpperCase() !== thread.name.toUpperCase()) {
+                thread.unreadCount += 1;
+            }
+        }
+        hadNew = true;
+        newCount++;
+    }
+    if (hadNew) {
+        try { log(LOG_INFO, '[Chat._syncPrivateHistory] found ' + newCount + ' new PM(s)'); } catch (_) { }
+        this._syncChannelOrder();
+        this._needsRedraw = true;
+        // If viewing a PM thread that got new messages, redraw now
+        if (this.currentChannel && this.currentChannel.charAt(0) === '@' && this.running) {
+            this._lastMessageSignature = null;
+            try { this.draw(); } catch (_) { }
+        }
+    }
+};
+
+
+Chat.prototype._getUnreadPrivateThreadCount = function () {
+    var total = 0;
+    for (var i = 0; i < this.privateThreadOrder.length; i++) {
+        var threadId = this.privateThreadOrder[i];
+        var thread = threadId ? this.privateThreads[threadId] : null;
+        if (thread) total += thread.unreadCount;
+    }
+    return total;
+};
+
+Chat.prototype._markPrivateThreadRead = function (viewName) {
+    var thread = this._getPrivateThreadByName(viewName);
+    if (!thread || thread.unreadCount === 0) return;
+    thread.unreadCount = 0;
+};
+
+Chat.prototype._buildPrivateThreadEntries = function () {
+    var entries = [];
+    for (var i = 0; i < this.privateThreadOrder.length; i++) {
+        var threadId = this.privateThreadOrder[i];
+        var thread = threadId ? this.privateThreads[threadId] : null;
+        if (!thread) continue;
+        entries.push({
+            name: thread.name,
+            msgCount: thread.messages.length,
+            isCurrent: thread.name.toUpperCase() === this.currentChannel.toUpperCase(),
+            unreadCount: thread.unreadCount
+        });
+    }
+    entries.sort(function (a, b) {
+        if (a.unreadCount !== b.unreadCount) return b.unreadCount - a.unreadCount;
+        if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+        if (a.msgCount !== b.msgCount) return b.msgCount - a.msgCount;
+        if (a.name.toUpperCase() < b.name.toUpperCase()) return -1;
+        if (a.name.toUpperCase() > b.name.toUpperCase()) return 1;
+        return 0;
+    });
+    return entries;
+};
+
+Chat.prototype._showPrivateThreadsModal = function () {
+    if (typeof log === 'function') {
+        try { dbug('[Chat] _showPrivateThreadsModal invoked', 'chat'); } catch (_) { }
+    }
+    if (typeof Modal !== 'function' || typeof Modal.createChooser !== 'function') {
+        this._statusText = 'Feature unavailable';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return;
+    }
+    var entries = this._buildPrivateThreadEntries();
+    if (!entries.length) {
+        this._statusText = 'No PM threads yet. Use /msg <user> <text>';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return;
+    }
+    var initialIndex = 0;
+    for (var i = 0; i < entries.length; i++) {
+        if (entries[i] && entries[i].isCurrent) { initialIndex = i; break; }
+        if (entries[i] && entries[i].unreadCount > 0) { initialIndex = i; }
+    }
+    var items = [];
+    for (var j = 0; j < entries.length; j++) {
+        var e = entries[j];
+        var label = e.name;
+        if (e.isCurrent) label += ' *';
+        if (e.unreadCount > 0) label += ' (new ' + e.unreadCount + ')';
+        label += ' [' + e.msgCount + ' msgs]';
+        items.push({ label: label, value: e.name, data: e });
+    }
+    var self = this;
+    try {
+        Modal.createChooser({
+            title: 'Private Threads (Enter=view)',
+            items: items,
+            initialIndex: initialIndex,
+            onChoose: function (value, item, modal) {
+                if (value) {
+                    self._switchToChannel(value);
+                }
+            },
+            onCancel: function () { },
+            onClose: function () {
+                self._needsRedraw = true;
+                if (self.running) try { self.draw(); } catch (_) { }
+                self._registerControlHotspots();
+                self.updateInputFrame();
+            }
+        });
+    } catch (e) {
+        this._statusText = 'Private threads unavailable';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+    }
+};
+
 Chat.prototype._clearChatFrames = function () {
     if (this.leftAvatarFrame) this.leftAvatarFrame.clear();
     if (this.rightAvatarFrame) this.rightAvatarFrame.clear();
-    if (this.leftMsgFrame) this.leftMsgFrame.clear();
-    if (this.rightMsgFrame) this.rightMsgFrame.clear();
+    if (this.chatTranscriptFrame) this.chatTranscriptFrame.clear();
 };
 
 Chat.prototype._groupMessages = function (messages) {
     var groups = [];
     var lastSender = null;
-    var currentSide = 'right';
+    var ownAlias = (typeof user !== 'undefined' && user && user.alias) ? user.alias.toUpperCase() : '';
 
     for (var i = 0; i < messages.length; i++) {
         var msg = messages[i];
@@ -3109,11 +3794,11 @@ Chat.prototype._groupMessages = function (messages) {
         }
 
         if (senderDisplay !== lastSender) {
-            currentSide = (currentSide === 'left') ? 'right' : 'left';
+            var side = (sender.toUpperCase() === ownAlias) ? 'right' : 'left';
             groups.push({
                 sender: senderDisplay,
                 nick: msg.nick,
-                side: currentSide,
+                side: side,
                 messages: [],
                 lastTime: msg.time || Date.now(),
                 messageLines: [],
@@ -3133,103 +3818,122 @@ Chat.prototype._groupMessages = function (messages) {
     return groups;
 };
 
-Chat.prototype._prepareGroupLayouts = function (groups) {
-    if (!this.leftMsgFrame || !this.rightMsgFrame || !groups || groups.length === 0) return groups;
+Chat.prototype._buildTranscriptBlocks = function (groups, transcriptWidth) {
+    var blocks = [];
+    var maxBubbleWidth = Math.max(14, Math.min(transcriptWidth - 4, 54));
 
     for (var i = 0; i < groups.length; i++) {
         var group = groups[i];
-        var width = group.side === 'left' ? this.leftMsgFrame.width : this.rightMsgFrame.width;
-        group.messageLines = this._wrapGroupMessages(group, width);
-        group.lineCount = group.messageLines.length + 1;
-    }
+        if (!group) continue;
 
-    return groups;
-};
-
-Chat.prototype._buildLayoutLines = function (groups) {
-    var layout = { lines: [], totalLines: 0 };
-    if (!groups || groups.length === 0) return layout;
-
-    var lineIndex = 0;
-    for (var g = 0; g < groups.length; g++) {
-        var group = groups[g];
-        var prevGroup = (g > 0) ? groups[g - 1] : null;
-        var overlap = (prevGroup && prevGroup.side !== group.side);
-        if (overlap && lineIndex > 0) {
-            lineIndex -= 1;
+        var prevGroupTime = 0;
+        if (i > 0) {
+            var prevGroup = groups[i - 1];
+            if (prevGroup && prevGroup.messages.length) {
+                var prevLast = prevGroup.messages[prevGroup.messages.length - 1];
+                if (prevLast) prevGroupTime = prevLast.time;
+            }
         }
 
-        var prevTime = prevGroup ? prevGroup.lastTime : undefined;
-        var timestamp = this._formatTimestamp(group.lastTime, prevTime);
+        blocks.push(this._buildBubbleLayout(group, maxBubbleWidth, prevGroupTime));
+    }
+    return blocks;
+};
 
-        layout.lines.push({
-            index: lineIndex,
-            type: 'header',
-            group: group,
-            side: group.side,
-            timestamp: timestamp,
-            overlap: overlap
-        });
-
-        lineIndex += 1;
-
-        for (var m = 0; m < group.messageLines.length; m++) {
-            var entry = group.messageLines[m];
-            layout.lines.push({
-                index: lineIndex,
-                type: 'message',
-                group: group,
-                side: group.side,
-                text: entry.text,
-                message: entry.message || group.messages[group.messages.length - 1],
-                isFirstLine: !!entry.isFirstLine
-            });
-            lineIndex += 1;
+Chat.prototype._buildBubbleLayout = function (group, maxBubbleWidth, prevGroupTime) {
+    var rows = [];
+    var lastMessage = group.messages.length ? group.messages[group.messages.length - 1] : null;
+    var timestamp = '';
+    if (lastMessage) {
+        timestamp = this._formatTimestamp(lastMessage.time || group.lastTime, prevGroupTime || 0);
+        var headerSpace = maxBubbleWidth - (group.sender || '').length - 2;
+        if (headerSpace < timestamp.length) {
+            timestamp = this._compactTimestamp(timestamp);
         }
     }
 
-    layout.totalLines = lineIndex;
-    return layout;
-};
+    var headerParts = this._prepareHeaderParts(group.sender, timestamp, maxBubbleWidth);
 
-Chat.prototype._resolveScrollWindow = function (totalLines) {
-    var height = (this.leftMsgFrame && this.leftMsgFrame.height) ? this.leftMsgFrame.height : 0;
-    if (height <= 0) height = 1;
-
-    if (!this._userScrolled) {
-        this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, totalLines));
-    }
-
-    if (this._userScrolled && typeof this._totalLineCount === 'number' && totalLines > this._totalLineCount) {
-        this.scrollOffset += (totalLines - this._totalLineCount);
-    }
-
-    this._totalLineCount = totalLines;
-    this._maxScrollOffset = Math.max(0, totalLines - height);
-
-    if (this.scrollOffset > this._maxScrollOffset) this.scrollOffset = this._maxScrollOffset;
-    if (this.scrollOffset < 0) this.scrollOffset = 0;
-    if (this.scrollOffset === 0) this._userScrolled = false;
-
-    var startLine = Math.max(0, totalLines - height - this.scrollOffset);
-    var endLine = Math.min(totalLines, startLine + height);
-
-    return { startLine: startLine, endLine: endLine, height: height };
-};
-
-Chat.prototype._findLastVisibleGroup = function (groups) {
-    if (!groups) return null;
-    for (var i = groups.length - 1; i >= 0; i--) {
-        var group = groups[i];
-        if (group && group.renderEnd !== undefined && group.renderEnd >= group.renderStart && group.renderEnd >= 1) {
-            return group;
+    for (var m = 0; m < group.messages.length; m++) {
+        var text = this._extractMessageText(group.messages[m]);
+        if (!text) continue;
+        var wrapped = this._wrapPlainText(text, Math.max(8, maxBubbleWidth - 2));
+        for (var w = 0; w < wrapped.length; w++) {
+            rows.push({ text: wrapped[w] || '', isBubble: true });
+        }
+        if (m < group.messages.length - 1) {
+            rows.push({ text: '', isBubble: false });
         }
     }
-    return null;
+
+    if (!rows.length) {
+        rows.push({ text: '', isBubble: true });
+    }
+
+    var contentWidth = 0;
+    for (var r = 0; r < rows.length; r++) {
+        if (rows[r].isBubble && rows[r].text.length > contentWidth) {
+            contentWidth = rows[r].text.length;
+        }
+    }
+    var width = contentWidth + 2;
+    if (width < 8) width = 8;
+
+    var avatarHeight = this.avatarHeight || 6;
+
+    return {
+        kind: 'bubble',
+        side: group.side,
+        speakerName: headerParts.name,
+        timestamp: headerParts.timestamp,
+        isBridged: headerParts.isBridged,
+        bridgeType: headerParts.bridgeType,
+        rows: rows,
+        width: width,
+        height: Math.max(avatarHeight, rows.length + 1),
+        group: group,
+        nick: group.nick
+    };
 };
+
+Chat.prototype._pickVisibleBlocks = function (blocks, frameHeight, scrollOffsetBlocks) {
+    var selected = [];
+    var bottomIndex = Math.max(0, blocks.length - 1 - Math.max(0, scrollOffsetBlocks));
+    var used = 0;
+    var index = bottomIndex;
+
+    while (index >= 0) {
+        var block = blocks[index];
+        if (!block) { index--; continue; }
+        var gap = selected.length > 0 ? 1 : 0;
+        var nextUsed = used + gap + block.height;
+        if (nextUsed > frameHeight && selected.length > 0) break;
+        selected.unshift(block);
+        used = nextUsed;
+        if (used >= frameHeight) break;
+        index--;
+    }
+
+    return {
+        blocks: selected,
+        actualScrollOffsetBlocks: blocks.length ? blocks.length - 1 - bottomIndex : 0
+    };
+};
+
+Chat.prototype._usedBlockHeight = function (blocks) {
+    var total = 0;
+    for (var i = 0; i < blocks.length; i++) {
+        if (!blocks[i]) continue;
+        total += blocks[i].height;
+        if (i < blocks.length - 1) total += 1;
+    }
+    return total;
+};
+
+// _findLastVisibleGroup removed - no longer used in bubble rendering
 
 Chat.prototype._adjustScrollOffset = function (delta) {
-    if (!this.leftMsgFrame || typeof delta !== 'number' || delta === 0) return false;
+    if (!this.chatTranscriptFrame || typeof delta !== 'number' || delta === 0) return false;
 
     var prev = this.scrollOffset || 0;
     var max = this._maxScrollOffset || 0;
@@ -3242,7 +3946,7 @@ Chat.prototype._adjustScrollOffset = function (delta) {
 };
 
 Chat.prototype._setScrollOffset = function (value) {
-    if (!this.leftMsgFrame) return false;
+    if (!this.chatTranscriptFrame) return false;
 
     if (this.scrollOffset === 0 && value === 0) {
         this._userScrolled = false;
@@ -3261,26 +3965,7 @@ Chat.prototype._setScrollOffset = function (value) {
     return true;
 };
 
-Chat.prototype._wrapGroupMessages = function (group, width) {
-    var lines = [];
-    var indicatorWidth = 2; // '> ' consumes two columns
-    var available = Math.max(1, width - indicatorWidth);
-
-    for (var m = 0; m < group.messages.length; m++) {
-        var text = this._extractMessageText(group.messages[m]);
-        if (!text) continue;
-        var wrapped = this._wrapPlainText(text, available);
-        for (var w = 0; w < wrapped.length; w++) {
-            var segment = wrapped[w];
-            if (segment === undefined || segment === null) continue;
-            var content = segment;
-            if (!content || !content.replace(/\s+/g, '').length) continue;
-            lines.push({ text: content, message: group.messages[m], isFirstLine: (w === 0) });
-        }
-    }
-
-    return lines;
-};
+// _wrapGroupMessages removed - no longer used in bubble rendering
 
 Chat.prototype._wrapPlainText = function (text, width) {
     var normalized = (text || '').toString().replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -3319,20 +4004,7 @@ Chat.prototype._formatTimestamp = function (currentMs, previousMs) {
     return pad(dt.getHours()) + ':' + pad(dt.getMinutes());
 };
 
-Chat.prototype._formatGroupHeader = function (sender, width) {
-    var safeSender = (sender || '').toString();
-    // Strip bridge prefixes for cleaner display
-    var bridge = this._parseBridgeUser(safeSender);
-    if (bridge.type && bridge.username) {
-        var bridgeLabel = bridge.type === 'discord' ? 'Discord' : 'Blockbrain';
-        var color = bridge.type === 'discord' ? '\x01m' : '\x01y'; // magenta for Discord, yellow for Blockbrain
-        safeSender = '\x01n' + color + bridge.username + ' \x01h\x01c(' + bridgeLabel + ')\x01n';
-    }
-    if (safeSender.length > width) {
-        safeSender = safeSender.substr(0, width);
-    }
-    return safeSender;
-};
+// _formatGroupHeader removed - no longer used in bubble rendering
 
 Chat.prototype._extractMessageText = function (msg) {
     if (!msg) return '';
@@ -3348,50 +4020,107 @@ Chat.prototype._computeMessageSignature = function (messages) {
 };
 
 Chat.prototype._getChannelMessages = function () {
+    // If viewing a private thread, return thread messages
+    if (this.currentChannel && this.currentChannel.charAt(0) === '@') {
+        var thread = this._getPrivateThreadByName(this.currentChannel);
+        if (thread && Array.isArray(thread.messages)) return thread.messages;
+        return [];
+    }
     if (!this.jsonchat || !this.jsonchat.channels) return [];
-    var chan = this.jsonchat.channels[this.channel.toUpperCase()];
+    var chan = this.jsonchat.channels[this.currentChannel.toUpperCase()];
     if (!chan || !Array.isArray(chan.messages)) return [];
     return chan.messages;
 };
 
-Chat.prototype._renderGroups = function (groups, layoutLines, startLine, endLine) {
-    if (!this.leftMsgFrame || !this.rightMsgFrame) return;
+Chat.prototype._renderTranscriptBubbles = function (visibleBlocks, totalHeight) {
+    var frame = this.chatTranscriptFrame;
+    if (!frame) return;
 
-    var height = this.leftMsgFrame.height || 0;
-    if (height <= 0) return;
-
-    for (var resetIndex = 0; resetIndex < groups.length; resetIndex++) {
-        groups[resetIndex].renderStart = 0;
-        groups[resetIndex].renderEnd = -1;
-    }
-
-    for (var i = 0; i < layoutLines.length; i++) {
-        var line = layoutLines[i];
-        if (!line || line.index < startLine || line.index >= endLine) continue;
-
-        var row = (line.index - startLine) + 1;
-        if (row < 1 || row > height) continue;
-
-        var frame = (line.side === 'left') ? this.leftMsgFrame : this.rightMsgFrame;
-        var otherFrame = (line.side === 'left') ? this.rightMsgFrame : this.leftMsgFrame;
-        var group = line.group;
-
-        if (!frame || !otherFrame || !group) continue;
-
-        if (line.type === 'header') {
-            var headerParts = this._prepareHeaderParts(group.sender, line.timestamp, frame.width);
-            this._renderGroupHeader(frame, otherFrame, row, headerParts, line.side, !!line.overlap);
-            this.messageFrames.push({ msg: group.messages[group.messages.length - 1], y: row, side: line.side, isHeader: true });
-        } else if (line.type === 'message') {
-            this._writeLineToFrames(frame, otherFrame, row, line.text, false, line.side, line.isFirstLine);
-            this.messageFrames.push({ msg: line.message, y: row, side: line.side });
+    // Reset renderStart/renderEnd on all visible block groups
+    for (var r = 0; r < visibleBlocks.length; r++) {
+        if (visibleBlocks[r] && visibleBlocks[r].group) {
+            visibleBlocks[r].group.renderStart = 0;
+            visibleBlocks[r].group.renderEnd = -1;
         }
-
-        if (group.renderStart <= 0 || group.renderStart > row) group.renderStart = row;
-        if (group.renderEnd < row) group.renderEnd = row;
     }
 
-    this.lastRow = Math.max(0, Math.min(height, endLine - startLine));
+    if (!visibleBlocks.length) {
+        // Show empty state
+        var emptyText = 'No messages yet';
+        var cx = Math.max(1, Math.floor((frame.width - emptyText.length) / 2) + 1);
+        frame.gotoxy(cx, Math.max(1, Math.floor(frame.height / 2)));
+        frame.putmsg(emptyText, DARKGRAY);
+        return;
+    }
+
+    // Start rendering from bottom of frame, pushing content up
+    var row = Math.max(1, frame.height - totalHeight + 1);
+
+    for (var i = 0; i < visibleBlocks.length; i++) {
+        var block = visibleBlocks[i];
+        if (!block) continue;
+
+        row = this._renderBubble(frame, block, row);
+
+        if (i < visibleBlocks.length - 1) {
+            row += 1; // gap between blocks
+        }
+    }
+};
+
+Chat.prototype._renderBubble = function (frame, block, startRow) {
+    var transcriptWidth = frame.width;
+
+    // Calculate bubble X position
+    var bubbleX, headerX;
+    if (block.side === 'left') {
+        bubbleX = 1;
+        headerX = 1;
+    } else {
+        bubbleX = Math.max(1, transcriptWidth - block.width + 1);
+        var headerText = (block.speakerName || '') + ' ' + (block.timestamp || '');
+        headerX = Math.max(1, transcriptWidth - headerText.length + 1);
+    }
+
+    // Color scheme
+    var bubbleAttr = (block.side === 'left') ? (BG_CYAN | BLACK) : (BG_BLUE | WHITE);
+    var speakerAttr = (block.side === 'left') ? LIGHTMAGENTA : LIGHTCYAN;
+    var tsAttr = LIGHTBLUE;
+
+    // Render header: speakerName timestamp
+    if (startRow >= 1 && startRow <= frame.height) {
+        frame.gotoxy(headerX, startRow);
+        if (block.speakerName) frame.putmsg(block.speakerName, speakerAttr);
+        if (block.timestamp) {
+            frame.putmsg(' ', LIGHTGRAY);
+            frame.putmsg(block.timestamp, tsAttr);
+        }
+    }
+
+    // Render bubble rows (lineIndex advances even for separators, creating gaps)
+    for (var lineIndex = 0; lineIndex < block.rows.length; lineIndex++) {
+        var brow = block.rows[lineIndex];
+        var y = startRow + 1 + lineIndex;
+        if (!brow || !brow.isBubble) continue; // gap row — skip render, black shows through
+        if (y >= 1 && y <= frame.height) {
+            frame.gotoxy(bubbleX, y);
+            frame.putmsg(' ' + this._padRight(brow.text || '', block.width - 2) + ' ', bubbleAttr);
+        }
+    }
+
+    // Set renderStart/renderEnd on group for avatar placement
+    if (block.group) {
+        block.group.renderStart = startRow;
+        block.group.renderEnd = startRow + block.height - 1;
+    }
+
+    return startRow + block.height;
+};
+
+Chat.prototype._padRight = function (text, width) {
+    text = text || '';
+    while (text.length < width) text += ' ';
+    return text.substr(0, width);
 };
 
 Chat.prototype._prepareHeaderParts = function (sender, timestamp, width) {
@@ -3446,106 +4175,13 @@ Chat.prototype._compactTimestamp = function (text) {
     return compact;
 };
 
-Chat.prototype._renderGroupHeader = function (primary, secondary, row, parts, side, preserveSecondary) {
-    if (!primary || !secondary || !parts) return;
-    var width = primary.width;
-    var name = parts.name || '';
-    var timestamp = parts.timestamp || '';
-    var tsColor = this._timestampColor || this.groupLineColor;
+// _renderGroupHeader removed - replaced by _renderBubble
 
-    this._clearFrameLine(primary, row);
+// _writeLineToFrames removed - replaced by _renderBubble
 
-    var totalLen = 0;
-    if (name) totalLen += name.length;
-    if (timestamp) totalLen += timestamp.length;
-    if (timestamp && name) totalLen += 1;
+// _writeChars removed - replaced by frame.putmsg in _renderBubble
 
-    var currentCol = 1;
-    if (side === 'right') currentCol = Math.max(1, width - totalLen + 1);
-
-    if (side === 'left') {
-        if (name) currentCol = this._writeChars(primary, row, currentCol, name, this.groupLineColor);
-        if (timestamp) {
-            currentCol++;
-            if (currentCol <= width) this._writeChars(primary, row, currentCol, timestamp, tsColor);
-        }
-    } else {
-        if (timestamp) currentCol = this._writeChars(primary, row, currentCol, timestamp, tsColor);
-        if (timestamp && name) currentCol++;
-        if (name && currentCol <= width) this._writeChars(primary, row, currentCol, name, this.groupLineColor);
-    }
-
-    if (!preserveSecondary && secondary) {
-        this._clearFrameLine(secondary, row);
-    }
-};
-
-Chat.prototype._writeLineToFrames = function (primary, secondary, row, text, isHeader, side, isFirstLine) {
-    if (!primary || !secondary || row < 1) return;
-
-    if (isHeader) {
-        this._renderGroupHeader(primary, secondary, row, { name: text || '', timestamp: '' }, side, false);
-        return;
-    }
-
-    var displayText = text || '';
-    var width = primary.width;
-    if (typeof isFirstLine === 'undefined') isFirstLine = true;
-
-    var indicatorAttr = this._messageIndicatorColor;
-    var wrapAttr = this._wrapIndicatorColor || indicatorAttr;
-    this._clearFrameLine(primary, row);
-    if (side === 'right') {
-        var trimmed = displayText;
-        var maxContent = Math.max(0, width - 2);
-        if (trimmed.length > maxContent) trimmed = trimmed.substr(trimmed.length - maxContent);
-        var attr = isFirstLine ? indicatorAttr : wrapAttr;
-        this._writeChars(primary, row, width, '<', attr);
-        var textEnd = width - 2;
-        if (trimmed.length > 0 && textEnd >= 1) {
-            var startCol = Math.max(1, textEnd - trimmed.length + 1);
-            this._writeChars(primary, row, startCol, trimmed);
-        }
-    } else {
-        var available = Math.max(1, width - 2);
-        if (displayText.length > available) displayText = displayText.substr(0, available);
-        var attr = isFirstLine ? indicatorAttr : wrapAttr;
-        this._writeChars(primary, row, 1, '>', attr);
-        var textStart = width >= 3 ? 3 : Math.min(width, 2);
-        if (displayText.length > 0 && textStart <= width) {
-            this._writeChars(primary, row, textStart, displayText);
-        }
-    }
-
-    this._clearFrameLine(secondary, row);
-};
-
-Chat.prototype._writeChars = function (frame, row, column, text, attr) {
-    if (!frame || row < 1) return column || 1;
-    text = text || '';
-    if (!text.length) return column || 1;
-    var width = frame.width || 0;
-    if (width <= 0) return column || 1;
-    var y = row - 1;
-    var x = Math.max(1, column);
-    var useAttr = (attr !== undefined && attr !== null) ? attr : frame.attr;
-    for (var i = 0; i < text.length && x <= width; i++, x++) {
-        var ch = text.charAt(i);
-        try { frame.setData(x - 1, y, ch, useAttr, false); } catch (e) { }
-    }
-    return x;
-};
-
-Chat.prototype._clearFrameLine = function (frame, row) {
-    if (!frame || row < 1) return;
-    var width = frame.width || 0;
-    if (width <= 0) return;
-    var y = row - 1;
-    for (var x = 0; x < width; x++) {
-        var refresh = (x === width - 1);
-        try { frame.setData(x, y, undefined, 0, refresh); } catch (e) { }
-    }
-};
+// _clearFrameLine removed - no longer needed with bubble rendering
 
 Chat.prototype._getCrumbContentWidth = function () {
     if (!this.chatInputFrame) return 0;
@@ -3576,8 +4212,19 @@ Chat.prototype._resolveAvatarNetaddr = function (nick) {
 
 Chat.prototype._buildCrumbContext = function () {
     var currentUser = (typeof user !== 'undefined' && user && user.alias) ? user.alias : 'You';
-    var channelName = this.channel || 'main';
+    var channelName = this.currentChannel || 'main';
     var upperChannel = channelName.toUpperCase();
+    // For PM thread views, show the two participants instead of querying
+    // jsonchat.channels (which doesn't have @-prefixed entries)
+    if (channelName.charAt(0) === '@') {
+        var peerName = channelName.substr(1);
+        return {
+            currentUser: currentUser,
+            channelName: 'PM: ' + peerName,
+            userCount: 2,
+            userNames: [currentUser, peerName]
+        };
+    }
     var chan = (this.jsonchat && this.jsonchat.channels) ? this.jsonchat.channels[upperChannel] : null;
     var rawUsers = (chan && chan.users) ? chan.users : [];
     var names = [];
