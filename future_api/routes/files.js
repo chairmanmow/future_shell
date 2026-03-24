@@ -36,6 +36,37 @@ function coerceNum(x) {
 	return isNaN(n) ? 0 : n; 
 }
 
+function coerceBool(x) {
+	if (x === true || x === false) return x;
+	if (typeof x === "string") {
+		var s = x.toLowerCase().trim();
+		if (s === "true" || s === "1" || s === "yes" || s === "on") return true;
+		if (s === "false" || s === "0" || s === "no" || s === "off") return false;
+	}
+	return !!x;
+}
+
+function ensureTrailingSlash(path) {
+	path = String(path || "");
+	if (!path) return "";
+	var last = path.slice(-1);
+	if (last !== "/" && last !== "\\") return path + "/";
+	return path;
+}
+
+function normalizeHex(value) {
+	if (value === undefined || value === null) return null;
+	value = String(value).toLowerCase().trim();
+	return value ? value : null;
+}
+
+function isSafeFilename(filename) {
+	filename = String(filename || "").trim();
+	if (!filename) return false;
+	if (filename.indexOf("/") !== -1 || filename.indexOf("\\") !== -1 || filename.indexOf("..") !== -1) return false;
+	return true;
+}
+
 // Get overview of all file areas
 function getFileAreaSummary() {
 	var libs = [];
@@ -461,6 +492,563 @@ function getWritableDirs() {
 	return result;
 }
 
+// =========================================================================
+// STAGED UPLOAD OPERATIONS
+// =========================================================================
+
+var MAX_UPLOAD_SIZE = 16 * 1024 * 1024;
+var MAX_UPLOAD_CHUNK_BYTES = 256 * 1024;
+
+function getUploadStageDir() {
+	return ensureTrailingSlash(system.temp_dir || js.exec_dir || ".") + "future_api_uploads/";
+}
+
+function ensureUploadStageDir() {
+	var dir = getUploadStageDir();
+	try {
+		if (!file_isdir(dir)) {
+			if (typeof mkpath === "function") mkpath(dir);
+			else mkdir(dir);
+		}
+	} catch (e) {
+		ctx.dlog("files ensureUploadStageDir error: " + e);
+	}
+	return file_isdir(dir) ? dir : null;
+}
+
+function buildUploadPaths(uploadId) {
+	var dir = getUploadStageDir();
+	return {
+		dir: dir,
+		meta: dir + uploadId + ".json",
+		data: dir + uploadId + ".part"
+	};
+}
+
+function generateUploadId() {
+	return "upl_" + time() + "_" + random(0x7fffffff) + "_" + random(0x7fffffff);
+}
+
+function createUploadId() {
+	for (var i = 0; i < 10; i++) {
+		var uploadId = generateUploadId();
+		var paths = buildUploadPaths(uploadId);
+		if (!file_exists(paths.meta) && !file_exists(paths.data)) {
+			return uploadId;
+		}
+	}
+	return null;
+}
+
+function saveUploadState(state) {
+	if (!state || !state.uploadId) return false;
+	var paths = buildUploadPaths(state.uploadId);
+	var f = new File(paths.meta);
+	if (!f.open("w+")) {
+		return false;
+	}
+	var ok = false;
+	try {
+		ok = f.write(JSON.stringify(state));
+	} catch (e) {
+		ctx.dlog("files saveUploadState error: " + e);
+		ok = false;
+	}
+	f.close();
+	return !!ok;
+}
+
+function loadUploadState(uploadId) {
+	if (!uploadId) return null;
+	var paths = buildUploadPaths(uploadId);
+	if (!file_exists(paths.meta)) return null;
+	var f = new File(paths.meta);
+	if (!f.open("r")) {
+		return null;
+	}
+	var raw = f.read();
+	f.close();
+	if (!raw) return null;
+	try {
+		var state = JSON.parse(raw);
+		state.paths = paths;
+		return state;
+	} catch (e) {
+		ctx.dlog("files loadUploadState parse error: " + e);
+		return null;
+	}
+}
+
+function removeUploadArtifacts(uploadId) {
+	var paths = buildUploadPaths(uploadId);
+	var removedMeta = false;
+	var removedData = false;
+	if (file_exists(paths.meta)) {
+		try { removedMeta = file_remove(paths.meta); } catch (e) {}
+	}
+	if (file_exists(paths.data)) {
+		try { removedData = file_remove(paths.data); } catch (e) {}
+	}
+	return {
+		removedMeta: removedMeta,
+		removedData: removedData
+	};
+}
+
+function moveFileToDestination(src, dest) {
+	if (file_rename(src, dest)) {
+		return true;
+	}
+	if (!file_copy(src, dest)) {
+		return false;
+	}
+	try { file_remove(src); } catch (e) {}
+	return true;
+}
+
+function getUploadStateSummary(state, includeInternal) {
+	if (!state) return null;
+	var summary = {
+		uploadId: state.uploadId,
+		status: state.status || "uploading",
+		dirCode: state.dirCode,
+		dirName: state.dirName || null,
+		filename: state.filename,
+		size: state.totalSize,
+		bytesWritten: coerceNum(state.bytesWritten),
+		nextOffset: coerceNum(state.bytesWritten),
+		overwrite: !!state.overwrite,
+		md5: state.md5 || null,
+		sha1: state.sha1 || null,
+		createdAt: state.createdAt || null,
+		updatedAt: state.updatedAt || null
+	};
+	if (state.totalSize >= 0) {
+		summary.remainingBytes = Math.max(0, state.totalSize - coerceNum(state.bytesWritten));
+		summary.complete = (coerceNum(state.bytesWritten) === state.totalSize);
+	}
+	if (includeInternal && state.finalPath) {
+		summary.finalPath = state.finalPath;
+	}
+	if (includeInternal && state.lastError) {
+		summary.lastError = state.lastError;
+	}
+	return summary;
+}
+
+function initUpload(options) {
+	if (!options || !options.dirCode) {
+		return { success: false, error: "dirCode is required" };
+	}
+	if (!isSafeFilename(options.filename)) {
+		return { success: false, error: "invalid filename - cannot contain path characters" };
+	}
+	if (!options.description || !String(options.description).trim()) {
+		return { success: false, error: "description is required" };
+	}
+	if (!options.from || !String(options.from).trim()) {
+		return { success: false, error: "from (uploader name) is required" };
+	}
+
+	var dirCode = String(options.dirCode);
+	var filename = String(options.filename).trim();
+	var description = String(options.description).trim();
+	var from = String(options.from).trim();
+	var totalSize = coerceNum(options.totalSize !== undefined ? options.totalSize : options.size);
+	var overwrite = coerceBool(options.overwrite);
+	var md5 = normalizeHex(options.md5);
+	var sha1 = normalizeHex(options.sha1);
+
+	if (totalSize < 0) {
+		return { success: false, error: "size must be zero or greater" };
+	}
+	if (totalSize > MAX_UPLOAD_SIZE) {
+		return {
+			success: false,
+			error: "size exceeds maximum upload size",
+			maxSize: MAX_UPLOAD_SIZE
+		};
+	}
+	if (filename.length > 64) {
+		return { success: false, error: "filename too long (max 64 chars)" };
+	}
+	if (description.length > 58) {
+		return { success: false, error: "description too long (max 58 chars)" };
+	}
+	if (from.length > 25) {
+		return { success: false, error: "from name too long (max 25 chars)" };
+	}
+	if (md5 && !/^[a-f0-9]{32}$/.test(md5)) {
+		return { success: false, error: "md5 must be a 32-character hexadecimal string" };
+	}
+	if (sha1 && !/^[a-f0-9]{40}$/.test(sha1)) {
+		return { success: false, error: "sha1 must be a 40-character hexadecimal string" };
+	}
+
+	if (!whitelist) {
+		return { success: false, error: "whitelist not loaded - CREATE operations disabled" };
+	}
+	if (!whitelist.isDirWhitelisted(dirCode)) {
+		return {
+			success: false,
+			error: "directory '" + dirCode + "' is not whitelisted for uploads",
+			allowedDirs: whitelist.getWhitelistedDirs()
+		};
+	}
+
+	var dir = findDir(dirCode);
+	if (!dir) {
+		return { success: false, error: "directory not found: " + dirCode };
+	}
+
+	var destPath = dir.path + filename;
+	if (file_exists(destPath) && !overwrite) {
+		return {
+			success: false,
+			error: "file already exists on disk: " + filename,
+			path: destPath,
+			note: "Use overwrite=true to replace existing file"
+		};
+	}
+
+	try {
+		var fb = new FileBase(dir.code);
+		if (fb.open()) {
+			var existing = fb.get(filename);
+			fb.close();
+			if (existing && !overwrite) {
+				return {
+					success: false,
+					error: "file already exists in filebase: " + filename,
+					existingFile: {
+						name: existing.name,
+						desc: existing.desc,
+						from: existing.from
+					},
+					note: "Use overwrite=true to replace existing entry"
+				};
+			}
+		}
+	} catch (e) {
+		ctx.dlog("files initUpload preflight filebase error: " + e);
+	}
+
+	var stageDir = ensureUploadStageDir();
+	if (!stageDir) {
+		return { success: false, error: "failed to create upload staging directory" };
+	}
+
+	var uploadId = createUploadId();
+	if (!uploadId) {
+		return { success: false, error: "failed to allocate upload id" };
+	}
+
+	var paths = buildUploadPaths(uploadId);
+	var staged = new File(paths.data);
+	if (!staged.open("w+b")) {
+		return { success: false, error: "failed to create staging file: " + staged.error };
+	}
+	staged.close();
+
+	var now = (new Date()).getTime();
+	var state = {
+		uploadId: uploadId,
+		status: "uploading",
+		dirCode: dir.code,
+		dirName: dir.name,
+		filename: filename,
+		description: description,
+		from: from,
+		extDesc: options.extDesc ? String(options.extDesc) : null,
+		tags: options.tags ? String(options.tags) : null,
+		cost: options.cost !== undefined ? coerceNum(options.cost) : 0,
+		overwrite: overwrite,
+		totalSize: totalSize,
+		bytesWritten: 0,
+		md5: md5,
+		sha1: sha1,
+		finalPath: null,
+		lastError: null,
+		createdAt: now,
+		updatedAt: now
+	};
+
+	if (!saveUploadState(state)) {
+		removeUploadArtifacts(uploadId);
+		return { success: false, error: "failed to write upload metadata" };
+	}
+
+	return {
+		success: true,
+		upload: getUploadStateSummary(state, false),
+		limits: {
+			maxSize: MAX_UPLOAD_SIZE,
+			maxChunkBytes: MAX_UPLOAD_CHUNK_BYTES
+		}
+	};
+}
+
+function appendUploadChunk(options) {
+	if (!options || !options.uploadId) {
+		return { success: false, error: "uploadId is required" };
+	}
+	if (options.contentBase64 === undefined || options.contentBase64 === null || String(options.contentBase64) === "") {
+		return { success: false, error: "contentBase64 is required" };
+	}
+
+	var uploadId = String(options.uploadId);
+	var state = loadUploadState(uploadId);
+	if (!state) {
+		return { success: false, error: "upload not found: " + uploadId };
+	}
+	if (state.status !== "uploading") {
+		return {
+			success: false,
+			error: "upload is not accepting chunks",
+			upload: getUploadStateSummary(state, false)
+		};
+	}
+
+	var offset = coerceNum(options.offset);
+	var currentSize = file_exists(state.paths.data) ? coerceNum(file_size(state.paths.data)) : 0;
+	if (offset !== currentSize) {
+		return {
+			success: false,
+			error: "offset mismatch",
+			expectedOffset: currentSize,
+			upload: getUploadStateSummary(state, false)
+		};
+	}
+
+	var decoded;
+	try {
+		decoded = base64_decode(String(options.contentBase64));
+	} catch (e) {
+		return { success: false, error: "invalid base64 chunk", extra: String(e) };
+	}
+	if (decoded === null || decoded === undefined) {
+		return { success: false, error: "invalid base64 chunk" };
+	}
+
+	var chunkBytes = decoded.length;
+	if (chunkBytes < 1) {
+		return { success: false, error: "decoded chunk is empty" };
+	}
+	if (chunkBytes > MAX_UPLOAD_CHUNK_BYTES) {
+		return {
+			success: false,
+			error: "chunk exceeds maximum size",
+			maxChunkBytes: MAX_UPLOAD_CHUNK_BYTES
+		};
+	}
+	if ((currentSize + chunkBytes) > state.totalSize) {
+		return {
+			success: false,
+			error: "chunk would exceed declared upload size",
+			size: state.totalSize,
+			currentSize: currentSize,
+			chunkBytes: chunkBytes
+		};
+	}
+
+	var staged = new File(state.paths.data);
+	if (!staged.open(staged.exists ? "r+b" : "w+b")) {
+		return { success: false, error: "failed to open staging file: " + staged.error };
+	}
+	staged.position = currentSize;
+	var ok = staged.write(decoded, chunkBytes);
+	staged.close();
+	if (!ok) {
+		return { success: false, error: "failed to write chunk" };
+	}
+
+	state.bytesWritten = currentSize + chunkBytes;
+	state.updatedAt = (new Date()).getTime();
+	state.lastError = null;
+	if (!saveUploadState(state)) {
+		return { success: false, error: "chunk written but failed to persist upload metadata" };
+	}
+
+	return {
+		success: true,
+		upload: getUploadStateSummary(state, false),
+		chunkBytes: chunkBytes
+	};
+}
+
+function commitUpload(options) {
+	if (!options || !options.uploadId) {
+		return { success: false, error: "uploadId is required" };
+	}
+
+	var uploadId = String(options.uploadId);
+	var state = loadUploadState(uploadId);
+	if (!state) {
+		return { success: false, error: "upload not found: " + uploadId };
+	}
+
+	var dir = findDir(state.dirCode);
+	if (!dir) {
+		return { success: false, error: "directory not found: " + state.dirCode };
+	}
+
+	var finalPath = state.finalPath || (dir.path + state.filename);
+	var stagedPath = state.paths.data;
+	var stagedExists = file_exists(stagedPath);
+	var finalExists = file_exists(finalPath);
+	var alreadyMoved = !!(state.finalPath && finalExists);
+	var currentSize = stagedExists ? coerceNum(file_size(stagedPath)) : 0;
+
+	if (!alreadyMoved) {
+		if (!stagedExists) {
+			return {
+				success: false,
+				error: "staging file missing",
+				upload: getUploadStateSummary(state, true)
+			};
+		}
+		if (currentSize !== state.totalSize) {
+			return {
+				success: false,
+				error: "upload incomplete",
+				upload: getUploadStateSummary(state, false)
+			};
+		}
+	}
+
+	var checksumFilePath = alreadyMoved ? finalPath : stagedPath;
+	if (state.md5 || state.sha1) {
+		var checksumFile = new File(checksumFilePath);
+		if (!checksumFile.open("rb")) {
+			return { success: false, error: "failed to open upload for checksum verification: " + checksumFile.error };
+		}
+		var actualMd5 = normalizeHex(checksumFile.md5_hex);
+		var actualSha1 = normalizeHex(checksumFile.sha1_hex);
+		checksumFile.close();
+
+		if (state.md5 && actualMd5 !== state.md5) {
+			state.lastError = "md5 mismatch";
+			saveUploadState(state);
+			return {
+				success: false,
+				error: "md5 mismatch",
+				expected: state.md5,
+				actual: actualMd5
+			};
+		}
+		if (state.sha1 && actualSha1 !== state.sha1) {
+			state.lastError = "sha1 mismatch";
+			saveUploadState(state);
+			return {
+				success: false,
+				error: "sha1 mismatch",
+				expected: state.sha1,
+				actual: actualSha1
+			};
+		}
+	}
+
+	if (!alreadyMoved) {
+		if (finalExists && !state.overwrite) {
+			return {
+				success: false,
+				error: "destination file already exists on disk",
+				path: finalPath
+			};
+		}
+		if (finalExists && state.overwrite) {
+			if (!file_remove(finalPath)) {
+				return {
+					success: false,
+					error: "failed to remove existing destination file",
+					path: finalPath
+				};
+			}
+		}
+
+		state.status = "committing";
+		state.updatedAt = (new Date()).getTime();
+		saveUploadState(state);
+
+		if (!moveFileToDestination(stagedPath, finalPath)) {
+			state.lastError = "failed to move staging file";
+			saveUploadState(state);
+			return {
+				success: false,
+				error: "failed to move staging file to destination",
+				stagingPath: stagedPath,
+				finalPath: finalPath
+			};
+		}
+
+		state.finalPath = finalPath;
+		state.status = "moved";
+		state.updatedAt = (new Date()).getTime();
+		state.lastError = null;
+		saveUploadState(state);
+	}
+
+	var addResult = addFileEntry({
+		dirCode: state.dirCode,
+		filename: state.filename,
+		description: state.description,
+		from: state.from,
+		extDesc: state.extDesc,
+		tags: state.tags,
+		cost: state.cost,
+		overwrite: state.overwrite
+	});
+
+	if (!addResult || !addResult.success) {
+		state.status = "needs_add";
+		state.lastError = addResult && addResult.error ? addResult.error : "failed to add filebase entry";
+		state.updatedAt = (new Date()).getTime();
+		saveUploadState(state);
+		if (addResult) {
+			addResult.upload = getUploadStateSummary(state, true);
+			addResult.note = "File may already exist on disk; retry commit after resolving the filebase error.";
+			return addResult;
+		}
+		return {
+			success: false,
+			error: "failed to add filebase entry",
+			upload: getUploadStateSummary(state, true)
+		};
+	}
+
+	removeUploadArtifacts(uploadId);
+
+	return {
+		success: true,
+		uploadId: uploadId,
+		indexedWith: "FileBase.add",
+		upload: getUploadStateSummary(state, true),
+		file: addResult
+	};
+}
+
+function abortUpload(options) {
+	if (!options || !options.uploadId) {
+		return { success: false, error: "uploadId is required" };
+	}
+
+	var uploadId = String(options.uploadId);
+	var state = loadUploadState(uploadId);
+	if (!state) {
+		return { success: false, error: "upload not found: " + uploadId };
+	}
+
+	var cleanup = removeUploadArtifacts(uploadId);
+	return {
+		success: true,
+		uploadId: uploadId,
+		aborted: true,
+		removedMeta: cleanup.removedMeta,
+		removedData: cleanup.removedData,
+		note: state.finalPath ? "Final file was left in place." : null
+	};
+}
+
 // Add a file entry to a whitelisted directory
 // This creates a file record in the filebase - the actual file must already exist on disk
 // Options:
@@ -471,6 +1059,7 @@ function getWritableDirs() {
 //   extDesc     - extended description (optional, multi-line)
 //   tags        - comma-separated tags (optional)
 //   cost        - credit cost (optional, default 0)
+//   overwrite   - if true, replace any existing filebase entry for this filename
 function addFileEntry(options) {
 	// Validate required fields
 	if (!options.dirCode) {
@@ -493,6 +1082,7 @@ function addFileEntry(options) {
 	var extDesc = options.extDesc ? String(options.extDesc) : null;
 	var tags = options.tags ? String(options.tags) : null;
 	var cost = options.cost ? coerceNum(options.cost) : 0;
+	var overwrite = coerceBool(options.overwrite);
 
 	// Check whitelist
 	if (!whitelist) {
@@ -553,7 +1143,7 @@ function addFileEntry(options) {
 	try {
 		// Check if file already exists in filebase
 		var existing = fb.get(filename);
-		if (existing) {
+		if (existing && !overwrite) {
 			fb.close();
 			return { 
 				success: false, 
@@ -563,8 +1153,20 @@ function addFileEntry(options) {
 					desc: existing.desc,
 					from: existing.from,
 					added: existing.added
-				}
+				},
+				note: "Use overwrite=true to replace existing entry"
 			};
+		}
+		if (existing && overwrite) {
+			try {
+				fb.remove(filename);
+			} catch (removeErr) {
+				fb.close();
+				return {
+					success: false,
+					error: "failed to remove existing filebase entry: " + String(removeErr)
+				};
+			}
 		}
 
 		// Build the file object
@@ -605,7 +1207,8 @@ function addFileEntry(options) {
 			size: fileSize,
 			fileDate: fileDate,
 			cost: cost,
-			tags: tags || null
+			tags: tags || null,
+			overwritten: existing ? true : false
 		};
 
 	} catch (e) {
@@ -650,7 +1253,7 @@ function createTextFile(options) {
 	var from = String(options.from).trim();
 	var extDesc = options.extDesc ? String(options.extDesc) : null;
 	var tags = options.tags ? String(options.tags) : null;
-	var overwrite = Boolean(options.overwrite);
+	var overwrite = coerceBool(options.overwrite);
 
 	// Check whitelist
 	if (!whitelist) {
@@ -683,7 +1286,7 @@ function createTextFile(options) {
 	}
 
 	// Safety check on filename - no path traversal
-	if (filename.indexOf("/") !== -1 || filename.indexOf("\\") !== -1 || filename.indexOf("..") !== -1) {
+	if (!isSafeFilename(filename)) {
 		return { success: false, error: "invalid filename - cannot contain path characters" };
 	}
 
@@ -817,6 +1420,10 @@ function match(packet) {
 	if (oper === "CREATE" || oper === "WRITE") {
 		if (loc === "files/add" || 
 		    loc === "files/create" ||
+		    loc === "files/upload/init" ||
+		    loc === "files/upload/chunk" ||
+		    loc === "files/upload/commit" ||
+		    loc === "files/upload/abort" ||
 		    loc.indexOf("files/dir/") === 0) {
 			return true;
 		}
@@ -872,6 +1479,51 @@ function handle(ctx, client, packet) {
 			return;
 		}
 
+		if (location === "files/upload/init") {
+			var data = packet.data || {};
+			ctx.sendResponse(client, "CREATE", location, initUpload({
+				dirCode: data.dirCode,
+				filename: data.filename,
+				description: data.description,
+				from: data.from,
+				extDesc: data.extDesc,
+				tags: data.tags,
+				cost: data.cost,
+				size: data.size,
+				totalSize: data.totalSize,
+				md5: data.md5,
+				sha1: data.sha1,
+				overwrite: data.overwrite
+			}));
+			return;
+		}
+
+		if (location === "files/upload/chunk") {
+			var data = packet.data || {};
+			ctx.sendResponse(client, "CREATE", location, appendUploadChunk({
+				uploadId: data.uploadId,
+				offset: data.offset,
+				contentBase64: data.contentBase64
+			}));
+			return;
+		}
+
+		if (location === "files/upload/commit") {
+			var data = packet.data || {};
+			ctx.sendResponse(client, "CREATE", location, commitUpload({
+				uploadId: data.uploadId
+			}));
+			return;
+		}
+
+		if (location === "files/upload/abort") {
+			var data = packet.data || {};
+			ctx.sendResponse(client, "CREATE", location, abortUpload({
+				uploadId: data.uploadId
+			}));
+			return;
+		}
+
 		// POST to files/dir/{code}/add or files/dir/{code}/create
 		if (location.indexOf("files/dir/") === 0) {
 			var path = location.substr("files/dir/".length);
@@ -886,10 +1538,11 @@ function handle(ctx, client, packet) {
 					filename: data.filename,
 					description: data.description,
 					from: data.from,
-					extDesc: data.extDesc,
-					tags: data.tags,
-					cost: data.cost
-				});
+						extDesc: data.extDesc,
+						tags: data.tags,
+						cost: data.cost,
+						overwrite: data.overwrite
+					});
 				ctx.sendResponse(client, "CREATE", location, result);
 				return;
 			}
@@ -920,8 +1573,10 @@ function handle(ctx, client, packet) {
 			route: "files",
 			endpoints: ["files/summary", "files/dirs", "files/writable", "files/recent", "files/search",
 			            "files/lib/{libName}", "files/dir/{code}", "files/dir/{code}/recent"],
-			createEndpoints: ["files/add", "files/create", "files/dir/{code}/add", "files/dir/{code}/create"],
-			note: "CREATE operations require oper='CREATE' and are limited to whitelisted directories"
+			createEndpoints: ["files/add", "files/create", "files/upload/init", "files/upload/chunk",
+			                 "files/upload/commit", "files/upload/abort", "files/dir/{code}/add",
+			                 "files/dir/{code}/create"],
+			note: "CREATE operations require oper='CREATE' and are limited to whitelisted directories. Upload commits are indexed with FileBase.add()."
 		});
 		return;
 	}

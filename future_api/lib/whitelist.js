@@ -27,8 +27,9 @@ var FutureAPIWhitelist = {
     //   - Short code: "metatronstuff" (matches any library prefix)
     // =========================================================================
     FILE_DIRS: [
-        "metatronstuff"  // Main File Library - METATRONSTUFF directory
+        "metatronstuff", "ORIGINALCONTENT_MP3S", "ORIGINALCONTENT_IMGS", "ORIGINALCONTENT_ANSI", "ORIGINALCONTENT_FUTURETEXTFILES"  // Main File Library - METATRONSTUFF directory
     ],
+
 
     // =========================================================================
     // Helper functions

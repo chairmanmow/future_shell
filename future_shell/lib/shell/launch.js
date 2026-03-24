@@ -201,6 +201,14 @@ IconShell.prototype.launchSubprogram = function (name, handlers) {
 
     if (typeof this._shelveFolderFrames === 'function') this._shelveFolderFrames();
 
+    // Ensure the subprogram has a parentFrame connected to the shell's frame tree.
+    // Without this, persistent subprograms (like chat) create standalone frames
+    // whose display is disconnected from the shell — leaving visual artifacts on exit.
+    var subParent = this.subFrame || this.view;
+    if (subParent && typeof this.activeSubprogram.setParentFrame === 'function') {
+        this.activeSubprogram.setParentFrame(subParent);
+    }
+
     this.activeSubprogram.enter(this.exitSubprogram.bind(this));
 
     this._refreshScreenSaverFrame();

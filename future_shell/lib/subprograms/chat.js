@@ -2155,6 +2155,10 @@ Chat.prototype._cleanup = function () {
     this._bitmapViewerActive = false;
     this._clearControlHotspots({ hard: true });
     this._disposeFrames();
+    // Cycle parent frame to flush closed frame visuals to terminal
+    if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
+        try { this.parentFrame.cycle(); } catch (_) { }
+    }
 };
 
 Chat.prototype.cleanup = function () {

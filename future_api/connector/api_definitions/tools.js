@@ -663,6 +663,150 @@ export const TOOLS = [
     _dataParams: ["limit"],
     _humanHint: "Describe recent files in this directory."
   },
+  {
+    type: "function",
+    function: {
+      name: "listWritableFileDirectories",
+      description: "List the file directories that are currently whitelisted for CREATE/upload operations. Use this before creating or uploading a file via the API.",
+      parameters: { type: "object", properties: {}, required: [] }
+    },
+    _endpoint: "files/writable",
+    _pathParams: [],
+    _dataParams: [],
+    _humanHint: "Describe which upload destinations are allowed right now."
+  },
+  {
+    type: "function",
+    function: {
+      name: "initFileUpload",
+      description: "Start a staged file upload into a whitelisted Synchronet file directory. Use before sending file chunks. Returns an uploadId and chunk/size limits.",
+      parameters: {
+        type: "object",
+        properties: {
+          dirCode: {
+            type: "string",
+            description: "Whitelisted file directory code."
+          },
+          filename: {
+            type: "string",
+            description: "Destination filename, without any path separators."
+          },
+          description: {
+            type: "string",
+            description: "Synchronet file description."
+          },
+          from: {
+            type: "string",
+            description: "Uploader name to store in the filebase."
+          },
+          size: {
+            type: "number",
+            description: "Total file size in bytes."
+          },
+          md5: {
+            type: "string",
+            description: "Optional 32-character hexadecimal MD5 checksum."
+          },
+          sha1: {
+            type: "string",
+            description: "Optional 40-character hexadecimal SHA1 checksum."
+          },
+          overwrite: {
+            type: "boolean",
+            description: "If true, replace an existing on-disk file and filebase entry with the same name."
+          },
+          extDesc: {
+            type: "string",
+            description: "Optional extended description."
+          },
+          tags: {
+            type: "string",
+            description: "Optional comma-separated tags."
+          },
+          cost: {
+            type: "number",
+            description: "Optional credit cost."
+          }
+        },
+        required: ["dirCode", "filename", "description", "from", "size"]
+      }
+    },
+    _endpoint: "files/upload/init",
+    _pathParams: [],
+    _dataParams: ["dirCode", "filename", "description", "from", "size", "md5", "sha1", "overwrite", "extDesc", "tags", "cost"],
+    _humanHint: "Return the uploadId and limits so the caller can send chunks next."
+  },
+  {
+    type: "function",
+    function: {
+      name: "uploadFileChunk",
+      description: "Append one base64-encoded chunk to a staged file upload. Chunks must be sent sequentially using the offset returned by the previous response.",
+      parameters: {
+        type: "object",
+        properties: {
+          uploadId: {
+            type: "string",
+            description: "Upload session id returned by initFileUpload."
+          },
+          offset: {
+            type: "number",
+            description: "Current byte offset; must match the server's expected nextOffset."
+          },
+          contentBase64: {
+            type: "string",
+            description: "Base64-encoded bytes for this chunk."
+          }
+        },
+        required: ["uploadId", "offset", "contentBase64"]
+      }
+    },
+    _endpoint: "files/upload/chunk",
+    _pathParams: [],
+    _dataParams: ["uploadId", "offset", "contentBase64"],
+    _humanHint: "Return the updated nextOffset and whether the upload is complete."
+  },
+  {
+    type: "function",
+    function: {
+      name: "commitFileUpload",
+      description: "Finalize a staged upload by moving it into the target Synchronet directory and indexing it with FileBase.add(). Use only after all chunks have been uploaded.",
+      parameters: {
+        type: "object",
+        properties: {
+          uploadId: {
+            type: "string",
+            description: "Upload session id returned by initFileUpload."
+          }
+        },
+        required: ["uploadId"]
+      }
+    },
+    _endpoint: "files/upload/commit",
+    _pathParams: [],
+    _dataParams: ["uploadId"],
+    _humanHint: "Confirm that the file was committed and indexed successfully."
+  },
+  {
+    type: "function",
+    function: {
+      name: "abortFileUpload",
+      description: "Abort a staged upload and remove its temporary artifacts. Use when an upload should be canceled or retried from scratch.",
+      parameters: {
+        type: "object",
+        properties: {
+          uploadId: {
+            type: "string",
+            description: "Upload session id returned by initFileUpload."
+          }
+        },
+        required: ["uploadId"]
+      }
+    },
+    _endpoint: "files/upload/abort",
+    _pathParams: [],
+    _dataParams: ["uploadId"],
+    _humanHint: "Confirm that the staged upload was canceled."
+  },
 
   // ===========================================================================
   // SYSTEM PROPERTY TOOLS
@@ -739,4 +883,3 @@ export function getHumanHint(name) {
   const tool = getToolByName(name);
   return tool?._humanHint || "Present this information naturally.";
 }
-

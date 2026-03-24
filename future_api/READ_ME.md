@@ -78,6 +78,71 @@ Returns list of subs that allow posting.
 ```
 Returns list of directories that allow uploads.
 
+**Preferred staged upload flow (binary or text files):**
+```json
+{
+  "scope": "FUTURE_API",
+  "func": "QUERY",
+  "oper": "CREATE",
+  "location": "files/upload/init",
+  "data": {
+    "dirCode": "metatronstuff",
+    "filename": "myfile.zip",
+    "description": "My uploaded file",
+    "from": "API User",
+    "size": 12345,
+    "md5": "optional32charhexchecksum",
+    "overwrite": false
+  }
+}
+```
+Returns an `uploadId`, `nextOffset`, and upload limits.
+
+```json
+{
+  "scope": "FUTURE_API",
+  "func": "QUERY",
+  "oper": "CREATE",
+  "location": "files/upload/chunk",
+  "data": {
+    "uploadId": "upl_...",
+    "offset": 0,
+    "contentBase64": "base64-encoded-bytes"
+  }
+}
+```
+Append chunks sequentially until `bytesWritten === size`.
+
+```json
+{
+  "scope": "FUTURE_API",
+  "func": "QUERY",
+  "oper": "CREATE",
+  "location": "files/upload/commit",
+  "data": {
+    "uploadId": "upl_..."
+  }
+}
+```
+This moves the staged file into the target directory and indexes it with `FileBase.add()`.
+
+```json
+{
+  "scope": "FUTURE_API",
+  "func": "QUERY",
+  "oper": "CREATE",
+  "location": "files/upload/abort",
+  "data": {
+    "uploadId": "upl_..."
+  }
+}
+```
+Cancels an in-progress staged upload and removes temp artifacts.
+
+Current staged upload limits:
+- Max file size: 16 MiB
+- Max decoded chunk size: 256 KiB
+
 **Add existing file to filebase:**
 ```json
 {
@@ -96,6 +161,7 @@ Returns list of directories that allow uploads.
 }
 ```
 Note: The file must already exist on disk in the directory's path.
+This is mainly for files that arrived through some other transport.
 
 **Create text file and add to filebase:**
 ```json
@@ -118,6 +184,10 @@ Note: The file must already exist on disk in the directory's path.
 **Alternative endpoints (with dirCode in path):**
 - `files/dir/{code}/add` - Add existing file
 - `files/dir/{code}/create` - Create text file
+
+Notes:
+- Synchronet does not auto-index files simply because they were copied into a directory.
+- The staged upload commit path indexes the file directly with `FileBase.add()` rather than shelling out to `jsexec addfiles <dircode>`.
 
 ---
 
