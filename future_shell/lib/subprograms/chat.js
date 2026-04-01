@@ -97,6 +97,11 @@ function Chat(jsonchat, opts) {
     this._lastPrivateSenderNick = null;
     this._jsonchatOriginalUpdate = null;
     this._privateMailboxHookInstalled = false;
+    // MOTD ticker state
+    this._motdText = '';
+    this._motdTimestamp = 0;
+    this._lastMotdRefreshTs = 0;
+    this._headerSignature = '';
     // Shared avatar library resolution (reuse singleton to avoid duplicate loads / class mismatch)
     this._avatarLib = (function () {
         try {
@@ -172,6 +177,10 @@ Chat.prototype._resetRuntimeState = function () {
     this._pmButtonFlashState = false;
     this._pmButtonFlashTs = 0;
     this._lastPrivateHistorySyncTs = 0;
+    this._motdText = '';
+    this._motdTimestamp = 0;
+    this._lastMotdRefreshTs = 0;
+    this._headerSignature = '';
 };
 
 Chat.prototype._disposeFrames = function () {
@@ -204,6 +213,8 @@ Chat.prototype._disposeFrames = function () {
 };
 
 Chat.prototype._ensureFrames = function () {
+    // Guard: never create frames after exit/cleanup
+    if (!this.running) return;
     var host = (typeof this._ensureHostFrame === 'function') ? this._ensureHostFrame() : (this.parentFrame || null);
     if (!host) return;
 
@@ -370,6 +381,11 @@ Chat.prototype.exit = function () {
         this._redrawEvent.abort = true;
         this._redrawEvent = null;
     }
+    // Abort any pending throttled draw timer to prevent post-exit frame recreation
+    if (this._throttlePending && typeof this._throttlePending === 'object' && this._throttlePending.abort !== undefined) {
+        this._throttlePending.abort = true;
+    }
+    this._throttlePending = null;
     if (typeof Subprogram.prototype.exit === 'function') {
         Subprogram.prototype.exit.call(this);
     } else {
@@ -2139,6 +2155,11 @@ Chat.prototype._attrToCtrlA = function (fg, bg) {
 
 Chat.prototype._cleanup = function () {
     this._restorePrivateMailboxHook();
+    // Cancel any pending throttled draw to prevent post-cleanup frame recreation
+    if (this._throttlePending && typeof this._throttlePending === 'object' && this._throttlePending.abort !== undefined) {
+        this._throttlePending.abort = true;
+    }
+    this._throttlePending = null;
     if (this._activeRosterModal && typeof this._activeRosterModal.close === 'function') {
         try { this._activeRosterModal.close(); } catch (_) { }
     }
@@ -2331,27 +2352,184 @@ Chat.prototype._renderControlButtons = function () {
 
 Chat.prototype._renderHeaderFrame = function () {
     if (!this.headerFrame) return;
-    var attr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_HEADER', this.headerFrame.attr || 0) : (this.headerFrame.attr || 0);
-    this.headerFrame.attr = attr;
-    try { this.headerFrame.clear(attr); } catch (_) { }
-    var title = 'Chat';
-    if (this.currentChannel) {
-        if (this.currentChannel.charAt(0) === '@') {
-            title += ' - PM: ' + this.currentChannel.substr(1);
-        } else {
-            title += ' - #' + this.currentChannel;
-        }
-    }
-    var text = title;
+    var baseAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CHAT_HEADER', this.headerFrame.attr || 0) : (this.headerFrame.attr || 0);
+    var motdAttr = (BG_GREEN | WHITE);
     var width = this.headerFrame.width || 0;
     if (width <= 0) return;
+
+    // Build channel info text
+    var infoText = 'Chat';
+    if (this.currentChannel) {
+        if (this.currentChannel.charAt(0) === '@') {
+            infoText += ' - PM: ' + this.currentChannel.substr(1);
+        } else {
+            infoText += ' - #' + this.currentChannel;
+        }
+    }
+
+    // Build MOTD ticker text
+    var motdDisplay = this._motdText ? (' MOTD | ' + this._motdText) : '';
+
+    // Determine what to show: alternate between channel info and MOTD ticker
+    var headerState = this._renderHeaderMode(infoText, width, motdDisplay);
+    var isMotd = headerState.indexOf('motd|') === 0;
+    var text = headerState.substr(5); // strip 'motd|' or 'info|' prefix
+    var attr = isMotd ? motdAttr : baseAttr;
+
+    // Skip re-render if nothing changed
+    if (headerState === this._headerSignature) return;
+
+    this.headerFrame.attr = attr;
+    try { this.headerFrame.clear(attr); } catch (_) { }
     if (text.length > width) text = text.substr(0, width);
-    var startX = Math.max(1, Math.floor((width - text.length) / 2) + 1);
+
+    // Center info text; left-align MOTD ticker text
+    var startX;
+    if (isMotd) {
+        startX = 1;
+    } else {
+        startX = Math.max(1, Math.floor((width - text.length) / 2) + 1);
+    }
     try {
         this.headerFrame.gotoxy(startX, 1);
         this.headerFrame.putmsg(text, attr);
     } catch (_) { }
     this._expectedHeaderAttr = attr;
+    this._headerSignature = headerState;
+};
+
+// Determine header display mode: alternates between channel info and MOTD ticker.
+// Returns a prefixed string: 'info|<text>' or 'motd|<text>'
+Chat.prototype._renderHeaderMode = function (infoText, width, motdText) {
+    var normalizedMotd = (motdText || '').replace(/^\s+|\s+$/g, '');
+    var statusText = infoText || '';
+    if (statusText.length > width) statusText = statusText.substr(0, width);
+    var now = (new Date()).getTime();
+    var statusDuration = 4500;     // ms to show channel info
+    var motdStartPause = 1250;     // ms pause before scroll starts
+    var motdEndPause = 900;        // ms pause after scroll ends
+    var motdStepMs = 250;          // ms per scroll step
+    var motdBuffer = normalizedMotd + '   '; // trailing space for scroll
+    var maxOffset = Math.max(0, motdBuffer.length - width);
+    var motdDuration = normalizedMotd.length
+        ? (maxOffset > 0
+            ? (motdStartPause + ((maxOffset + 1) * motdStepMs) + motdEndPause)
+            : 5000)
+        : 0;
+    var totalDuration = statusDuration + motdDuration;
+    var motdElapsed = 0;
+    var scrollOffset = 0;
+    var tickerText = '';
+
+    // No MOTD, too narrow, or zero duration: just show info
+    if (!normalizedMotd.length || width < 12 || totalDuration <= 0) {
+        return 'info|' + statusText;
+    }
+
+    // During the info phase, show channel info
+    if ((now % totalDuration) < statusDuration) {
+        return 'info|' + statusText;
+    }
+
+    // MOTD phase
+    motdElapsed = (now % totalDuration) - statusDuration;
+
+    // If MOTD fits in one screen, no scrolling needed
+    if (maxOffset <= 0) {
+        return 'motd|' + normalizedMotd.substr(0, width);
+    }
+
+    // Scroll through MOTD with start/end pauses
+    if (motdElapsed <= motdStartPause) {
+        scrollOffset = 0;
+    } else if (motdElapsed >= motdStartPause + ((maxOffset + 1) * motdStepMs)) {
+        scrollOffset = maxOffset;
+    } else {
+        scrollOffset = Math.floor((motdElapsed - motdStartPause) / motdStepMs);
+        if (scrollOffset > maxOffset) scrollOffset = maxOffset;
+    }
+
+    tickerText = motdBuffer.substr(scrollOffset, width);
+    // Pad to width
+    while (tickerText.length < width) tickerText += ' ';
+    return 'motd|' + tickerText;
+};
+
+// Get the MOTD channel name (same as avatar_chat: defaults to 'motd')
+Chat.prototype._getMotdChannelName = function () {
+    return 'motd';
+};
+
+// Fetch the latest MOTD text from the json-chat MOTD channel history.
+// Mirrors avatar_chat's refreshMotd() logic: reads last 10 history entries,
+// picks the most recent non-private message text.
+Chat.prototype._refreshMotd = function (force) {
+    var now = (new Date()).getTime();
+    var motdChannel = this._getMotdChannelName();
+    var history = [];
+    var nextText = '';
+    var nextTimestamp = 0;
+
+    if (!this.jsonchat || !this.jsonchat.client) {
+        if (this._motdText.length || this._motdTimestamp > 0) {
+            this._motdText = '';
+            this._motdTimestamp = 0;
+            this._headerSignature = '';
+        }
+        this._lastMotdRefreshTs = 0;
+        return;
+    }
+
+    // Don't poll too frequently (every 5 seconds)
+    if (!force && now - this._lastMotdRefreshTs < 5000) {
+        return;
+    }
+    this._lastMotdRefreshTs = now;
+
+    try {
+        if (typeof this.jsonchat.client.slice === 'function') {
+            history = this.jsonchat.client.slice('chat', 'channels.' + motdChannel + '.history', -10, undefined, 1) || [];
+        } else if (typeof this.jsonchat.client.read === 'function') {
+            history = this.jsonchat.client.read('chat', 'channels.' + motdChannel + '.history', 1) || [];
+            if (Array.isArray(history) && history.length > 10) {
+                history = history.slice(-10);
+            }
+        }
+    } catch (_) {
+        history = [];
+    }
+
+    if (!Array.isArray(history)) history = [];
+
+    // Walk backward to find the latest non-private message
+    for (var i = history.length - 1; i >= 0; i--) {
+        var msg = history[i];
+        if (!msg) continue;
+        // Skip private messages
+        if (msg.private && msg.private.to && msg.private.to.name) continue;
+        var text = '';
+        if (typeof msg.str === 'string' && msg.str.length > 0) {
+            text = msg.str.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+        } else if (typeof msg.text === 'string' && msg.text.length > 0) {
+            text = msg.text.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+        }
+        if (!text.length) continue;
+
+        // Check for bitmap message - show placeholder
+        if (this._isBitmapMessage && this._isBitmapMessage(text)) {
+            text = '[image]';
+        }
+
+        nextText = text;
+        nextTimestamp = msg.time || 0;
+        break;
+    }
+
+    if (nextText !== this._motdText || nextTimestamp !== this._motdTimestamp) {
+        this._motdText = nextText;
+        this._motdTimestamp = nextTimestamp;
+        this._headerSignature = ''; // Force header re-render
+    }
 };
 
 Chat.prototype._formatControlsInfo = function () {
@@ -3140,6 +3318,13 @@ Chat.prototype.cycle = function () {
         this._lastInputRendered = '';
         this._refreshHeaderAndInput();
     }
+    // Refresh MOTD ticker header (every ~250ms for smooth scrolling)
+    if (this._motdText && this.headerFrame) {
+        this._renderHeaderFrame();
+        if (this.headerFrame) {
+            try { this.headerFrame.cycle(); } catch (_) { }
+        }
+    }
     var messages = this._getChannelMessages();
     var signature = this._computeMessageSignature(messages);
     var needsRedraw = this._needsRedraw || signature !== this._lastMessageSignature;
@@ -3154,6 +3339,8 @@ Chat.prototype.cycle = function () {
 };
 
 Chat.prototype.draw = function () {
+    // Guard: don't redraw after exit/cleanup — prevents orphaned frame recreation from throttle timer
+    if (!this.running) return;
     // Skip heavy redraw when bitmap viewer is active - it renders directly to console
     if (this._bitmapViewerActive && this._bitmapViewerFrame) {
         // Throttle bitmap redraws to avoid flicker
@@ -3184,6 +3371,7 @@ Chat.prototype.draw = function () {
     }
     var _perfStart = (global.__ICSH_PERF__) ? Date.now() : 0;
     this._ensureFrames();
+    this._refreshMotd(false);
     this._renderHeaderFrame();
     this._renderControlsArea();
 
@@ -3289,6 +3477,26 @@ Chat.prototype._getChannelByName = function (name) {
     return null;
 };
 
+Chat.prototype._isCurrentUserSysop = function () {
+    try {
+        if (typeof user === 'undefined' || !user) return false;
+        if (user.is_sysop === true) return true;
+        if (user.security && typeof user.security.level === 'number' && user.security.level >= 90) return true;
+        if (typeof user.compare_ars === 'function') return user.compare_ars('SYSOP') === true;
+    } catch (_) { }
+    return false;
+};
+
+Chat.prototype._isHiddenPublicChannel = function (channelName) {
+    var upper = String(channelName || '').replace(/^\s+|\s+$/g, '').toUpperCase();
+    if (!upper.length) return false;
+    return upper === 'MOTD' && !this._isCurrentUserSysop();
+};
+
+Chat.prototype._shouldIncludePublicChannel = function (channelName) {
+    return !!(channelName && channelName.charAt(0) !== '@' && !this._isHiddenPublicChannel(channelName));
+};
+
 Chat.prototype._syncChannelOrder = function () {
     var nextOrder = [];
     var i, key;
@@ -3296,8 +3504,9 @@ Chat.prototype._syncChannelOrder = function () {
     // Preserve existing order for channels still joined
     for (i = 0; i < this.channelOrder.length; i++) {
         var chName = this.channelOrder[i];
-        if (chName && this._getChannelByName(chName)) {
-            nextOrder.push(this._getChannelByName(chName).name);
+        var existing = chName ? this._getChannelByName(chName) : null;
+        if (existing && this._shouldIncludePublicChannel(existing.name)) {
+            nextOrder.push(existing.name);
         }
     }
     // Add any new channels from jsonchat
@@ -3305,7 +3514,7 @@ Chat.prototype._syncChannelOrder = function () {
         for (key in this.jsonchat.channels) {
             if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
             var ch = this.jsonchat.channels[key];
-            if (ch && ch.name && !this._channelExists(nextOrder, ch.name)) {
+            if (ch && ch.name && this._shouldIncludePublicChannel(ch.name) && !this._channelExists(nextOrder, ch.name)) {
                 nextOrder.push(ch.name);
             }
         }
@@ -3328,6 +3537,9 @@ Chat.prototype._syncChannelOrder = function () {
     if (!this.currentChannel || (!this._getChannelByName(this.currentChannel) && !this._getPrivateThreadByName(this.currentChannel))) {
         this.currentChannel = this.channelOrder[0] || '';
         this._markCurrentViewRead(this.currentChannel);
+    } else if (this._isHiddenPublicChannel(this.currentChannel)) {
+        this.currentChannel = this.channelOrder[0] || 'main';
+        this._markCurrentViewRead(this.currentChannel);
     }
 };
 
@@ -3343,6 +3555,13 @@ Chat.prototype._switchToChannel = function (channelName) {
 
 Chat.prototype._joinChannel = function (channelName) {
     var normalized = this._normalizeChannelName(channelName, 'main');
+    if (this._isHiddenPublicChannel(normalized)) {
+        this._statusText = 'Channel unavailable';
+        this._lastStatusUpdateTs = Date.now();
+        this._lastInputRendered = '';
+        this._refreshHeaderAndInput(true);
+        return true;
+    }
     if (!this.jsonchat || !this.jsonchat.getcmd) {
         this._statusText = 'Not connected to chat';
         this._lastStatusUpdateTs = Date.now();
@@ -3404,7 +3623,7 @@ Chat.prototype._buildChannelEntries = function () {
     for (var key in this.jsonchat.channels) {
         if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
         var ch = this.jsonchat.channels[key];
-        if (!ch || !ch.name || ch.name.charAt(0) === '@') continue;
+        if (!ch || !ch.name || !this._shouldIncludePublicChannel(ch.name)) continue;
         var unreadKey = ch.name.toUpperCase();
         var unreadCount = this.publicChannelUnreadCounts[unreadKey] || 0;
         entries.push({
@@ -3445,7 +3664,7 @@ Chat.prototype._syncPublicChannelUnreadCounts = function (markUnread) {
     for (var key in this.jsonchat.channels) {
         if (!Object.prototype.hasOwnProperty.call(this.jsonchat.channels, key)) continue;
         var ch = this.jsonchat.channels[key];
-        if (!ch || !ch.name || ch.name.charAt(0) === '@') continue;
+        if (!ch || !ch.name || !this._shouldIncludePublicChannel(ch.name)) continue;
         var unreadKey = ch.name.toUpperCase();
         if (this.publicChannelUnreadCounts[unreadKey] === undefined) {
             this.publicChannelUnreadCounts[unreadKey] = 0;

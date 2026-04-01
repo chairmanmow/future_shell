@@ -197,7 +197,9 @@ Subprogram.prototype.draw = function () { };
 Subprogram.prototype.refresh = function () { this.draw(); };
 Subprogram.prototype.cleanup = function () {
     if (this._cleanup && typeof this._cleanup === 'function') {
-        this._cleanup();
+        try { this._cleanup(); } catch (e) {
+            try { log(LOG_WARNING, 'Subprogram cleanup error: ' + e); } catch (_) { }
+        }
     }
     if (this.hostFrame) {
         var oldHost = this.hostFrame;
