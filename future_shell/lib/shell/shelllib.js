@@ -16,6 +16,7 @@ try { load('future_shell/lib/util/perf.js'); } catch (e) { }
 try { load('future_shell/lib/subprograms/subprogram.js'); } catch (e) { }
 try { load('future_shell/lib/subprograms/mrc.js'); } catch (e) { dbug('shell init unable to preload mrc.js: ' + e, 'mrc'); }
 try { load('future_shell/lib/util/launch_queue.js'); } catch (e) { dbug('shell init unable to load launch_queue.js: ' + e, 'launch'); }
+try { load('future_shell/lib/util/set_node_status.js'); } catch (e) { dbug('shell init unable to load set_node_status.js: ' + e, 'launch'); }
 try { load('future_shell/lib/util/hotspot_manger.js'); } catch (e) { dbug('shell init unable to load hotspot_manger.js: ' + e, 'hotspot'); }
 try { load('future_shell/lib/shell/ticker.js'); } catch (e) { dbug('shell init unable to load ticker.js: ' + e, 'ticker'); }
 
@@ -357,6 +358,7 @@ IconShell.prototype.init = function () {
     this.currentView = ICSH_CONFIG._viewId;
     this.assignViewHotkeys(ICSH_CONFIG.children);
     if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
+    if (typeof this._refreshNodeStatus === 'function') this._refreshNodeStatus();
     // Background matrix rain effect (behind content)
     // NOTE: Do NOT start immediately; main loop will start it after inactivity threshold.
     if (typeof ShellScreenSaver === 'function') {
@@ -1265,7 +1267,7 @@ IconShell.prototype._processPendingSubLaunch = function () {
     if (!this._pendingSubLaunch) return;
     var pending = this._pendingSubLaunch;
     delete this._pendingSubLaunch;
-    this.launchSubprogram(pending.name, pending.instance);
+    this.launchSubprogram(pending.name, pending.instance, pending.statusMeta);
 };
 
 IconShell.prototype._normalizeKey = function (key) {
@@ -1590,8 +1592,10 @@ IconShell.prototype._handleNavigationKey = function (ch) {
     try {
         var node = this.stack[this.stack.length - 1];
         var items = node && node.children ? node.children : [];
+        var hasUp = this.stack.length > 1;
+        var total = items.length + (hasUp ? 1 : 0);
         if (this.selection < 0) this.selection = 0;
-        if (this.selection >= items.length) this.selection = items.length ? items.length - 1 : 0;
+        if (this.selection >= total) this.selection = total ? total - 1 : 0;
     } catch (e) { }
     switch (ch) {
         case KEY_LEFT: if (this._resetTypeahead) this._resetTypeahead(); this.moveSelection(-1, 0); return true;
@@ -1757,6 +1761,7 @@ IconShell.prototype._handleHotkeyAction = function (ch) {
     if (typeof action === 'function') {
         dbug("Executing hotkey action for " + ch + " in view " + viewId, "hotkeys");
         if (this._resetTypeahead) this._resetTypeahead();
+        var matchedItem = null;
 
         // Before executing, try to update selection to match the clicked/pressed item
         // This is important for mouse clicks which don't automatically update selection
@@ -1764,6 +1769,7 @@ IconShell.prototype._handleHotkeyAction = function (ch) {
             for (var i = 0; i < this.grid.cells.length; i++) {
                 var cell = this.grid.cells[i];
                 if (cell && cell.item && cell.item.hotkey === ch) {
+                    matchedItem = cell.item;
                     // Found the cell matching this hotkey, update selection
                     this.selection = this.scrollOffset + i;
                     // Draw border on the clicked cell before dissolve animation
@@ -1786,7 +1792,12 @@ IconShell.prototype._handleHotkeyAction = function (ch) {
             dbug("dissolve error in _handleHotkeyAction: " + e, "view");
         }
 
-        action();
+        try {
+            if (typeof this._captureNodeStatusIntent === 'function' && matchedItem) this._captureNodeStatusIntent(matchedItem);
+            action();
+        } finally {
+            if (typeof this._clearNodeStatusIntent === 'function') this._clearNodeStatusIntent();
+        }
         if (this.folderChanged) {
             this.folderChanged = false;
             if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
@@ -1870,7 +1881,9 @@ IconShell.prototype._startScreenSaver = function () {
     if (typeof this._onAmbientStart === 'function') {
         try { this._onAmbientStart(); } catch (e) { }
     }
-    return this._screenSaver.activate();
+    var activated = this._screenSaver.activate();
+    if (activated && typeof this._refreshNodeStatus === 'function') this._refreshNodeStatus();
+    return activated;
 };
 
 IconShell.prototype._stopScreenSaver = function () {
@@ -1881,6 +1894,7 @@ IconShell.prototype._stopScreenSaver = function () {
     if (typeof this._onAmbientStop === 'function') {
         try { this._onAmbientStop(); } catch (e) { }
     }
+    if (typeof this._refreshNodeStatus === 'function') this._refreshNodeStatus();
     return true;
 };
 
@@ -2801,6 +2815,7 @@ if (!IconShell.prototype._drawFolderOrig) {
     };
 }
 IconShell.prototype._cleanupMainLoop = function () {
+    if (typeof this._clearNodeStatus === 'function') this._clearNodeStatus();
     if (this._chatRedrawEvent && this._chatRedrawEvent.abort !== undefined) this._chatRedrawEvent.abort = true;
     if (this._resizePollEvent && this._resizePollEvent.abort !== undefined) this._resizePollEvent.abort = true;
     if (this._nodeMsgEvent && this._nodeMsgEvent.abort !== undefined) this._nodeMsgEvent.abort = true;
