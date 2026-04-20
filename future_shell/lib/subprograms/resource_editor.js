@@ -17,10 +17,133 @@ require('sbbsdefs.js',
 var DEFAULT_ATTR = (typeof LIGHTGRAY === 'number') ? (BG_BLACK | LIGHTGRAY) : 7;
 var ANSI_FG_CODES = [30, 34, 32, 36, 31, 35, 33, 37];
 var ANSI_BG_CODES = [40, 44, 42, 46, 41, 45, 43, 47];
+var AVATAR_COLS = 10;
+var AVATAR_ROWS = 6;
+var RESOURCE_EDITOR_PROFILES = {
+    generic: 'generic',
+    avatar: 'avatar',
+    gateway_icon: 'gateway_icon',
+    bbs_screen: 'bbs_screen'
+};
+
+function trimText(value) {
+    return String(value || '').replace(/^\s+|\s+$/g, '');
+}
+
+function ensureTrailingSlash(path) {
+    path = String(path || '');
+    if (!path.length) return '';
+    var last = path.charAt(path.length - 1);
+    if (last === '/' || last === '\\') return path;
+    return path + '/';
+}
+
+function normalizePath(path) {
+    var value = String(path || '');
+    if (!value.length) return '';
+    value = value.replace(/\\/g, '/');
+    var prefix = '';
+    if (/^[A-Za-z]:\//.test(value)) {
+        prefix = value.substr(0, 3);
+        value = value.substr(3);
+    } else if (value.charAt(0) === '/') {
+        prefix = '/';
+        value = value.substr(1);
+    }
+    var parts = value.split('/');
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+        var part = parts[i];
+        if (!part || part === '.') continue;
+        if (part === '..') {
+            if (out.length && out[out.length - 1] !== '..') out.pop();
+            else if (!prefix) out.push(part);
+            continue;
+        }
+        out.push(part);
+    }
+    return prefix + out.join('/');
+}
+
+function pathWithinRoot(path, root) {
+    var normalizedPath = normalizePath(path);
+    var normalizedRoot = normalizePath(root);
+    if (!normalizedPath.length || !normalizedRoot.length) return false;
+    var rooted = ensureTrailingSlash(normalizedRoot);
+    if (normalizedPath === normalizedRoot) return true;
+    return normalizedPath.indexOf(rooted) === 0;
+}
 
 function cp437Char(code) {
     if (typeof ascii === 'function') return ascii(code);
     return String.fromCharCode(code);
+}
+
+function cp437Code(ch) {
+    if (typeof ascii === 'function') {
+        try {
+            var fromAscii = ascii(ch);
+            if (typeof fromAscii === 'number' && !isNaN(fromAscii)) return fromAscii & 0xFF;
+        } catch (_eAscii) { }
+    }
+    if (!ch || !ch.length) return 32;
+    return ch.charCodeAt(0) & 0xFF;
+}
+
+function cgaToXterm(color) {
+    var low = color & 7;
+    if (low === 1) low = 4;
+    else if (low === 4) low = 1;
+    else if (low === 3) low = 6;
+    else if (low === 6) low = 3;
+    return (color & 8) | low;
+}
+
+function adler32(bytes) {
+    var MOD = 65521;
+    var s1 = 1;
+    var s2 = 0;
+    if (!bytes || !bytes.length) return 1;
+    for (var i = 0; i < bytes.length; i++) {
+        s1 = (s1 + (bytes[i] & 0xFF)) % MOD;
+        s2 = (s2 + s1) % MOD;
+    }
+    return ((s2 << 16) | s1) >>> 0;
+}
+
+function zlibStoreCompress(bytes) {
+    var src = bytes || [];
+    var out = [0x78, 0x01]; // zlib header: deflate + fast strategy
+    var pos = 0;
+    while (pos < src.length) {
+        var chunkLen = src.length - pos;
+        if (chunkLen > 65535) chunkLen = 65535;
+        var isFinal = (pos + chunkLen >= src.length) ? 1 : 0;
+        out.push(isFinal); // BFINAL + BTYPE=stored
+        out.push(chunkLen & 0xFF);
+        out.push((chunkLen >> 8) & 0xFF);
+        var nlen = (~chunkLen) & 0xFFFF;
+        out.push(nlen & 0xFF);
+        out.push((nlen >> 8) & 0xFF);
+        for (var i = 0; i < chunkLen; i++) out.push(src[pos + i] & 0xFF);
+        pos += chunkLen;
+    }
+    var sum = adler32(src);
+    out.push((sum >> 24) & 0xFF);
+    out.push((sum >> 16) & 0xFF);
+    out.push((sum >> 8) & 0xFF);
+    out.push(sum & 0xFF);
+    return out;
+}
+
+function bytesToHex(bytes) {
+    var out = '';
+    for (var i = 0; i < bytes.length; i++) {
+        var hex = (bytes[i] & 0xFF).toString(16);
+        if (hex.length < 2) hex = '0' + hex;
+        out += hex;
+    }
+    return out;
 }
 
 function ResourceEditor(opts) {
@@ -34,6 +157,12 @@ function ResourceEditor(opts) {
     this.id = 'resource-editor';
     this.themeNamespace = this.id;
     this.resourcePath = opts.resourcePath || opts.file || null;
+    this.profileMeta = opts.profileMeta || {};
+    this.profile = this._normalizeProfile(opts.profile || RESOURCE_EDITOR_PROFILES.generic);
+    this._storagePaths = this._resolveStoragePaths();
+    this._profiles = this._buildProfiles();
+    if (!this._profiles[this.profile]) this.profile = RESOURCE_EDITOR_PROFILES.generic;
+    this.profileConfig = this._profiles[this.profile] || this._profiles[RESOURCE_EDITOR_PROFILES.generic];
 
     this.headerFrame = null;
     this.canvasFrame = null;
@@ -41,16 +170,27 @@ function ResourceEditor(opts) {
     this.glyphFrame = null;
     this.statusFrame = null;
 
-    this.cols = Math.max(16, opts.cols || 40);
-    this.rows = Math.max(8, opts.rows || 16);
+    var preset = this.profileConfig && this.profileConfig.preset ? this.profileConfig.preset : { cols: 80, rows: 24 };
+    var initialCols = parseInt((opts.cols || preset.cols || 80), 10);
+    var initialRows = parseInt((opts.rows || preset.rows || 24), 10);
+    if (isNaN(initialCols) || initialCols < 1) initialCols = 80;
+    if (isNaN(initialRows) || initialRows < 1) initialRows = 24;
+    this.docCols = initialCols;
+    this.docRows = initialRows;
+    this.cols = this.docCols;
+    this.rows = this.docRows;
     this.canvas = [];
     this.cursor = { x: 0, y: 0 };
+    this.viewOffset = { x: 0, y: 0 };
     this._dirty = false;
     this.inputMode = (opts.inputMode === 'keyboard') ? 'keyboard' : 'mouse';
     this.focus = 'canvas';
     this._hotspotHandlers = {};
     this._hotspotCounter = 0;
     this._hotspotBuffer = '';
+    this._overwritePrompt = null;
+    this._sizePrompt = null;
+    this._avatarLib = null;
 
     var paletteSet = this._buildPalette();
     this.palette = paletteSet.entries;
@@ -88,13 +228,540 @@ extend(ResourceEditor, Subprogram);
 
 ResourceEditor.prototype._initCanvas = function () {
     this.canvas = [];
-    for (var y = 0; y < this.rows; y++) {
+    for (var y = 0; y < this.docRows; y++) {
         var row = [];
-        for (var x = 0; x < this.cols; x++) {
+        for (var x = 0; x < this.docCols; x++) {
             row.push({ ch: ' ', attr: this.brushAttr });
         }
         this.canvas.push(row);
     }
+};
+
+ResourceEditor.prototype._normalizeProfile = function (profile) {
+    var key = trimText(profile || RESOURCE_EDITOR_PROFILES.generic).toLowerCase();
+    key = key.replace(/[^a-z0-9_]+/g, '_');
+    if (!key.length) key = RESOURCE_EDITOR_PROFILES.generic;
+    return key;
+};
+
+ResourceEditor.prototype._ensureDir = function (path) {
+    if (!path) return false;
+    if (file_isdir(path)) return true;
+    try { mkdir(path); } catch (_e) { }
+    return file_isdir(path);
+};
+
+ResourceEditor.prototype._resolveStoragePaths = function () {
+    var modsBase = null;
+    try {
+        if (typeof system !== 'undefined' && system && system.mods_dir) modsBase = system.mods_dir;
+    } catch (_eSys) { }
+    if (!modsBase && typeof js !== 'undefined' && js && js.exec_dir) modsBase = js.exec_dir;
+    if (!modsBase) modsBase = '.';
+    modsBase = ensureTrailingSlash(modsBase);
+
+    var shellDir = modsBase + 'future_shell/';
+    var dataDir = shellDir + 'data/';
+    var editorDir = dataDir + 'resource_editor/';
+    var genericDir = editorDir + 'generic/';
+    var avatarDir = editorDir + 'avatars/';
+    var screensDir = editorDir + 'screens/';
+    var assetsDir = shellDir + 'assets/';
+    var gatewayAssetsDir = assetsDir + 'gateways/';
+    var uploadsDir = null;
+    try {
+        if (typeof system !== 'undefined' && system && system.data_dir) {
+            uploadsDir = ensureTrailingSlash(system.data_dir) + 'dirs/uploads/';
+        }
+    } catch (_eData) { }
+    if (!uploadsDir) uploadsDir = './dirs/uploads/';
+
+    this._ensureDir(shellDir);
+    this._ensureDir(dataDir);
+    this._ensureDir(editorDir);
+    this._ensureDir(genericDir);
+    this._ensureDir(avatarDir);
+    this._ensureDir(screensDir);
+    this._ensureDir(assetsDir);
+    this._ensureDir(gatewayAssetsDir);
+    this._ensureDir(uploadsDir);
+
+    return {
+        shellDir: shellDir,
+        dataDir: dataDir,
+        editorDir: editorDir,
+        genericDir: genericDir,
+        avatarDir: avatarDir,
+        screensDir: screensDir,
+        assetsDir: assetsDir,
+        gatewayAssetsDir: gatewayAssetsDir,
+        uploadsDir: uploadsDir
+    };
+};
+
+ResourceEditor.prototype._buildProfiles = function () {
+    var paths = this._storagePaths || this._resolveStoragePaths();
+    var gatewayBase = '';
+    if (this.profileMeta && this.profileMeta.gatewayId) {
+        gatewayBase = String(this.profileMeta.gatewayId).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        gatewayBase = gatewayBase.replace(/^-+|-+$/g, '');
+    }
+    var gatewayId = gatewayBase;
+    if (gatewayId.length) gatewayId += '.bin';
+
+    return {
+        generic: {
+            key: RESOURCE_EDITOR_PROFILES.generic,
+            label: 'Generic',
+            roots: [paths.genericDir, paths.assetsDir, paths.uploadsDir],
+            defaultRoot: paths.genericDir,
+            allowExt: ['.ans', '.bin'],
+            defaultExt: '.ans',
+            defaultName: '',
+            preset: { cols: 80, rows: 24 },
+            overwrite: true
+        },
+        avatar: {
+            key: RESOURCE_EDITOR_PROFILES.avatar,
+            label: 'Avatar',
+            roots: [paths.avatarDir],
+            defaultRoot: paths.avatarDir,
+            allowExt: ['.bin'],
+            defaultExt: '.bin',
+            defaultName: '',
+            preset: { cols: AVATAR_COLS, rows: AVATAR_ROWS },
+            overwrite: true
+        },
+        gateway_icon: {
+            key: RESOURCE_EDITOR_PROFILES.gateway_icon,
+            label: 'Gateway Icon',
+            roots: [paths.gatewayAssetsDir],
+            defaultRoot: paths.gatewayAssetsDir,
+            allowExt: ['.ans', '.bin'],
+            defaultExt: '.bin',
+            defaultName: gatewayId,
+            lockedBaseName: gatewayBase,
+            preset: { cols: 12, rows: 6 },
+            overwrite: true
+        },
+        bbs_screen: {
+            key: RESOURCE_EDITOR_PROFILES.bbs_screen,
+            label: 'BBS Screen',
+            roots: [paths.screensDir],
+            defaultRoot: paths.screensDir,
+            allowExt: ['.ans', '.bin'],
+            defaultExt: '.ans',
+            defaultName: '',
+            preset: { cols: 80, rows: 24 },
+            overwrite: true
+        }
+    };
+};
+
+ResourceEditor.prototype._activeProfile = function () {
+    if (!this._profiles) this._profiles = this._buildProfiles();
+    if (!this.profile || !this._profiles[this.profile]) this.profile = RESOURCE_EDITOR_PROFILES.generic;
+    this.profileConfig = this._profiles[this.profile] || this._profiles[RESOURCE_EDITOR_PROFILES.generic];
+    return this.profileConfig;
+};
+
+ResourceEditor.prototype._isAllowedExt = function (ext) {
+    ext = String(ext || '').toLowerCase();
+    var profile = this._activeProfile();
+    var list = (profile && profile.allowExt) ? profile.allowExt : ['.ans', '.bin'];
+    for (var i = 0; i < list.length; i++) {
+        if (ext === String(list[i]).toLowerCase()) return true;
+    }
+    return false;
+};
+
+ResourceEditor.prototype._isPathAllowed = function (path) {
+    var profile = this._activeProfile();
+    var roots = (profile && profile.roots) ? profile.roots : null;
+    if (!roots || !roots.length) return true;
+    for (var i = 0; i < roots.length; i++) {
+        if (pathWithinRoot(path, roots[i])) return true;
+    }
+    return false;
+};
+
+ResourceEditor.prototype._isProfilePathAllowed = function (path, profile) {
+    var active = profile || this._activeProfile();
+    if (!active || active.key !== RESOURCE_EDITOR_PROFILES.gateway_icon) return true;
+    var lockedBase = trimText(active.lockedBaseName || '');
+    if (!lockedBase.length) return true;
+
+    var normalized = normalizePath(path);
+    var slash = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+    var filename = (slash >= 0) ? normalized.substr(slash + 1) : normalized;
+    var dot = filename.lastIndexOf('.');
+    var base = (dot >= 0) ? filename.substr(0, dot) : filename;
+    if (base.toLowerCase() === lockedBase.toLowerCase()) return true;
+
+    this._updateStatus('Gateway icon profile locked to "' + lockedBase + '".', 'error');
+    return false;
+};
+
+ResourceEditor.prototype._defaultPathInput = function () {
+    var profile = this._activeProfile();
+    if (!profile) return '';
+    if (profile.defaultName && profile.defaultName.length) return profile.defaultName;
+    return '';
+};
+
+ResourceEditor.prototype._profileRootsLabel = function () {
+    var profile = this._activeProfile();
+    if (!profile || !profile.roots || !profile.roots.length) return 'any path';
+    var names = [];
+    for (var i = 0; i < profile.roots.length; i++) {
+        names.push(profile.roots[i]);
+    }
+    return names.join(', ');
+};
+
+ResourceEditor.prototype._getAvatarLib = function () {
+    if (this._avatarLib && typeof this._avatarLib.read === 'function' && typeof this._avatarLib.update_localuser === 'function') {
+        return this._avatarLib;
+    }
+    try {
+        if (typeof bbs !== 'undefined') {
+            if (!bbs.mods) bbs.mods = {};
+            if (bbs.mods.avatar_lib && typeof bbs.mods.avatar_lib.read === 'function') {
+                this._avatarLib = bbs.mods.avatar_lib;
+                return this._avatarLib;
+            }
+        }
+    } catch (_eShared) { }
+    var candidates = ['avatar_lib.js', '../exec/load/avatar_lib.js', '../../exec/load/avatar_lib.js'];
+    for (var i = 0; i < candidates.length; i++) {
+        var lib = null;
+        try {
+            if (typeof lazyLoadModule === 'function') {
+                lib = lazyLoadModule(candidates[i], { cacheKey: 'avatar_lib.resource_editor:' + i });
+            } else {
+                lib = load({}, candidates[i]);
+            }
+        } catch (_eLoad) {
+            lib = null;
+        }
+        if (lib && typeof lib.read === 'function' && typeof lib.update_localuser === 'function') {
+            this._avatarLib = lib;
+            try {
+                if (typeof bbs !== 'undefined') {
+                    if (!bbs.mods) bbs.mods = {};
+                    if (!bbs.mods.avatar_lib) bbs.mods.avatar_lib = lib;
+                }
+            } catch (_eCache) { }
+            return lib;
+        }
+    }
+    return null;
+};
+
+ResourceEditor.prototype._applyBinaryToCanvas = function (raw, cols, rows) {
+    cols = parseInt(cols, 10);
+    rows = parseInt(rows, 10);
+    if (isNaN(cols) || isNaN(rows) || cols < 1 || rows < 1) return false;
+    if (typeof raw !== 'string') raw = '';
+    this.docCols = cols;
+    this.docRows = rows;
+    this._initCanvas();
+    var idx = 0;
+    for (var y = 0; y < this.docRows; y++) {
+        for (var x = 0; x < this.docCols; x++) {
+            var ch = ' ';
+            var attr = this.brushAttr;
+            if ((idx + 1) < raw.length) {
+                ch = raw.charAt(idx++);
+                var attrCode = raw.charCodeAt(idx++);
+                if (typeof attrCode === 'number' && !isNaN(attrCode)) attr = attrCode & 0xFF;
+            }
+            this.canvas[y][x].ch = ch;
+            this.canvas[y][x].attr = attr;
+        }
+    }
+    this.cursor.x = 0;
+    this.cursor.y = 0;
+    this.viewOffset.x = 0;
+    this.viewOffset.y = 0;
+    this.focus = 'canvas';
+    this._dirty = false;
+    this._drawAll();
+    return true;
+};
+
+ResourceEditor.prototype._loadOwnAvatar = function () {
+    if (typeof user === 'undefined' || !user || !user.number) {
+        this._updateStatus('Avatar load unavailable for this session.', 'error');
+        return false;
+    }
+    var lib = this._getAvatarLib();
+    if (!lib) {
+        this._updateStatus('avatar_lib.js unavailable; cannot load avatar.', 'error');
+        return false;
+    }
+    var avatar = null;
+    try {
+        avatar = lib.read(user.number, user.alias, null, user.number);
+    } catch (_eRead) {
+        avatar = null;
+    }
+    if (!avatar || avatar.disabled || !avatar.data) {
+        this._applyBinaryToCanvas('', AVATAR_COLS, AVATAR_ROWS);
+        this.resourcePath = null;
+        this._updateStatus('No saved avatar found. Editing blank ' + AVATAR_COLS + 'x' + AVATAR_ROWS + '.', 'warn');
+        return false;
+    }
+    var raw = '';
+    try { raw = base64_decode(avatar.data); } catch (_eDecode) { raw = ''; }
+    this._applyBinaryToCanvas(raw, AVATAR_COLS, AVATAR_ROWS);
+    this.resourcePath = null;
+    this._updateStatus('Loaded your avatar. Press Ctrl+S to save changes.');
+    return true;
+};
+
+ResourceEditor.prototype._saveAvatar = function () {
+    if (typeof user === 'undefined' || !user || !user.number) {
+        this._updateStatus('Avatar save unavailable for this session.', 'error');
+        return false;
+    }
+    if (this.docCols !== AVATAR_COLS || this.docRows !== AVATAR_ROWS) {
+        this._updateStatus('Avatar must be ' + AVATAR_COLS + 'x' + AVATAR_ROWS + '. Use Ctrl+R and choose avatar.', 'error');
+        return false;
+    }
+    var lib = this._getAvatarLib();
+    if (!lib) {
+        this._updateStatus('avatar_lib.js unavailable; cannot save avatar.', 'error');
+        return false;
+    }
+    var raw = '';
+    for (var y = 0; y < AVATAR_ROWS; y++) {
+        for (var x = 0; x < AVATAR_COLS; x++) {
+            var cell = (this.canvas[y] && this.canvas[y][x]) ? this.canvas[y][x] : null;
+            var ch = cell && cell.ch ? cell.ch : ' ';
+            var attr = (cell && typeof cell.attr === 'number') ? (cell.attr & 0xFF) : (this.brushAttr & 0xFF);
+            raw += cp437Char(cp437Code(ch));
+            raw += cp437Char(attr);
+        }
+    }
+    var data = '';
+    try { data = base64_encode(raw); } catch (_eEncode) { data = ''; }
+    if (!data) {
+        this._updateStatus('Unable to encode avatar data.', 'error');
+        return false;
+    }
+    var ok = false;
+    try { ok = lib.update_localuser(user.number, data) === true; } catch (_eWrite) { ok = false; }
+    if (!ok) {
+        this._updateStatus('Avatar save failed.', 'error');
+        return false;
+    }
+    this._dirty = false;
+    this.resourcePath = null;
+    this._drawHeader();
+    this._updateStatus('Avatar saved.');
+    return true;
+};
+
+ResourceEditor.prototype._buildBitmapMessage = function () {
+    var width = this.docCols;
+    var height = this.docRows;
+    if (width < 1 || height < 1) {
+        this._updateStatus('Canvas is empty.', 'error');
+        return null;
+    }
+    if (height > 255) {
+        this._updateStatus('Chat bitmap max height is 255 rows.', 'error');
+        return null;
+    }
+    var total = width * height;
+    if (total > 20000) {
+        this._updateStatus('Canvas too large for chat publish (max 20,000 cells).', 'error');
+        return null;
+    }
+
+    var packed = new Uint8Array(1 + (total * 3));
+    packed[0] = height & 0xFF;
+    var fgBase = 1;
+    var bgBase = fgBase + total;
+    var chBase = bgBase + total;
+    var idx = 0;
+    for (var y = 0; y < height; y++) {
+        for (var x = 0; x < width; x++) {
+            var cell = (this.canvas[y] && this.canvas[y][x]) ? this.canvas[y][x] : null;
+            var attr = (cell && typeof cell.attr === 'number') ? (cell.attr & 0xFF) : (this.brushAttr & 0xFF);
+            var ch = cell && cell.ch ? cell.ch : ' ';
+            packed[fgBase + idx] = cgaToXterm(attr & 0x0F) & 0xFF;
+            packed[bgBase + idx] = cgaToXterm((attr >> 4) & 0x0F) & 0xFF;
+            packed[chBase + idx] = cp437Code(ch) & 0xFF;
+            idx++;
+        }
+    }
+
+    var compressed = zlibStoreCompress(packed);
+    var hex = bytesToHex(compressed);
+    var fromName = 'Anonymous';
+    try {
+        if (typeof user !== 'undefined' && user && user.alias) fromName = String(user.alias);
+    } catch (_eAlias) { }
+    fromName = fromName.replace(/[|\[\]]+/g, '').substr(0, 64);
+    if (!fromName.length) fromName = 'Anonymous';
+    return '[BITMAP|' + width + '|' + height + '|' + fromName + '|' + hex + ']';
+};
+
+ResourceEditor.prototype._publishToChat = function () {
+    if (!this.shell || !this.shell.jsonchat || !this.shell.jsonchat.client) {
+        this._updateStatus('Chat backend unavailable.', 'error');
+        return false;
+    }
+    var client = this.shell.jsonchat.client;
+    if (typeof client.write !== 'function' || typeof client.push !== 'function') {
+        this._updateStatus('Chat publish is not supported by this client.', 'error');
+        return false;
+    }
+    var payload = this._buildBitmapMessage();
+    if (!payload) return false;
+
+    var channel = 'main';
+    var chat = this.shell.chat || null;
+    if (chat && typeof chat.currentChannel === 'string' && chat.currentChannel.length && chat.currentChannel.charAt(0) !== '@') {
+        channel = chat.currentChannel;
+    }
+    if (this.shell.jsonchat.channels && !this.shell.jsonchat.channels[String(channel).toUpperCase()]) {
+        channel = 'main';
+    }
+
+    var ownAvatar = null;
+    if (chat && typeof chat._getOwnAvatarData === 'function') {
+        try { ownAvatar = chat._getOwnAvatarData(); } catch (_eAvatar) { ownAvatar = null; }
+    }
+    var nick = (typeof user !== 'undefined' && user && user.alias)
+        ? { name: user.alias, host: system.name, ip: user.ip_address, qwkid: system.qwk_id, avatar: ownAvatar }
+        : { name: 'You', host: (system && system.name) ? system.name : '', qwkid: (system && system.qwk_id) ? system.qwk_id : '', avatar: ownAvatar };
+    var message = {
+        nick: nick,
+        str: payload,
+        time: (new Date()).getTime()
+    };
+
+    try {
+        client.write('chat', 'channels.' + channel + '.messages', message, 2);
+        client.push('chat', 'channels.' + channel + '.history', message, 2);
+        var chan = (this.shell.jsonchat.channels && channel) ? this.shell.jsonchat.channels[String(channel).toUpperCase()] : null;
+        if (chan && chan.messages && typeof chan.messages.push === 'function') chan.messages.push(message);
+        this._updateStatus('Published bitmap to #' + channel + ' (' + this.docCols + 'x' + this.docRows + ').');
+        return true;
+    } catch (e) {
+        this._updateStatus('Chat publish failed: ' + e, 'error');
+        return false;
+    }
+};
+
+ResourceEditor.prototype._clampViewOffset = function () {
+    if (!this.viewOffset) this.viewOffset = { x: 0, y: 0 };
+    var maxX = Math.max(0, this.docCols - this.cols);
+    var maxY = Math.max(0, this.docRows - this.rows);
+    if (this.viewOffset.x < 0) this.viewOffset.x = 0;
+    if (this.viewOffset.y < 0) this.viewOffset.y = 0;
+    if (this.viewOffset.x > maxX) this.viewOffset.x = maxX;
+    if (this.viewOffset.y > maxY) this.viewOffset.y = maxY;
+};
+
+ResourceEditor.prototype._ensureCursorVisible = function () {
+    var oldX = this.viewOffset ? this.viewOffset.x : 0;
+    var oldY = this.viewOffset ? this.viewOffset.y : 0;
+    this._clampViewOffset();
+    if (this.cursor.x < this.viewOffset.x) this.viewOffset.x = this.cursor.x;
+    if (this.cursor.y < this.viewOffset.y) this.viewOffset.y = this.cursor.y;
+    if (this.cursor.x >= this.viewOffset.x + this.cols) this.viewOffset.x = this.cursor.x - this.cols + 1;
+    if (this.cursor.y >= this.viewOffset.y + this.rows) this.viewOffset.y = this.cursor.y - this.rows + 1;
+    this._clampViewOffset();
+    return oldX !== this.viewOffset.x || oldY !== this.viewOffset.y;
+};
+
+ResourceEditor.prototype._resizeDocument = function (cols, rows, messagePrefix) {
+    cols = parseInt(cols, 10);
+    rows = parseInt(rows, 10);
+    if (isNaN(cols) || isNaN(rows) || cols < 1 || rows < 1) {
+        this._updateStatus('Invalid canvas size.', 'error');
+        return false;
+    }
+    if (cols > 500 || rows > 500) {
+        this._updateStatus('Canvas size too large (max 500x500).', 'error');
+        return false;
+    }
+    var old = this.canvas || [];
+    var next = [];
+    for (var y = 0; y < rows; y++) {
+        var row = [];
+        for (var x = 0; x < cols; x++) {
+            var cell = (old[y] && old[y][x]) ? old[y][x] : null;
+            if (!cell) row.push({ ch: ' ', attr: this.brushAttr });
+            else row.push({ ch: cell.ch || ' ', attr: (typeof cell.attr === 'number') ? cell.attr : this.brushAttr });
+        }
+        next.push(row);
+    }
+    this.canvas = next;
+    this.docCols = cols;
+    this.docRows = rows;
+    if (this.cursor.x >= this.docCols) this.cursor.x = this.docCols - 1;
+    if (this.cursor.y >= this.docRows) this.cursor.y = this.docRows - 1;
+    if (this.cursor.x < 0) this.cursor.x = 0;
+    if (this.cursor.y < 0) this.cursor.y = 0;
+    this._ensureCursorVisible();
+    this._dirty = true;
+    this._drawAll();
+    var prefix = messagePrefix ? (messagePrefix + ' ') : '';
+    this._updateStatus(prefix + 'Canvas size set to ' + this.docCols + 'x' + this.docRows + '.');
+    return true;
+};
+
+ResourceEditor.prototype._parseCanvasSizeInput = function (raw) {
+    var text = trimText(raw).toLowerCase();
+    if (!text.length) return null;
+    if (text === 'avatar' || text === 'av') return { cols: AVATAR_COLS, rows: AVATAR_ROWS, label: 'Avatar preset' };
+    if (text === 'icon' || text === 'gateway' || text === 'gateway_icon') return { cols: 12, rows: 6, label: 'Icon preset' };
+    if (text === 'bbs' || text === 'screen' || text === 'bbs_screen') return { cols: 80, rows: 24, label: 'BBS preset' };
+    var match = text.match(/^(\d+)\s*[x,]\s*(\d+)$/i);
+    if (!match) return null;
+    return { cols: parseInt(match[1], 10), rows: parseInt(match[2], 10), label: '' };
+};
+
+ResourceEditor.prototype._promptCanvasSize = function () {
+    var self = this;
+    var def = this.docCols + 'x' + this.docRows;
+    this._sizePrompt = new Modal({
+        parentFrame: this.parentFrame,
+        title: 'Canvas Size',
+        type: 'prompt',
+        message: 'Enter WxH or preset: avatar, icon, bbs',
+        defaultValue: def,
+        okLabel: 'Apply',
+        cancelLabel: 'Cancel',
+        onSubmit: function (value) {
+            self._sizePrompt = null;
+            var parsed = self._parseCanvasSizeInput(value);
+            if (!parsed) {
+                self._updateStatus('Invalid size. Use WxH, avatar, icon, or bbs.', 'error');
+                return;
+            }
+            self._resizeDocument(parsed.cols, parsed.rows, parsed.label);
+        },
+        onCancel: function () {
+            self._sizePrompt = null;
+            self._updateStatus('Canvas size unchanged.', 'warn');
+        },
+        onClose: function () {
+            self._sizePrompt = null;
+            self._redrawAfterModalClose();
+        }
+    });
+};
+
+ResourceEditor.prototype._redrawAfterModalClose = function () {
+    if (!this.running) return;
+    this._ensureFrames();
+    this._drawAll();
 };
 
 ResourceEditor.prototype._buildGlyphRows = function () {
@@ -190,11 +857,13 @@ ResourceEditor.prototype._applyBrushAttributes = function () {
 ResourceEditor.prototype.enter = function (done) {
     Subprogram.prototype.enter.call(this, done);
     this.focus = 'canvas';
+    this._activeProfile();
     this._ensureFrames();
     this._clearHotspots();
     this._drawAll();
     if (this.resourcePath) this._loadResource(this.resourcePath);
-    else this._updateStatus('New canvas. Click to paint, select colors/characters below. (Ctrl+T to use keyboard mode)');
+    else if (this.profile === RESOURCE_EDITOR_PROFILES.avatar) this._loadOwnAvatar();
+    else this._updateStatus('New canvas (' + this.profileConfig.label + '). Click to paint, Ctrl+R size, Ctrl+Y publish, Ctrl+T keyboard mode.');
 };
 
 ResourceEditor.prototype._ensureFrames = function () {
@@ -288,11 +957,14 @@ ResourceEditor.prototype._ensureFrames = function () {
         this.statusFrame.move(1, host.height);
     }
 
-    if (this.canvas.length !== this.rows || (this.canvas[0] && this.canvas[0].length !== this.cols)) {
+    if (this.canvas.length !== this.docRows || (this.canvas[0] && this.canvas[0].length !== this.docCols)) {
         this._initCanvas();
-        this.cursor.x = 0;
-        this.cursor.y = 0;
     }
+    if (this.cursor.x >= this.docCols) this.cursor.x = Math.max(0, this.docCols - 1);
+    if (this.cursor.y >= this.docRows) this.cursor.y = Math.max(0, this.docRows - 1);
+    if (this.cursor.x < 0) this.cursor.x = 0;
+    if (this.cursor.y < 0) this.cursor.y = 0;
+    this._ensureCursorVisible();
 };
 
 ResourceEditor.prototype._drawAll = function () {
@@ -306,9 +978,10 @@ ResourceEditor.prototype._drawAll = function () {
 ResourceEditor.prototype._drawHeader = function () {
     if (!this.headerFrame) return;
     try {
+        var profile = this._activeProfile();
         this.headerFrame.clear(this.paletteAttr('HEADER'));
         this.headerFrame.gotoxy(1, 1);
-        var title = 'Resource Editor';
+        var title = 'Resource Editor [' + (profile && profile.label ? profile.label : 'Generic') + '] ' + this.docCols + 'x' + this.docRows;
         if (this.resourcePath) title += ' - ' + file_getname(this.resourcePath);
         this.headerFrame.putmsg(title.substr(0, this.headerFrame.width));
         this.headerFrame.cycle();
@@ -325,14 +998,18 @@ ResourceEditor.prototype._drawCanvas = function () {
     this._clearHotspots();
     for (var y = 0; y < this.rows; y++) {
         for (var x = 0; x < this.cols; x++) {
+            var docX = x + this.viewOffset.x;
+            var docY = y + this.viewOffset.y;
             this.canvasFrame.gotoxy(x + 1, y + 1);
-            var cell = this.canvas[y][x];
+            var cell = (docY >= 0 && docY < this.docRows && docX >= 0 && docX < this.docCols && this.canvas[docY] && this.canvas[docY][docX])
+                ? this.canvas[docY][docX]
+                : { ch: ' ', attr: this.brushAttr };
             var attr = (typeof cell.attr === 'number') ? cell.attr : this.brushAttr;
-            var drawAttr = (this.cursor.x === x && this.cursor.y === y) ? this._highlightAttr(attr) : attr;
+            var drawAttr = (this.cursor.x === docX && this.cursor.y === docY) ? this._highlightAttr(attr) : attr;
             this.canvasFrame.attr = drawAttr;
             this.canvasFrame.putmsg(cell.ch || ' ');
-            if (this.inputMode === 'mouse') {
-                this._registerHotspot(this.canvasFrame.x + x, this.canvasFrame.x + x, this.canvasFrame.y + y, this.canvasFrame.y + y, this._makeCellHandler(x, y));
+            if (this.inputMode === 'mouse' && docX < this.docCols && docY < this.docRows) {
+                this._registerHotspot(this.canvasFrame.x + x, this.canvasFrame.x + x, this.canvasFrame.y + y, this.canvasFrame.y + y, this._makeCellHandler(docX, docY));
             }
         }
     }
@@ -341,9 +1018,13 @@ ResourceEditor.prototype._drawCanvas = function () {
 
 ResourceEditor.prototype._drawCanvasCell = function (x, y) {
     if (!this.canvasFrame) return;
-    if (x < 0 || y < 0 || y >= this.canvas.length || x >= this.canvas[y].length) return;
-    this.canvasFrame.gotoxy(x + 1, y + 1);
-    var cell = this.canvas[y][x];
+    if (x < 0 || y < 0 || y >= this.docRows || x >= this.docCols) return;
+    var vx = x - this.viewOffset.x;
+    var vy = y - this.viewOffset.y;
+    if (vx < 0 || vy < 0 || vx >= this.cols || vy >= this.rows) return;
+    this.canvasFrame.gotoxy(vx + 1, vy + 1);
+    var row = this.canvas[y] || [];
+    var cell = row[x] || { ch: ' ', attr: this.brushAttr };
     var attr = (typeof cell.attr === 'number') ? cell.attr : this.brushAttr;
     var drawAttr = (this.cursor.x === x && this.cursor.y === y) ? this._highlightAttr(attr) : attr;
     this.canvasFrame.attr = drawAttr;
@@ -496,7 +1177,14 @@ ResourceEditor.prototype._updateStatus = function (text, type) {
     var glyphLabel = this.currentGlyph === ' ' ? 'space' : this.currentGlyph;
     var fgEntry = this.palette[this._foregroundIndex] || { label: '??' };
     var bgEntry = this.palette[this._backgroundIndex] || { label: '??' };
-    var base = 'Char: ' + glyphLabel + '  FG: ' + (fgEntry.label || '??') + '  BG: ' + (bgEntry.label || '??') + '  Mode: ' + this.inputMode.toUpperCase() + '  [Ctrl+S save | Ctrl+O open | Ctrl+N clear | Ctrl+T toggle]';
+    var viewPos = (this.viewOffset.x + 1) + ',' + (this.viewOffset.y + 1);
+    var base = 'Char: ' + glyphLabel +
+        '  FG: ' + (fgEntry.label || '??') +
+        '  BG: ' + (bgEntry.label || '??') +
+        '  Size: ' + this.docCols + 'x' + this.docRows +
+        '  View: ' + viewPos +
+        '  Mode: ' + this.inputMode.toUpperCase() +
+        '  [Ctrl+S save | Ctrl+O open | Ctrl+N clear | Ctrl+R size | Ctrl+Y publish | Ctrl+T toggle]';
     var message = text ? (text + '  ') : '';
     var line = (message + base).substr(0, this.statusFrame.width);
     try {
@@ -554,7 +1242,9 @@ ResourceEditor.prototype._makeGlyphHandler = function (row, col) {
 };
 
 ResourceEditor.prototype._paintAt = function (x, y, ch, attr) {
-    if (x < 0 || y < 0 || y >= this.canvas.length || x >= this.canvas[y].length) return;
+    if (x < 0 || y < 0 || y >= this.docRows || x >= this.docCols) return;
+    if (!this.canvas[y]) this.canvas[y] = [];
+    if (!this.canvas[y][x]) this.canvas[y][x] = { ch: ' ', attr: this.brushAttr };
     var cell = this.canvas[y][x];
     cell.ch = ch || ' ';
     cell.attr = (typeof attr === 'number') ? attr : this.brushAttr;
@@ -568,16 +1258,19 @@ ResourceEditor.prototype._moveCursor = function (dx, dy) {
     var ny = this.cursor.y + dy;
     if (nx < 0) nx = 0;
     if (ny < 0) ny = 0;
-    if (ny >= this.canvas.length) ny = this.canvas.length - 1;
-    if (nx >= this.canvas[ny].length) nx = this.canvas[ny].length - 1;
+    if (ny >= this.docRows) ny = this.docRows - 1;
+    if (nx >= this.docCols) nx = this.docCols - 1;
     var oldX = this.cursor.x;
     var oldY = this.cursor.y;
     if (nx === oldX && ny === oldY) return;
     this.cursor.x = nx;
     this.cursor.y = ny;
     this.focus = 'canvas';
-    this._drawCanvasCell(oldX, oldY);
-    this._drawCanvasCell(nx, ny);
+    if (this._ensureCursorVisible()) this._drawCanvas();
+    else {
+        this._drawCanvasCell(oldX, oldY);
+        this._drawCanvasCell(nx, ny);
+    }
     this._updateStatus();
 };
 
@@ -698,19 +1391,27 @@ ResourceEditor.prototype._handleKey = function (key) {
         case KEY_DOWN: this._moveCursor(0, 1); return;
         case KEY_LEFT: this._moveCursor(-1, 0); return;
         case KEY_RIGHT: this._moveCursor(1, 0); return;
-        case KEY_HOME: this.cursor.x = 0; this.focus = 'canvas'; this._drawCanvas(); this._updateStatus(); return;
-        case KEY_END: this.cursor.x = this.cols - 1; this.focus = 'canvas'; this._drawCanvas(); this._updateStatus(); return;
-        case KEY_PGUP: this.cursor.y = 0; this.focus = 'canvas'; this._drawCanvas(); this._updateStatus(); return;
-        case KEY_PGDN: this.cursor.y = this.rows - 1; this.focus = 'canvas'; this._drawCanvas(); this._updateStatus(); return;
+        case KEY_HOME: this.cursor.x = 0; this.focus = 'canvas'; this._ensureCursorVisible(); this._drawCanvas(); this._updateStatus(); return;
+        case KEY_END: this.cursor.x = Math.max(0, this.docCols - 1); this.focus = 'canvas'; this._ensureCursorVisible(); this._drawCanvas(); this._updateStatus(); return;
+        case KEY_PGUP: this.cursor.y = 0; this.focus = 'canvas'; this._ensureCursorVisible(); this._drawCanvas(); this._updateStatus(); return;
+        case KEY_PGDN: this.cursor.y = Math.max(0, this.docRows - 1); this.focus = 'canvas'; this._ensureCursorVisible(); this._drawCanvas(); this._updateStatus(); return;
         case '\x0E': // Ctrl+N
             this._initCanvas();
             this.cursor.x = 0;
             this.cursor.y = 0;
+            this.viewOffset.x = 0;
+            this.viewOffset.y = 0;
             this.focus = 'canvas';
             this._drawAll();
             this._updateStatus('Canvas cleared.');
             this._dirty = false;
             this.resourcePath = null;
+            return;
+        case '\x12': // Ctrl+R canvas size / preset
+            this._promptCanvasSize();
+            return;
+        case '\x19': // Ctrl+Y publish bitmap to chat
+            this._publishToChat();
             return;
         case '\x13': // Ctrl+S
             this._saveResource();
@@ -744,6 +1445,11 @@ ResourceEditor.prototype._handleKey = function (key) {
 
 ResourceEditor.prototype._saveResource = function () {
     var self = this;
+    var profile = this._activeProfile();
+    if (profile && profile.key === RESOURCE_EDITOR_PROFILES.avatar) {
+        this._saveAvatar();
+        return;
+    }
     if (this.resourcePath) {
         this._writeResource(this.resourcePath);
         return;
@@ -752,33 +1458,46 @@ ResourceEditor.prototype._saveResource = function () {
         parentFrame: this.parentFrame,
         title: 'Save Resource',
         type: 'prompt',
-        message: 'Save as (.ans or .bin)',
-        defaultValue: '',
+        message: 'Save ' + (profile && profile.label ? profile.label : 'resource') + ' as (' + (profile.allowExt || ['.ans', '.bin']).join(', ') + ')',
+        defaultValue: self._defaultPathInput(),
         okLabel: 'Save',
         cancelLabel: 'Cancel',
         onSubmit: function (value) {
             self._savePrompt = null;
             if (!value) { self._updateStatus('Save cancelled.', 'warn'); return; }
-            var path = self._resolvePath(value);
+            var path = self._resolvePath(value, 'save');
+            if (!path) return;
             self._writeResource(path);
         },
         onCancel: function () {
             self._savePrompt = null;
             self._updateStatus('Save cancelled.', 'warn');
         },
-        onClose: function () { self._savePrompt = null; }
+        onClose: function () {
+            self._savePrompt = null;
+            self._redrawAfterModalClose();
+        }
     });
 };
 
-ResourceEditor.prototype._writeResource = function (path) {
+ResourceEditor.prototype._writeResource = function (path, opts) {
+    opts = opts || {};
     if (!path) return;
-    var file = new File(path);
-    if (file_exists(path)) {
-        this._updateStatus('File exists: ' + file_getname(path), 'error');
+    path = this._resolvePath(path, 'save');
+    if (!path) return;
+    if (file_exists(path) && !opts.overwrite) {
+        var self = this;
+        this._confirmOverwrite(path, function () {
+            self._writeResource(path, { overwrite: true });
+        });
         return;
     }
     var ext = file_getext(path).toLowerCase();
     var success = false;
+    if (!this._isAllowedExt(ext)) {
+        this._updateStatus('Unsupported file extension "' + ext + '" for this profile.', 'error');
+        return;
+    }
     if (ext === '.bin') success = this._writeBin(path);
     else success = this._writeAnsi(path);
     if (success) {
@@ -787,6 +1506,34 @@ ResourceEditor.prototype._writeResource = function (path) {
         this._drawHeader();
         this._updateStatus('Saved ' + file_getname(path));
     }
+};
+
+ResourceEditor.prototype._confirmOverwrite = function (path, onOverwrite) {
+    if (!path) return;
+    if (this._overwritePrompt && this._overwritePrompt.close) {
+        try { this._overwritePrompt.close(); } catch (_eClosePrompt) { }
+    }
+    var self = this;
+    this._overwritePrompt = new Modal({
+        parentFrame: this.parentFrame,
+        title: 'Overwrite Resource',
+        type: 'confirm',
+        message: 'Overwrite existing file "' + file_getname(path) + '"?',
+        okLabel: 'Overwrite',
+        cancelLabel: 'Cancel',
+        onSubmit: function () {
+            self._overwritePrompt = null;
+            if (typeof onOverwrite === 'function') onOverwrite();
+        },
+        onCancel: function () {
+            self._overwritePrompt = null;
+            self._updateStatus('Save cancelled.', 'warn');
+        },
+        onClose: function () {
+            self._overwritePrompt = null;
+            self._redrawAfterModalClose();
+        }
+    });
 };
 
 ResourceEditor.prototype._writeBin = function (path) {
@@ -846,35 +1593,50 @@ ResourceEditor.prototype._ansiForAttr = function (attr) {
 
 ResourceEditor.prototype._loadResourcePrompt = function () {
     var self = this;
+    var profile = this._activeProfile();
+    if (profile && profile.key === RESOURCE_EDITOR_PROFILES.avatar) {
+        this._loadOwnAvatar();
+        return;
+    }
     this._loadPrompt = new Modal({
         parentFrame: this.parentFrame,
         title: 'Open Resource',
         type: 'prompt',
-        message: 'Open file (.ans or .bin)',
-        defaultValue: this.resourcePath || '',
+        message: 'Open ' + (profile && profile.label ? profile.label : 'resource') + ' (' + (profile.allowExt || ['.ans', '.bin']).join(', ') + ')',
+        defaultValue: this.resourcePath || self._defaultPathInput(),
         okLabel: 'Open',
         cancelLabel: 'Cancel',
         onSubmit: function (value) {
             self._loadPrompt = null;
             if (!value) { self._updateStatus('Open cancelled.', 'warn'); return; }
-            var path = self._resolvePath(value);
+            var path = self._resolvePath(value, 'open');
+            if (!path) return;
             self._loadResource(path);
         },
         onCancel: function () {
             self._loadPrompt = null;
             self._updateStatus('Open cancelled.', 'warn');
         },
-        onClose: function () { self._loadPrompt = null; }
+        onClose: function () {
+            self._loadPrompt = null;
+            self._redrawAfterModalClose();
+        }
     });
 };
 
 ResourceEditor.prototype._loadResource = function (path) {
+    if (!path) return;
+    path = this._resolvePath(path, 'open');
     if (!path) return;
     if (!file_exists(path)) {
         this._updateStatus('File not found: ' + path, 'error');
         return;
     }
     var ext = file_getext(path).toLowerCase();
+    if (!this._isAllowedExt(ext)) {
+        this._updateStatus('Unsupported file extension "' + ext + '" for this profile.', 'error');
+        return;
+    }
     var success = false;
     if (ext === '.bin') success = this._loadBin(path);
     else success = this._loadAnsi(path);
@@ -883,6 +1645,8 @@ ResourceEditor.prototype._loadResource = function (path) {
         this._dirty = false;
         this.cursor.x = 0;
         this.cursor.y = 0;
+        this.viewOffset.x = 0;
+        this.viewOffset.y = 0;
         this.focus = 'canvas';
         this._drawAll();
         this._updateStatus('Loaded ' + file_getname(path));
@@ -899,8 +1663,8 @@ ResourceEditor.prototype._loadBin = function (path) {
     file.close();
     if (!raw) raw = '';
     var idx = 0;
-    for (var y = 0; y < this.rows; y++) {
-        for (var x = 0; x < this.cols; x++) {
+    for (var y = 0; y < this.docRows; y++) {
+        for (var x = 0; x < this.docCols; x++) {
             if (idx + 1 >= raw.length) {
                 this.canvas[y][x].ch = ' ';
                 this.canvas[y][x].attr = this.brushAttr;
@@ -921,21 +1685,21 @@ ResourceEditor.prototype._loadAnsi = function (path) {
         this._updateStatus('frame.js missing; cannot load ANSI', 'error');
         return false;
     }
-    var scratch = new Frame(1, 1, this.cols, this.rows, DEFAULT_ATTR, this.canvasFrame);
+    var scratch = new Frame(1, 1, this.docCols, this.docRows, DEFAULT_ATTR, this.canvasFrame);
     scratch.checkbounds = false;
     scratch.v_scroll = false;
     scratch.h_scroll = false;
     var ok = true;
-    try { ok = scratch.load(path, this.cols, this.rows); } catch (_e) { ok = false; }
+    try { ok = scratch.load(path, this.docCols, this.docRows); } catch (_e) { ok = false; }
     if (!ok) {
         try { scratch.delete(); } catch (_eDel) { }
         this._updateStatus('Unable to load ANSI.', 'error');
         return false;
     }
-    var height = Math.min(this.rows, scratch.data_height || this.rows);
-    var width = Math.min(this.cols, scratch.data_width || this.cols);
-    for (var y = 0; y < this.rows; y++) {
-        for (var x = 0; x < this.cols; x++) {
+    var height = Math.min(this.docRows, scratch.data_height || this.docRows);
+    var width = Math.min(this.docCols, scratch.data_width || this.docCols);
+    for (var y = 0; y < this.docRows; y++) {
+        for (var x = 0; x < this.docCols; x++) {
             if (y < height && x < width) {
                 var cell = scratch.getData(x, y) || {};
                 this.canvas[y][x].ch = (typeof cell.ch === 'string' && cell.ch.length) ? cell.ch : ' ';
@@ -950,14 +1714,40 @@ ResourceEditor.prototype._loadAnsi = function (path) {
     return true;
 };
 
-ResourceEditor.prototype._resolvePath = function (input) {
+ResourceEditor.prototype._resolvePath = function (input, mode) {
     if (!input) return null;
-    var trimmed = input.replace(/^\s+|\s+$/g, '');
+    var profile = this._activeProfile();
+    var trimmed = trimText(input);
     if (!trimmed.length) return null;
-    if (trimmed.indexOf(':') !== -1 || trimmed.charAt(0) === '/' || trimmed.charAt(0) === '\\') return trimmed;
-    var base = (system && system.data_dir) ? system.data_dir : '.';
-    if (base.slice(-1) !== '/' && base.slice(-1) !== '\\') base += '/';
-    return base + 'dirs/uploads/' + trimmed;
+    var candidate = '';
+    var isAbsolute = (trimmed.indexOf(':') !== -1 || trimmed.charAt(0) === '/' || trimmed.charAt(0) === '\\');
+    if (isAbsolute) {
+        candidate = normalizePath(trimmed);
+    } else {
+        var base = profile && profile.defaultRoot ? profile.defaultRoot : './';
+        candidate = normalizePath(ensureTrailingSlash(base) + trimmed);
+    }
+
+    var ext = String(file_getext(candidate) || '').toLowerCase();
+    if (!ext.length && mode === 'save') {
+        var defaultExt = (profile && profile.defaultExt) ? profile.defaultExt : '.ans';
+        candidate += defaultExt;
+        ext = defaultExt;
+    }
+    if (!ext.length) {
+        this._updateStatus('File extension required for this profile.', 'error');
+        return null;
+    }
+    if (!this._isAllowedExt(ext)) {
+        this._updateStatus('Extension "' + ext + '" is not allowed for ' + (profile && profile.label ? profile.label : 'this profile') + '.', 'error');
+        return null;
+    }
+    if (!this._isPathAllowed(candidate)) {
+        this._updateStatus('Path not allowed for this profile. Allowed roots: ' + this._profileRootsLabel(), 'error');
+        return null;
+    }
+    if (!this._isProfilePathAllowed(candidate, profile)) return null;
+    return candidate;
 };
 
 ResourceEditor.prototype._clearHotspots = function () {
@@ -1010,6 +1800,14 @@ ResourceEditor.prototype._cleanup = function () {
     if (this._loadPrompt && this._loadPrompt.close) {
         try { this._loadPrompt.close(); } catch (_eLP) { }
         this._loadPrompt = null;
+    }
+    if (this._overwritePrompt && this._overwritePrompt.close) {
+        try { this._overwritePrompt.close(); } catch (_eOW) { }
+        this._overwritePrompt = null;
+    }
+    if (this._sizePrompt && this._sizePrompt.close) {
+        try { this._sizePrompt.close(); } catch (_eSZ) { }
+        this._sizePrompt = null;
     }
     this.headerFrame = null;
     this.canvasFrame = null;

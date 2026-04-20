@@ -146,6 +146,66 @@ TelnetGateway.prototype._dbRoot = function () {
     return db.masterData.data;
 };
 
+TelnetGateway.prototype._trimText = function (value) {
+    if (value === null || typeof value === 'undefined') return '';
+    return String(value).replace(/^\s+|\s+$/g, '');
+};
+
+TelnetGateway.prototype._normalizeAlias = function (value) {
+    return this._trimText(value).toLowerCase();
+};
+
+TelnetGateway.prototype._currentAlias = function () {
+    if (typeof user === 'undefined' || !user || !user.alias) return '';
+    return this._trimText(user.alias);
+};
+
+TelnetGateway.prototype._isSysop = function () {
+    return (typeof user !== 'undefined' && user && (user.is_sysop || user.is_sysop === true));
+};
+
+TelnetGateway.prototype._defaultGatewayOwner = function (gateway) {
+    var idNorm = this._normalizeAlias(gateway && gateway.id ? gateway.id : '');
+    var nameNorm = this._normalizeAlias(gateway && gateway.name ? gateway.name : '');
+    if (idNorm === 'veleno' || nameNorm.indexOf('veleno') !== -1) return 'krueger';
+    return 'Hm Derdoc';
+};
+
+TelnetGateway.prototype._ensureGatewayOwners = function (list) {
+    if (!Array.isArray(list)) return false;
+    var changed = false;
+    for (var i = 0; i < list.length; i++) {
+        var gateway = list[i];
+        if (!gateway || typeof gateway !== 'object') continue;
+        var owner = this._trimText(gateway.owner);
+        if (owner.length) {
+            if (gateway.owner !== owner) {
+                gateway.owner = owner;
+                changed = true;
+            }
+            continue;
+        }
+        gateway.owner = this._defaultGatewayOwner(gateway);
+        changed = true;
+    }
+    return changed;
+};
+
+TelnetGateway.prototype._canEditGatewayIcon = function (gateway) {
+    if (!gateway) return false;
+    if (this._isSysop()) return true;
+    var ownerNorm = this._normalizeAlias(gateway.owner);
+    var userNorm = this._normalizeAlias(this._currentAlias());
+    if (!ownerNorm.length || !userNorm.length) return false;
+    return ownerNorm === userNorm;
+};
+
+TelnetGateway.prototype._editDeniedMessage = function (gateway) {
+    var owner = this._trimText(gateway && gateway.owner);
+    if (!owner.length) return 'Only the gateway owner or a sysop can edit this icon.';
+    return 'Only ' + owner + ' or a sysop can edit this icon.';
+};
+
 TelnetGateway.prototype._showError = function (message) {
     var parent = this._modalParent();
     if (typeof Modal !== 'function' || !parent) {
@@ -178,6 +238,7 @@ TelnetGateway.prototype._loadGateways = function () {
         list = this._seedDefaults();
         this._saveGateways(list);
     }
+    if (this._ensureGatewayOwners(list)) this._saveGateways(list);
     this.gateways = list;
     this._applyFilter(true);
 };
@@ -231,7 +292,7 @@ TelnetGateway.prototype._renderHeader = function () {
     try { this.headerFrame.clear(this.paletteAttr('HEADER')); } catch (_) { }
     this.headerFrame.gotoxy(1, 1);
     var title = 'Telnet Gateways';
-    var hint = 'Enter=connect  A=add  F=filter  R=review  ESC=exit  Back=tile';
+    var hint = 'Enter=connect  E=edit icon  A=add  F=filter  R=review  ESC=exit  Back=tile';
     var spacer = this.headerFrame.width - (title.length + hint.length + 3);
     if (spacer < 1) spacer = 1;
     this.headerFrame.putmsg(this.colorize('TEXT_BOLD', title) + repeatChars(' ', spacer) + hint);
@@ -250,7 +311,7 @@ TelnetGateway.prototype._renderStatus = function (msg) {
             var logons = current.logons || 0;
             var port = current.port || 23;
             status = current.name + ' (' + current.id + ') ' + current.telnet_address + ':' + port + '  score: ' + score + '  logons: ' + logons;
-            if (current._fallbackIcon) status += '  (Add icon named ' + current.id + ')';
+            if (current._fallbackIcon) status += '  (Press E to create icon "' + current.id + '")';
         } else {
             status = 'No gateways configured. Press A to add one.';
         }
@@ -482,6 +543,7 @@ TelnetGateway.prototype.handleKey = function (k) {
     if (k === KEY_END) { this._moveSelection(this.displayGateways.length); return; }
     if (k === '\r' || k === '\n' || k === KEY_ENTER) { this._openSelected(); return; }
     var lower = (typeof k === 'string') ? k.toLowerCase() : k;
+    if (lower === 'e') { this._editSelectedIcon(); return; }
     if (lower === 'a') { this._addGatewayPrompt(); return; }
     if (lower === 'f') { this._toggleFilter(); return; }
     if (lower === 'r') { this._promptReview(this._selectedGateway(), true); return; }
@@ -533,6 +595,68 @@ TelnetGateway.prototype._openSelected = function () {
     if (!gateway) return;
     if (gateway._type === 'back') { this.exit(); return; }
     this._launchGateway(gateway);
+};
+
+TelnetGateway.prototype._resourceEditorCtor = function () {
+    if (typeof ResourceEditor === 'function') return ResourceEditor;
+    try { load('future_shell/lib/subprograms/resource_editor.js'); } catch (_) { }
+    if (typeof ResourceEditor === 'function') return ResourceEditor;
+    return null;
+};
+
+TelnetGateway.prototype._gatewayIconPaths = function (gateway) {
+    var rawId = (gateway && gateway.id) ? gateway.id : (gateway && gateway.name ? gateway.name : 'gateway');
+    var safeId = this._slug(rawId);
+    var modsBase = null;
+    try { if (system && system.mods_dir) modsBase = system.mods_dir; } catch (_) { }
+    if (!modsBase && typeof js !== 'undefined' && js && js.exec_dir) modsBase = js.exec_dir;
+    if (!modsBase) modsBase = '.';
+    if (modsBase.slice(-1) !== '/' && modsBase.slice(-1) !== '\\') modsBase += '/';
+    var iconDir = modsBase + 'future_shell/assets/gateways/';
+    return {
+        safeId: safeId,
+        binPath: iconDir + safeId + '.bin',
+        ansPath: iconDir + safeId + '.ans'
+    };
+};
+
+TelnetGateway.prototype._editSelectedIcon = function () {
+    var gateway = this._selectedGateway();
+    if (!gateway) {
+        this._renderStatus('Select a gateway to edit its icon.');
+        return;
+    }
+    if (!this._canEditGatewayIcon(gateway)) {
+        this._showError(this._editDeniedMessage(gateway));
+        return;
+    }
+    if (!this.shell || typeof this.shell.queueSubprogramLaunch !== 'function') {
+        this._showError('Shell launch unavailable for icon editor.');
+        return;
+    }
+    var Ctor = this._resourceEditorCtor();
+    if (!Ctor) {
+        this._showError('ResourceEditor unavailable.');
+        return;
+    }
+    var paths = this._gatewayIconPaths(gateway);
+    var opts = {
+        parentFrame: this.parentFrame,
+        shell: this.shell,
+        timer: this.shell.timer,
+        profile: 'gateway_icon',
+        profileMeta: { gatewayId: paths.safeId }
+    };
+    if (file_exists(paths.binPath)) opts.resourcePath = paths.binPath;
+    else if (file_exists(paths.ansPath)) opts.resourcePath = paths.ansPath;
+    var instance = null;
+    try {
+        instance = new Ctor(opts);
+    } catch (e) {
+        this._showError('Failed to start icon editor: ' + e);
+        return;
+    }
+    this.shell.queueSubprogramLaunch('resource-editor', instance);
 };
 
 TelnetGateway.prototype._launchGateway = function (gateway) {
@@ -732,7 +856,7 @@ TelnetGateway.prototype._startDeletePrompt = function (gateway) {
 };
 
 TelnetGateway.prototype._canDelete = function () {
-    return (typeof user !== 'undefined' && user && (user.is_sysop || user.is_sysop === true));
+    return this._isSysop();
 };
 
 TelnetGateway.prototype._addGatewayPrompt = function () {
@@ -765,6 +889,7 @@ TelnetGateway.prototype._addGatewayPrompt = function () {
                 description: data.description || '',
                 sysop: data.sysop || '',
                 location: data.location || '',
+                owner: self._currentAlias() || 'anonymous',
                 logons: 0,
                 bbs_score: 0,
                 bbs_reviews: []
