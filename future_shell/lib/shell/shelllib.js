@@ -99,8 +99,8 @@ var SHELL_COLOR_DEFAULTS = {
     STATUS_BAR: { BG: BG_BLACK, FG: WHITE },
     MOUSE_ON: { BG: BG_BLACK, FG: WHITE },
     MOUSE_OFF: { BG: BG_BLACK, FG: WHITE },
-    FRAME_STANDARD: { BG: BG_BLACK, FG: WHITE },
-    LABEL: { BG: BG_BLACK, FG: WHITE },
+    FRAME_STANDARD: { BG: BG_BLACK, FG: LIGHTGRAY },
+    LABEL: { BG: BG_BLACK, FG: LIGHTGRAY },
     SELECTED: { BG: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)), FG: (typeof WHITE !== 'undefined' ? WHITE : 7) }
 };
 (function () {

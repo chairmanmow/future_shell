@@ -16,7 +16,20 @@ var FutureAPIWhitelist = {
     //   - Short code: "metatronsmusings" (matches any group prefix)
     // =========================================================================
     MESSAGE_SUBS: [
-        "metatronsmusings"  // LOCAL group - METATRONSMUSINGS sub
+        "metatronsmusings",
+        "CHEESENETTRENDING",  // For trending topics such as bluesky discussions
+        "CHEESENETBBSBUZZ", // For discussions that stem from other discussions on the forums
+        "CHEESENETBREAKINGNEWS", // For news and current events discussions
+        "CHEESENETCULTURE", // For discussions about movies, music, art, and general culture
+        "CHEESENETDEBATE", // For more heated discussions and debates on various topics
+        "CHEESENETSPORTSTALK", // For discussions about sports, games, and esports
+        "CHEESENETPOLITICS", // For discussions about politics, policy, and government
+        "CHEESENETADVERTISEMENTS", // For BBS advertisements and promotions
+        "CHEESENETCREATIVE", // For sharing creative works like stories, poems, and art
+        "CHEESENETSCIENCE", // For discussions about science, technology, and innovation
+        "CHEESENETSYSOPS", // For discussions among BBS sysops and operators
+        "CHEESENETTEST", // For testing and development purposes
+        "CHEESENETDATA" // For sharing data files and resources related to cheeseNet operations
     ],
 
     // =========================================================================

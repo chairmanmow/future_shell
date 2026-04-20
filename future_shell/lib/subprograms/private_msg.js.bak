@@ -5,8 +5,6 @@
 function _repeat(ch, n) { var s = ""; for (var i = 0; i < n; i++) s += ch; return s; }
 
 load('future_shell/lib/subprograms/subprogram.js');
-load('future_shell/lib/subprograms/subprogram_hotspots.js');
-try { load('future_shell/lib/effects/eye_candy.js'); } catch (_) { /* dissolve optional */ }
 if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
@@ -36,11 +34,6 @@ function PrivateMsg(opts) {
     this.inboxText = '';
     this.outputFrame = null;
     this.inputFrame = null;
-    this._gridCols = 1;
-    this._gridRows = 1;
-    this._gridPageSize = 1;
-    this._hotspotMap = {};
-    this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'private-msg', layerName: 'private-msg', priority: 65 });
     this.registerColors({
         HEADER:  { BG: BG_BLACK, FG: LIGHTCYAN },
         NORMAL:  { BG: BG_BLACK, FG: LIGHTGRAY },
@@ -75,52 +68,6 @@ PrivateMsg.prototype._centerText = function (s, w) {
     out += s;
     for (var i = 0; i < right; i++) out += ' ';
     return out;
-};
-
-PrivateMsg.prototype._dissolveTile = function (idx) {
-    if (typeof dissolve !== 'function') return;
-    if (!this.outputFrame) return;
-    var cols = this._gridCols || 1;
-    var pageSize = this._gridPageSize || cols;
-    var page = Math.floor(idx / pageSize);
-    var startIdx = page * pageSize;
-    var localIdx = idx - startIdx;
-    var col = localIdx % cols;
-    var row = Math.floor(localIdx / cols);
-    var SW = PrivateMsg.SLOT_W;
-    var CH = PrivateMsg.CELL_H;
-    var headerRows = 2;
-    var tx = 1 + col * SW;
-    var ty = 1 + headerRows + row * CH;
-    var tw = SW;
-    var th = CH;
-    var tileFrame = null;
-    try {
-        tileFrame = new Frame(tx, ty, tw, th, BG_BLACK | LIGHTGRAY, this.outputFrame);
-        // Copy current tile content from outputFrame into tileFrame
-        for (var y = 0; y < th; y++) {
-            for (var x = 0; x < tw; x++) {
-                var srcX = tx - 1 + x;
-                var srcY = ty - 1 + y;
-                var d = this.outputFrame.getData(srcX, srcY);
-                var ch = (d && typeof d.ch !== 'undefined') ? d.ch : ' ';
-                var attr = (d && typeof d.attr === 'number') ? d.attr : (BG_BLACK | LIGHTGRAY);
-                tileFrame.setData(x, y, ch, attr);
-            }
-        }
-        tileFrame.open();
-        this.parentFrame.cycle();
-        try {
-            dissolve(tileFrame, (typeof BLACK !== 'undefined' ? BLACK : 0), 3);
-        } catch (_eDissolve) { }
-    } catch (_e) {
-    } finally {
-        if (tileFrame) {
-            try { tileFrame.close(); } catch (_) { }
-            try { tileFrame.delete(); } catch (_) { }
-        }
-        this._flushFrames(true);
-    }
 };
 
 PrivateMsg.prototype._getAvatarRows = function (u) {
@@ -171,7 +118,6 @@ PrivateMsg.prototype.enter = function (done) {
 };
 
 PrivateMsg.prototype.cleanup = function () {
-    if (this.hotspots) { try { this.hotspots.clear(); } catch (_) { } }
     try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
     try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
     this.outputFrame = this.inputFrame = null;
@@ -196,38 +142,11 @@ PrivateMsg.prototype._ensureFrames = function () {
     }
 };
 
-PrivateMsg.prototype._flushFrames = function (forceInvalidate) {
-    forceInvalidate = !!forceInvalidate;
-    if (this.outputFrame) {
-        try { this.outputFrame.top(); } catch (_) { }
-        try {
-            if (forceInvalidate && typeof this.outputFrame.invalidate === 'function') this.outputFrame.invalidate();
-            else if (typeof this.outputFrame.refresh === 'function') this.outputFrame.refresh();
-        } catch (_) { }
-    }
-    if (this.inputFrame) {
-        try { this.inputFrame.top(); } catch (_) { }
-        try {
-            if (forceInvalidate && typeof this.inputFrame.invalidate === 'function') this.inputFrame.invalidate();
-            else if (typeof this.inputFrame.refresh === 'function') this.inputFrame.refresh();
-        } catch (_) { }
-    }
-    try {
-        if (this.parentFrame && typeof this.parentFrame.cycle === 'function') this.parentFrame.cycle();
-        else if (this.outputFrame && typeof this.outputFrame.cycle === 'function') this.outputFrame.cycle();
-    } catch (_) { }
-};
-
 PrivateMsg.prototype.draw = function () {
     this._ensureFrames();
     if (!this.outputFrame) return;
     var o = this.outputFrame;
     o.clear(); o.gotoxy(1, 1);
-    // Clear hotspots when not in USERS view
-    if (this.view !== 'USERS') {
-        this._hotspotMap = {};
-        if (this.hotspots) this.hotspots.clear();
-    }
     switch (this.view) {
         case 'INBOX':        this._drawInbox(o);      break;
         case 'USERS':        this._drawUsers(o);      break;
@@ -235,7 +154,7 @@ PrivateMsg.prototype.draw = function () {
         case 'COMPOSE_DEST': this._drawDestPrompt(o); break;
     }
     this._drawInputBar();
-    this._flushFrames(false);
+    this.parentFrame.cycle();
 };
 
 PrivateMsg.prototype._drawInbox = function (o) {
@@ -293,21 +212,11 @@ PrivateMsg.prototype._drawUsers = function (o) {
     o.putmsg(hdr + ' Who\'s Online' + norm + dim + '  (' + this.userList.length + ' users)' + pgInfo + '\x01n\r\n');
     o.putmsg(dim + _repeat('\xc4', Math.min(W - 1, 76)) + '\x01n\r\n');
 
-    // Reset hotspots for this draw pass
-    this._hotspotMap = {};
-    if (this.hotspots) this.hotspots.clear();
-    var hotspotDefs = [];
-
     if (!this.userList.length) {
         o.putmsg(norm + ' Scanning for users...\r\n');
         o.putmsg(dim + ' (If none appear, no BBSes responded.)\x01n\r\n');
         return;
     }
-
-    // Frame offsets for absolute hotspot coordinates
-    var oX = this.outputFrame.x || 1;
-    var oY = this.outputFrame.y || 1;
-    var headerRows = 2; // header line + divider line
 
     for (var gr = 0; gr < gridRows; gr++) {
         var cells = [];
@@ -373,31 +282,7 @@ PrivateMsg.prototype._drawUsers = function (o) {
             line += margin + aColor + this._centerText(cells[gc].u.action || '', CW) + '\x01n' + margin;
         }
         o.putmsg(line + '\r\n');
-
-        // Build hotspot definitions for each tile in this grid row
-        for (var gc = 0; gc < cells.length; gc++) {
-            var tileIndex = cells[gc].idx - startIdx; // page-relative index for hotspot key
-            if (tileIndex < 36) {
-                var cmd = (tileIndex < 10) ? String(tileIndex) : String.fromCharCode('A'.charCodeAt(0) + (tileIndex - 10));
-                var hx = oX + gc * SW;                            // absolute X
-                var hy = oY + headerRows + gr * CH;               // absolute Y (top of tile)
-                hotspotDefs.push({
-                    key: cmd,
-                    x: hx,
-                    y: hy,
-                    width: Math.max(1, SW),
-                    height: Math.max(1, CH),
-                    swallow: false,
-                    owner: 'private-msg:tile',
-                    data: { index: cells[gc].idx }
-                });
-                this._hotspotMap[cmd] = cells[gc].idx;
-            }
-        }
     }
-
-    // Activate hotspots
-    if (this.hotspots && hotspotDefs.length) this.hotspots.set(hotspotDefs);
 };
 
 PrivateMsg.prototype._drawCompose = function (o) {
@@ -470,7 +355,7 @@ PrivateMsg.prototype._drawInputBar = function () {
             prompt = ' I)nbox  U)sers  T)elegram  Q)uit';
             break;
         case 'USERS':
-            prompt = ' \x18\x19\x1b\x1a)Navigate  ENTER)Message  T)ype dest  I)nbox  R)efresh  Q)uit';
+            prompt = ' \x18\x19)Select  ENTER)Message  T)ype dest  I)nbox  Q)uit';
             break;
         case 'COMPOSE':
             prompt = this.sendResult ? ' [Press any key]' : ' Composing to ' + this.toLabel + '  ESC)Cancel';
@@ -486,16 +371,15 @@ PrivateMsg.prototype._drawInputBar = function () {
 
 PrivateMsg.prototype.handleKey = function (k) {
     if (!k) return;
-    // Handle doorway-mode control codes and ANSI escape sequences
+    // Parse ANSI escape sequences and doorway-mode control codes into KEY_* constants
     if (typeof k === 'string') {
         if (k.length === 1) {
             switch (k.charCodeAt(0)) {
-                case 10: k = KEY_DOWN;  break; // LF  (doorway down)
-                case 6:  k = KEY_RIGHT; break; // ^F  (doorway right)
-                case 29: k = KEY_LEFT;  break; // GS  (doorway left)
-                case 30: case 31: k = KEY_UP;   break; // RS / US (doorway up)
-                case 1:  k = KEY_HOME; break;          // ^A (doorway Home)
-                case 5:  k = KEY_END;  break;          // ^E (doorway End)
+                case 10: k = KEY_DOWN; break;   // LF (Doorway down)
+                case 30: k = KEY_UP; break;     // RS (Doorway up)
+                case 31: k = KEY_UP; break;     // US (Doorway up alt)
+                case 1:  k = KEY_HOME; break;   // ^A (Doorway Home)
+                case 5:  k = KEY_END; break;    // ^E (Doorway End)
             }
         } else if (k.length >= 2 && k.charAt(0) === '\x1b') {
             var seq = k.substr(1);
@@ -509,19 +393,17 @@ PrivateMsg.prototype.handleKey = function (k) {
             else if (seq === '[F')  k = KEY_END;
             else if (seq === 'OA')  k = KEY_UP;
             else if (seq === 'OB')  k = KEY_DOWN;
-            else if (seq === 'OC')  k = KEY_RIGHT;
-            else if (seq === 'OD')  k = KEY_LEFT;
             else if (seq === 'OP')  k = KEY_HOME;
             else if (seq === 'OQ')  k = KEY_END;
         }
     }
     if (k === '\x1b') {
         if (this.view === 'COMPOSE' && !this.sendResult) {
-            this.view = 'USERS'; this.inputStr = ''; this.lines = []; this._requestUsers();
+            this.view = 'USERS'; this.inputStr = ''; this.lines = [];
             this.draw(); return;
         }
         if (this.view === 'COMPOSE_DEST') {
-            this.view = 'USERS'; this.inputStr = ''; this._requestUsers();
+            this.view = 'USERS'; this.inputStr = '';
             this.draw(); return;
         }
         this.exit(); return;
@@ -548,25 +430,9 @@ PrivateMsg.prototype._handleInboxKey = function (k) {
 };
 
 PrivateMsg.prototype._handleUsersKey = function (k) {
-    // Check hotspot map first (mouse clicks on tiles)
-    if (typeof k === 'string' && this._hotspotMap && this._hotspotMap[k] !== undefined) {
-        this.cursorIdx = this._hotspotMap[k];
-        if (this.userList.length > 0 && this.cursorIdx < this.userList.length) {
-            this.draw(); // redraw to show selection highlight
-            this._dissolveTile(this.cursorIdx);
-            var sel = this.userList[this.cursorIdx];
-            this.toDest = sel.name + '@' + sel.host;
-            this.toLabel = sel.name + ' @ ' + (sel.bbs || sel.host);
-            this.view = 'COMPOSE'; this.inputStr = ''; this.lines = []; this.sendResult = '';
-        }
-        this.draw();
-        return;
-    }
-
     var up = (typeof k === 'string' && k.length === 1) ? k.toUpperCase() : k;
     var cols = this._gridCols || 1;
-    var last = Math.max(0, this.userList.length - 1);
-
+    var last = this.userList.length - 1;
     switch (k) {
         case KEY_LEFT:
             if (this.cursorIdx > 0) this.cursorIdx--;
@@ -574,7 +440,7 @@ PrivateMsg.prototype._handleUsersKey = function (k) {
         case KEY_RIGHT:
             if (this.cursorIdx < last) this.cursorIdx++;
             this.draw(); return;
-        case KEY_UP:
+        case KEY_UP: case '\x1e':
             if (this.cursorIdx - cols >= 0) this.cursorIdx -= cols;
             this.draw(); return;
         case KEY_DOWN:
@@ -595,7 +461,6 @@ PrivateMsg.prototype._handleUsersKey = function (k) {
     switch (up) {
         case '\r':
             if (this.userList.length > 0) {
-                this._dissolveTile(this.cursorIdx);
                 var sel = this.userList[this.cursorIdx];
                 this.toDest = sel.name + '@' + sel.host;
                 this.toLabel = sel.name + ' @ ' + (sel.bbs || sel.host);
@@ -612,7 +477,7 @@ PrivateMsg.prototype._handleUsersKey = function (k) {
 
 PrivateMsg.prototype._handleComposeKey = function (k) {
     if (this.sendResult) {
-        this.sendResult = ''; this.view = 'USERS'; this._requestUsers(); this.draw(); return;
+        this.sendResult = ''; this.view = 'USERS'; this.draw(); return;
     }
     switch (k) {
         case '\r':
@@ -639,7 +504,7 @@ PrivateMsg.prototype._handleComposeKey = function (k) {
 
 PrivateMsg.prototype._handleDestKey = function (k) {
     switch (k) {
-        case KEY_UP:
+        case KEY_UP: case '\x1e':
             if (this._filteredDest && this._filteredDest.length && this._filteredIdx > 0) {
                 this._filteredIdx--;
                 this.draw();
@@ -670,7 +535,7 @@ PrivateMsg.prototype._handleDestKey = function (k) {
                 this.draw(); return;
             }
             var dest = this.inputStr.trim();
-            if (!dest) { this.view = 'USERS'; this.inputStr = ''; this._requestUsers(); this.draw(); return; }
+            if (!dest) { this.view = 'USERS'; this.inputStr = ''; this.draw(); return; }
             if (this.lib && this.lib.dest_host(dest)) {
                 this.toDest = dest; this.toLabel = dest;
                 this.view = 'COMPOSE'; this.inputStr = ''; this.lines = []; this.sendResult = '';

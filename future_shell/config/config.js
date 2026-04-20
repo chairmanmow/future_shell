@@ -594,7 +594,10 @@ function makeExecXtrnAction(code, metadata) {
 			}, {
 				programId: code,
 				label: metadata.label || metadata.programLabel || code,
-				icon: metadata.icon || metadata.iconFile || null
+				icon: metadata.icon || metadata.iconFile || null,
+				nodeStatusKind: metadata.nodeStatusKind || metadata.statusKind || null,
+				nodeStatusLabel: metadata.nodeStatusLabel || metadata.statusLabel || null,
+				nodeStatusText: metadata.nodeStatus || metadata.nodeStatusText || metadata.statusText || null
 			});
 		} catch (e) {
 			_icsh_err('Unhandled error launching external ' + code + ': ' + e);
@@ -657,6 +660,10 @@ function _buildItemRecursive(key, ini, ancestry) {
 	var label = sect.label || key.charAt(0).toUpperCase() + key.substring(1);
 	var icon = sect.icon || key;
 	var obj = { label: label, iconFile: icon };
+	if (sect.node_status !== undefined) obj.nodeStatus = String(sect.node_status);
+	if (sect.node_status_text !== undefined) obj.nodeStatus = String(sect.node_status_text);
+	if (sect.node_status_label !== undefined) obj.nodeStatusLabel = String(sect.node_status_label);
+	if (sect.node_status_kind !== undefined) obj.nodeStatusKind = String(sect.node_status_kind);
 	// Lightweight gating metadata copied directly (evaluation deferred to one central filter)
 	if (sect.min_level !== undefined) obj.min_level = parseInt(sect.min_level, 10);
 	if (sect.require_sysop !== undefined) obj.require_sysop = /^(1|true|yes)$/i.test(sect.require_sysop);
@@ -670,7 +677,13 @@ function _buildItemRecursive(key, ini, ancestry) {
 	}
 	if (type === 'command') {
 		var actSpec = sect.command;
-		var actionFn = makeCommandAction(actSpec, { label: label, icon: icon });
+		var actionFn = makeCommandAction(actSpec, {
+			label: label,
+			icon: icon,
+			nodeStatus: obj.nodeStatus,
+			nodeStatusKind: obj.nodeStatusKind,
+			nodeStatusLabel: obj.nodeStatusLabel
+		});
 		if (!actionFn) { _icsh_warn('Invalid command action for ' + key); return null; }
 		obj.type = 'item'; obj.action = actionFn; return obj;
 	}

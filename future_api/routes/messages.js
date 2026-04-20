@@ -797,15 +797,27 @@ function postMessage(options) {
 	if (!options.subject || !String(options.subject).trim()) {
 		return { success: false, error: "subject is required" };
 	}
-	if (!options.body || !String(options.body).trim()) {
-		return { success: false, error: "body is required" };
+	// Support base64-encoded body for binary content (ANSI art with CP437 bytes)
+	var body;
+	if (options.body_base64 && String(options.body_base64).length > 0) {
+		try {
+			body = base64_decode(String(options.body_base64));
+		} catch (e) {
+			return { success: false, error: "invalid body_base64: " + String(e) };
+		}
+		if (body === null || body === undefined || body.length < 1) {
+			return { success: false, error: "body_base64 decoded to empty content" };
+		}
+	} else if (options.body && String(options.body).trim()) {
+		body = String(options.body);
+	} else {
+		return { success: false, error: "body or body_base64 is required" };
 	}
 
 	var subCode = String(options.subCode);
 	var from = String(options.from).trim();
 	var to = options.to ? String(options.to).trim() : "All";
 	var subject = String(options.subject).trim();
-	var body = String(options.body);
 	var replyTo = options.replyTo ? coerceNum(options.replyTo) : null;
 
 	// Check whitelist
@@ -946,6 +958,7 @@ if (oper === "CREATE" || oper === "WRITE") {
 			to: data.to,
 			subject: data.subject,
 			body: data.body,
+			body_base64: data.body_base64,
 			replyTo: data.replyTo
 		});
 		ctx.sendResponse(client, "CREATE", location, result);
@@ -965,6 +978,7 @@ if (oper === "CREATE" || oper === "WRITE") {
 			to: data.to,
 			subject: data.subject,
 			body: data.body,
+			body_base64: data.body_base64,
 			replyTo: data.replyTo
 		});
 		ctx.sendResponse(client, "CREATE", location, result);

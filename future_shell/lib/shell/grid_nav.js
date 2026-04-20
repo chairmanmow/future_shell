@@ -99,6 +99,7 @@ IconShell.prototype._handleFolderSelection = function (realItem) {
 IconShell.prototype._handleItemSelection = function (realItem) {
     if (typeof realItem.action === "function") {
         try {
+            if (typeof this._captureNodeStatusIntent === 'function') this._captureNodeStatusIntent(realItem);
             // Play dissolve animation before launching
             this.playDissolveBefore(this.selection);
             // Ensure the action runs with IconShell as 'this' (was unbound, breaking runExternal etc.)
@@ -106,6 +107,8 @@ IconShell.prototype._handleItemSelection = function (realItem) {
         } catch (e) {
             dbug("IconShell action error: " + e, "view");
             if (e === "Exit Shell") throw e;
+        } finally {
+            if (typeof this._clearNodeStatusIntent === 'function') this._clearNodeStatusIntent();
         }
         // Skip drawFolder if a modal is now active (e.g., exit confirmation)
         // as drawFolder clears hotspots, breaking modal button clicks
@@ -161,6 +164,7 @@ IconShell.prototype.changeFolder = function (targetFolder, options) {
     if (currentNode && currentNode.children) {
         this.assignViewHotkeys(currentNode.children);
     }
+    if (typeof this._refreshNodeStatus === 'function') this._refreshNodeStatus();
     dbug('[changeFolder] now at label=' + (currentNode && currentNode.label) + ' view=' + this.currentView + ' depth=' + this.stack.length, 'nav');
     // Ensure folder change is immediately reflected visually (especially for non-dynamic folders)
     // Without this, the grid could remain from the previous folder until the next redraw trigger,

@@ -169,6 +169,7 @@ Users.prototype.getUsers = function () {
     for (var i = 1; i <= total; i++) {
         var u = new User(i);  // Create fresh User object for each user number
         if (u.settings & (USER_DELETED | USER_INACTIVE)) continue;
+        if (u.compare_ars('REST Q')) continue;
         var userRecord = {
             number: u.number,
             alias: u.alias,

@@ -5,6 +5,178 @@ load(system.mods_dir + 'future_shell/lib/util/launch_queue.js');
 var UsageTracker = this.UsageTracker || {};
 var LaunchQueue = this.LaunchQueue || {};
 
+IconShell.prototype._normalizeNodeStatusKind = function (kind, fallback) {
+    var value = String(kind || fallback || '').toLowerCase();
+    switch (value) {
+        case 'sub':
+        case 'subprogram':
+        case 'using':
+            return 'using';
+        case 'browse':
+        case 'browsing':
+        case 'folder':
+        case 'view':
+            return 'browsing';
+        case 'app':
+        case 'external':
+        case 'run':
+        case 'running':
+        case 'xtrn':
+            return 'running';
+    }
+    return fallback || 'using';
+};
+
+IconShell.prototype._normalizeNodeStatusLabel = function (label, fallback) {
+    var value = label == null ? '' : String(label);
+    value = value.replace(/\x01./g, '');
+    value = value.replace(/[\x00-\x1F\x7F]+/g, ' ');
+    value = value.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    if (!value.length && fallback != null) {
+        value = String(fallback);
+        value = value.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    }
+    return value;
+};
+
+IconShell.prototype._humanizeNodeStatusLabel = function (value) {
+    var text = this._normalizeNodeStatusLabel(value, '');
+    if (!text.length) return '';
+    return text.replace(/[_:]+/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+};
+
+IconShell.prototype._renderNodeStatusTemplate = function (template, vars) {
+    var source = template == null ? '' : String(template);
+    vars = vars || {};
+    return source.replace(/\$\{([A-Za-z0-9_]+)\}/g, function (_, key) {
+        return Object.prototype.hasOwnProperty.call(vars, key) && vars[key] != null ? String(vars[key]) : '';
+    });
+};
+
+IconShell.prototype._buildNodeStatusText = function (defaultKind, meta) {
+    meta = meta || {};
+    var kind = this._normalizeNodeStatusKind(meta.kind, defaultKind || 'using');
+    var rawLabel = meta.label;
+    if ((rawLabel == null || rawLabel === '') && meta.programId) rawLabel = meta.programId;
+    var label = this._normalizeNodeStatusLabel(rawLabel, this._humanizeNodeStatusLabel(rawLabel));
+    if (!label.length && meta.fallbackLabel) {
+        label = this._normalizeNodeStatusLabel(meta.fallbackLabel, this._humanizeNodeStatusLabel(meta.fallbackLabel));
+    }
+    var vars = {
+        action: kind,
+        folderName: label,
+        kind: kind,
+        label: label,
+        name: label,
+        programId: meta.programId ? String(meta.programId) : '',
+        subprogram: label,
+        subprogramName: label,
+        xtrn: label,
+        xtrnName: label
+    };
+    var text = '';
+    if (meta.text != null && String(meta.text).length) {
+        text = this._renderNodeStatusTemplate(meta.text, vars);
+    } else if (label.length) {
+        text = kind + ' ' + label;
+    } else {
+        text = kind;
+    }
+    return this._normalizeNodeStatusLabel(text, '');
+};
+
+IconShell.prototype._setNodeStatusText = function (text) {
+    if (typeof setNodeStatus !== 'function') return false;
+    try {
+        return setNodeStatus(text || '');
+    } catch (e) {
+        dbug('node status set failed: ' + e, 'launch');
+    }
+    return false;
+};
+
+IconShell.prototype._clearNodeStatus = function () {
+    return this._setNodeStatusText('');
+};
+
+IconShell.prototype._setNodeStatusForContext = function (defaultKind, meta) {
+    var text = this._buildNodeStatusText(defaultKind, meta);
+    if (!text.length) return false;
+    return this._setNodeStatusText(text);
+};
+
+IconShell.prototype._captureNodeStatusIntent = function (item) {
+    this._pendingNodeStatusItem = item || null;
+};
+
+IconShell.prototype._clearNodeStatusIntent = function () {
+    this._pendingNodeStatusItem = null;
+};
+
+IconShell.prototype._consumeNodeStatusIntent = function (defaultKind) {
+    var item = this._pendingNodeStatusItem;
+    this._pendingNodeStatusItem = null;
+    if (!item) return null;
+    return {
+        item: item,
+        kind: item.nodeStatusKind || defaultKind || null,
+        label: item.nodeStatusLabel || item.label || '',
+        text: item.nodeStatus || item.nodeStatusText || ''
+    };
+};
+
+IconShell.prototype._folderNodeStatusMeta = function (node) {
+    node = node || {};
+    return {
+        kind: node.nodeStatusKind || 'browsing',
+        label: node.nodeStatusLabel || node.label || 'Home',
+        text: node.nodeStatus || node.nodeStatusText || ''
+    };
+};
+
+IconShell.prototype._subprogramNodeStatusMeta = function (name, handlers, meta) {
+    handlers = handlers || {};
+    meta = meta || handlers._nodeStatusMeta || {};
+    return {
+        kind: meta.kind || 'using',
+        label: meta.label || meta.fallbackLabel || handlers.label || handlers.title || handlers.displayName || handlers.name || this._humanizeNodeStatusLabel(name) || 'subprogram',
+        text: meta.text || '',
+        programId: meta.programId || name || handlers.id || handlers.name || ''
+    };
+};
+
+IconShell.prototype._externalNodeStatusMeta = function (opts, intent) {
+    opts = opts || {};
+    intent = intent || {};
+    return {
+        kind: opts.nodeStatusKind || intent.kind || 'running',
+        label: opts.nodeStatusLabel || opts.label || intent.label || this._humanizeNodeStatusLabel(opts.programId) || 'external program',
+        text: opts.nodeStatusText || opts.nodeStatus || intent.text || '',
+        programId: opts.programId || intent.programId || ''
+    };
+};
+
+IconShell.prototype._screensaverNodeStatusMeta = function () {
+    return {
+        kind: 'idle',
+        text: (typeof this.nodeStatusIdleText === 'string' && this.nodeStatusIdleText.length)
+            ? this.nodeStatusIdleText
+            : 'idle'
+    };
+};
+
+IconShell.prototype._refreshNodeStatus = function () {
+    if (this._screenSaver && typeof this._screenSaver.isActive === 'function' && this._screenSaver.isActive()) {
+        return this._setNodeStatusForContext('idle', this._screensaverNodeStatusMeta());
+    }
+    if (this.activeSubprogram && this.activeSubprogram.running) {
+        return this._setNodeStatusForContext('using', this._subprogramNodeStatusMeta(this.activeSubprogram.name, this.activeSubprogram, this.activeSubprogram._nodeStatusMeta));
+    }
+    var node = this.stack && this.stack.length ? this.stack[this.stack.length - 1] : null;
+    if (node) return this._setNodeStatusForContext('browsing', this._folderNodeStatusMeta(node));
+    return this._clearNodeStatus();
+};
+
 IconShell.prototype.runExternal = function (fn, opts) {
     opts = opts || {};
     var trackUsage = (opts.trackUsage !== false);
@@ -12,6 +184,7 @@ IconShell.prototype.runExternal = function (fn, opts) {
     var broadcastLaunch = opts.broadcast !== false;
     var activeBefore = this.activeSubprogram || null;
     var shouldResumeSub = !!(activeBefore && activeBefore.running);
+    var nodeStatusMeta = this._externalNodeStatusMeta(opts, this._consumeNodeStatusIntent('running'));
 
     // Award points for running external program
     if (this._pointsSystem && typeof this._pointsSystem.award === 'function') {
@@ -51,6 +224,7 @@ IconShell.prototype.runExternal = function (fn, opts) {
         if (shouldResumeSub && typeof activeBefore.pauseForReason === 'function') {
             try { activeBefore.pauseForReason('external_launch'); } catch (_) { }
         }
+        this._setNodeStatusForContext('running', nodeStatusMeta);
         // Optional: dissolve animation before clearing and launching external
         // if (this.view && typeof dissolve === 'function') {
         //     dissolve(this.view, ICSH_VALS.ANIMATION.COLOR, 0); // 2ms delay for visible effect
@@ -117,6 +291,7 @@ IconShell.prototype.runExternal = function (fn, opts) {
         // Reset inactivity so the screensaver won't instantly resume.
         this._lastActivityTs = Date.now();
         this._stopScreenSaver();
+        this._refreshNodeStatus();
         if (trackUsage && UsageTracker && typeof UsageTracker.record === 'function') {
             try {
                 var elapsed = Math.max(0, Math.round((endTs - startTs) / 1000));
@@ -162,15 +337,15 @@ IconShell.prototype._notifyMrcExternalResume = function (info) {
 
 // Queue a subprogram launch so the triggering key (e.g. ENTER) is fully processed
 // before the subprogram begins receiving keystrokes.
-IconShell.prototype.queueSubprogramLaunch = function (name, instance) {
+IconShell.prototype.queueSubprogramLaunch = function (name, instance, meta) {
     dbug('Queue subprogram launch: ' + name, 'subprogram');
-    this._pendingSubLaunch = { name: name, instance: instance, _queuedAt: Date.now() };
+    this._pendingSubLaunch = { name: name, instance: instance, statusMeta: meta || this._consumeNodeStatusIntent('using'), _queuedAt: Date.now() };
     // Mark that we just processed a CR; swallow subsequent LF if present
     this._swallowNextLF = true;
 };
 
 // Launch a subprogram (e.g., chat)
-IconShell.prototype.launchSubprogram = function (name, handlers) {
+IconShell.prototype.launchSubprogram = function (name, handlers, statusMeta) {
     dbug("Launch subprogram " + name, "subprogram");
 
     // Clean up any currently-active subprogram before launching the new one.
@@ -197,6 +372,7 @@ IconShell.prototype.launchSubprogram = function (name, handlers) {
     if (this.activeSubprogram && typeof this.activeSubprogram.attachShellTimer === 'function') {
         this.activeSubprogram.attachShellTimer(this.timer);
     }
+    this.activeSubprogram._nodeStatusMeta = this._subprogramNodeStatusMeta(name, this.activeSubprogram, statusMeta);
     // Proactively shelve (dispose) folder frames to prevent residual redraw artifacts.
 
     if (typeof this._shelveFolderFrames === 'function') this._shelveFolderFrames();
@@ -210,6 +386,7 @@ IconShell.prototype.launchSubprogram = function (name, handlers) {
     }
 
     this.activeSubprogram.enter(this.exitSubprogram.bind(this));
+    this._setNodeStatusForContext('using', this.activeSubprogram._nodeStatusMeta);
 
     this._refreshScreenSaverFrame();
 };
@@ -236,5 +413,6 @@ IconShell.prototype.exitSubprogram = function () {
     this._folderShelved = false;
     this._refreshScreenSaverFrame();
     this.recreateFramesIfNeeded();
+    this._refreshNodeStatus();
     if (!this.activeSubprogram || !this.activeSubprogram.running) this.drawFolder();
 };

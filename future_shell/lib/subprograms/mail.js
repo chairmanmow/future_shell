@@ -132,7 +132,7 @@ function Mail(opts) {
 		// 	}, 'Viewing netmail queue...', { programId: 'mail:netmail_queue' })
 		// },
 		{
-			baseLabel: 'Sent Mail', iconFile: 'redman', action: makeAction(function () {
+			baseLabel: 'Sent Mail', iconFile: 'sent_mail', action: makeAction(function () {
 				if (typeof bbs === 'undefined' || typeof bbs.read_mail !== 'function') return;
 				var currentUserNum = (typeof user !== 'undefined' && user && typeof user.number === 'number' && user.number > 0) ? user.number : null;
 				var mode = 0;
