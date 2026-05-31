@@ -26,7 +26,7 @@ var WHITE = (typeof WHITE === 'number') ? WHITE : 7;
 var LIGHTGRAY = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
 var BG_BLACK = (typeof BG_BLACK === 'number') ? BG_BLACK : (BLACK << 4);
 var BG_DARKGRAY = (typeof BG_DARKGRAY === 'number') ? BG_DARKGRAY : ((LIGHTGRAY & 0x07) << 4);
-try { if (typeof KEY_LEFT === 'undefined') require('sbbsdefs.js', 'KEY_LEFT', 'KEY_RIGHT', 'KEY_ENTER', 'KEY_UP', 'KEY_DOWN', 'KEY_PGUP', 'KEY_PGDN', 'KEY_HOME', 'KEY_END', 'KEY_DEL', 'KEY_BACKSPACE'); } catch (_r) { }
+try { if (typeof KEY_LEFT === 'undefined') require('sbbsdefs.js', 'KEY_LEFT', 'KEY_RIGHT', 'KEY_ENTER', 'KEY_UP', 'KEY_DOWN', 'KEY_PAGEUP', 'KEY_PAGEDN', 'KEY_HOME', 'KEY_END', 'KEY_DEL', 'KEY_BACKSPACE'); } catch (_r) { }
 
 var ModalThemeRegistry = (function () {
     if (typeof ThemeRegistry !== 'undefined') return ThemeRegistry;
@@ -1315,9 +1315,9 @@ Modal.createChooser = function (opts) {
                     sel--; clampSel(); ensureVisible(m); render(m.frame, m); return true;
                 case (typeof KEY_DOWN !== 'undefined' ? KEY_DOWN : '__none__'):
                     sel++; clampSel(); ensureVisible(m); render(m.frame, m); return true;
-                case (typeof KEY_PGUP !== 'undefined' ? KEY_PGUP : '__none__'):
+                case (typeof KEY_PAGEUP !== 'undefined' ? KEY_PAGEUP : '__none__'):
                     sel -= vc; clampSel(); ensureVisible(m); render(m.frame, m); return true;
-                case (typeof KEY_PGDN !== 'undefined' ? KEY_PGDN : '__none__'):
+                case (typeof KEY_PAGEDN !== 'undefined' ? KEY_PAGEDN : '__none__'):
                     sel += vc; clampSel(); ensureVisible(m); render(m.frame, m); return true;
                 case (typeof KEY_HOME !== 'undefined' ? KEY_HOME : '__none__'):
                     sel = 0; ensureVisible(m); render(m.frame, m); return true;

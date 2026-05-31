@@ -9,6 +9,7 @@ if (typeof load === 'function') {
     try { load('future_shell/lib/effects/matrix_rain.js'); } catch (e) { }
     try { load('future_shell/lib/effects/canvas-animations.js'); } catch (e) { }
     try { load('future_shell/lib/effects/avatars-float.js'); } catch (e) { }
+    try { load('future_shell/lib/effects/ansi_gallery.js'); } catch (e) { }
 }
 
 (function () {
@@ -56,10 +57,13 @@ if (typeof load === 'function') {
         this.random = true;
         this.clearOnSwitch = false;
         this.switchIntervalMs = 90000;
+        this.ansiName = 'ansi_gallery';
+        this.ansiInterstitial = true;
         this.animationOptions = {};
         this.registry = {};
         this._nextSeqIndex = 0;
         this._lastSwitchMs = 0;
+        this._lastNonAnsiName = null;
         this._tickBound = this._tick.bind(this);
         this._matrix = null;
         this.configure(opts.config || {});
@@ -104,6 +108,7 @@ if (typeof load === 'function') {
             var ti = parseInt(cfg.timer_interval_ms, 10);
             if (!isNaN(ti) && ti > 0) this.timerIntervalMs = ti;
         }
+        if (cfg.ansi_interstitial !== undefined) this.ansiInterstitial = !!cfg.ansi_interstitial;
         if (cfg.autothrottle !== undefined) this.autoThrottle = !!cfg.autothrottle;
         this._clampTimerInterval();
         if (cfg.clear_on_switch !== undefined) this.clearOnSwitch = !!cfg.clear_on_switch;
@@ -187,6 +192,8 @@ if (typeof load === 'function') {
         }
         if (typeof AvatarsFloat === 'function')
             this.register('avatars_float', { type: 'class', ctor: AvatarsFloat });
+        if (typeof AnsiGallery === 'function')
+            this.register('ansi_gallery', { type: 'class', ctor: AnsiGallery });
     };
 
     ShellScreenSaver.prototype.register = function (name, def) {
@@ -195,35 +202,67 @@ if (typeof load === 'function') {
         this.registry[name] = def;
     };
 
-    ShellScreenSaver.prototype._availableNames = function () {
+    ShellScreenSaver.prototype._availableNames = function (opts) {
+        opts = opts || {};
+        var includeAnsi = opts.includeAnsi !== false;
+        var allowFallback = opts.allowFallback !== false;
         var list = [];
         for (var i = 0; i < this.sequence.length; i++) {
             var name = this.sequence[i];
+            if (!includeAnsi && name === this.ansiName) continue;
             var def = this.registry[name];
             if (def && !def.failed) list.push(name);
         }
-        if (!list.length) {
-            if (this.registry['matrix_rain'] && !this.registry['matrix_rain'].failed) list.push('matrix_rain');
+        if (!list.length && allowFallback) {
+            if ((includeAnsi || this.ansiName !== 'matrix_rain') && this.registry['matrix_rain'] && !this.registry['matrix_rain'].failed) list.push('matrix_rain');
             if (!list.length) {
                 var fallback = Object.keys(this.registry);
                 if (fallback.length) {
-                    list = fallback.filter(function (n) { return !this.registry[n] || !this.registry[n].failed; }, this);
+                    list = fallback.filter(function (n) {
+                        if (!includeAnsi && n === this.ansiName) return false;
+                        return !this.registry[n] || !this.registry[n].failed;
+                    }, this);
                 }
             }
         }
         return list;
     };
 
-    ShellScreenSaver.prototype._pickNext = function () {
-        var available = this._availableNames();
+    ShellScreenSaver.prototype._pickNext = function (opts) {
+        opts = opts || {};
+        var available = this._availableNames(opts);
         if (!available.length) return null;
+        var exclude = (opts.exclude !== undefined) ? opts.exclude : (this.current ? this.current.name : null);
         if (this.random) {
-            return pickRandom(available, this.current ? this.current.name : null);
+            return pickRandom(available, exclude);
         }
         if (this._nextSeqIndex >= available.length) this._nextSeqIndex = 0;
         var name = available[this._nextSeqIndex];
         this._nextSeqIndex++;
         return name;
+    };
+
+    ShellScreenSaver.prototype._shouldUseAnsiInterstitial = function () {
+        if (!this.ansiInterstitial) return false;
+        if (!this.registry[this.ansiName] || this.registry[this.ansiName].failed) return false;
+        var all = this._availableNames({ includeAnsi: true, allowFallback: false });
+        if (all.indexOf(this.ansiName) === -1) return false;
+        return this._availableNames({ includeAnsi: false, allowFallback: false }).length > 0;
+    };
+
+    ShellScreenSaver.prototype._isAnsiInterstitialCurrent = function () {
+        if (!this.current) return false;
+        if (this.current.name !== this.ansiName) return false;
+        return !!(this.current.meta && this.current.meta.interstitial);
+    };
+
+    ShellScreenSaver.prototype._consumeAnsiInterstitialCompletion = function () {
+        if (!this._isAnsiInterstitialCurrent()) return false;
+        var inst = this.current.instance;
+        if (!inst) return false;
+        if (typeof inst.consumeArtComplete === 'function') return !!inst.consumeArtComplete();
+        if (typeof inst.isPassComplete === 'function') return !!inst.isPassComplete();
+        return false;
     };
 
     ShellScreenSaver.prototype.isActive = function () { return !!this.active; };
@@ -234,7 +273,12 @@ if (typeof load === 'function') {
         var available = this._availableNames();
         if (!available.length) return false;
         var attempts = 0;
-        var targetName = name || (this.current ? this.current.name : null) || this._pickNext();
+        var interstitialFlow = this._shouldUseAnsiInterstitial();
+        var targetName = name || (this.current ? this.current.name : null);
+        if (!targetName) {
+            if (interstitialFlow) targetName = this._pickNext({ includeAnsi: false });
+            if (!targetName) targetName = this._pickNext();
+        }
         while (targetName && attempts < available.length) {
             if (this._startAnimation(targetName)) {
                 this.active = true;
@@ -243,7 +287,8 @@ if (typeof load === 'function') {
             }
             attempts++;
             try { log(LOG_WARNING, 'screensaver activation failed for ' + targetName + ', attempt ' + attempts); } catch (_) { }
-            targetName = this._pickNext();
+            targetName = interstitialFlow ? this._pickNext({ includeAnsi: false }) : this._pickNext();
+            if (!targetName) targetName = this._pickNext();
         }
         try { log(LOG_ERR, 'screensaver failed to activate any animation after ' + attempts + ' attempts'); } catch (_) { }
         return false;
@@ -277,7 +322,7 @@ if (typeof load === 'function') {
         this._tick();
     };
 
-    ShellScreenSaver.prototype._startAnimation = function (name, force) {
+    ShellScreenSaver.prototype._startAnimation = function (name, force, runtimeOpts, runtimeMeta) {
         var def = this.registry[name];
         if (!def) return false;
         if (!force && this.current && this.current.name === name) return true;
@@ -291,7 +336,7 @@ if (typeof load === 'function') {
         if (this.clearOnSwitch) {
             try { frame.clear(); } catch (e) { }
         }
-        this.current = { name: name, type: def.type, instance: null, ownedFrames: [] };
+        this.current = { name: name, type: def.type, instance: null, ownedFrames: [], meta: runtimeMeta || {} };
         var success = false;
         if (def.type === 'matrix') {
             if (!this._matrix) this._matrix = new MatrixRain({ parent: frame, deterministic: true });
@@ -305,6 +350,11 @@ if (typeof load === 'function') {
             success = true;
         } else if (def.type === 'class') {
             var opts = clone(this.animationOptions[name] || {});
+            if (runtimeOpts && typeof runtimeOpts === 'object') {
+                for (var rk in runtimeOpts) {
+                    if (Object.prototype.hasOwnProperty.call(runtimeOpts, rk)) opts[rk] = runtimeOpts[rk];
+                }
+            }
             var owned = this.current.ownedFrames;
             var priorOwn = opts.ownFrame;
             opts.ownFrame = function (frameRef) {
@@ -334,6 +384,7 @@ if (typeof load === 'function') {
             return false;
         }
         def.failed = false;
+        if (name !== this.ansiName) this._lastNonAnsiName = name;
         this._lastSwitchMs = nowMs();
         return true;
     };
@@ -409,12 +460,35 @@ if (typeof load === 'function') {
             return;
         }
         if (!this.current) {
-            var first = this._pickNext();
+            var first = this._shouldUseAnsiInterstitial()
+                ? this._pickNext({ includeAnsi: false })
+                : this._pickNext();
+            if (!first) first = this._pickNext();
             if (!this._startAnimation(first)) return;
         }
-        if (this._shouldSwitch()) {
-            var next = this._pickNext();
-            if (next) this._startAnimation(next);
+        var useAnsiInterstitial = this._shouldUseAnsiInterstitial();
+        var currentName = this.current ? this.current.name : null;
+        var isAnsiInterstitial = this._isAnsiInterstitialCurrent();
+        if (!isAnsiInterstitial && this._shouldSwitch()) {
+            if (useAnsiInterstitial && currentName !== this.ansiName) {
+                var startedAnsi = this._startAnimation(
+                    this.ansiName,
+                    false,
+                    { single_art_pass: true, interstitial_mode: true },
+                    { interstitial: true }
+                );
+                if (!startedAnsi) {
+                    var fallbackNext = this._pickNext({ includeAnsi: false, exclude: currentName });
+                    if (!fallbackNext) fallbackNext = this._pickNext({ exclude: currentName });
+                    if (fallbackNext) this._startAnimation(fallbackNext);
+                }
+            } else {
+                var next = useAnsiInterstitial
+                    ? this._pickNext({ includeAnsi: false, exclude: currentName })
+                    : this._pickNext({ exclude: currentName });
+                if (!next) next = this._pickNext({ exclude: currentName });
+                if (next) this._startAnimation(next);
+            }
         }
         if (this.current) {
             if (this.current.type === 'matrix') {
@@ -429,6 +503,12 @@ if (typeof load === 'function') {
                     tickElapsed = nowMs() - tickStart;
                     this._applyAutoThrottle(tickElapsed);
                     return;
+                }
+                if (this._consumeAnsiInterstitialCompletion()) {
+                    var nextNonAnsi = this._pickNext({ includeAnsi: false, exclude: this._lastNonAnsiName });
+                    if (!nextNonAnsi) nextNonAnsi = this._pickNext({ includeAnsi: false });
+                    if (!nextNonAnsi) nextNonAnsi = this._pickNext({ exclude: this.ansiName });
+                    if (nextNonAnsi) this._startAnimation(nextNonAnsi);
                 }
                 tickElapsed = nowMs() - tickStart;
                 this._applyAutoThrottle(tickElapsed);

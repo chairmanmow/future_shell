@@ -183,15 +183,21 @@ PrivateMsg.prototype.cleanup = function () {
 
 PrivateMsg.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
+    // Input line belongs on the very last screen row. The shell's "view" frame
+    // stops short of the bottom, so derive the extent from the top-level frame
+    // instead of parentFrame.height.
+    var rootFrame = this.parentFrame;
+    while (rootFrame.parent) rootFrame = rootFrame.parent;
+    var lastY = rootFrame.y + Math.max(2, rootFrame.height) - 1;
     if (!this.outputFrame) {
-        var h = Math.max(1, this.parentFrame.height - 1);
+        var h = Math.max(1, lastY - 1);
         var attr = this.paletteAttr('NORMAL', BG_BLACK | LIGHTGRAY);
         this.outputFrame = new Frame(1, 1, this.parentFrame.width, h, attr, this.parentFrame);
         this.outputFrame.open();
     }
     if (!this.inputFrame) {
         var iattr = this.paletteAttr('INPUT', BG_BLUE | WHITE);
-        this.inputFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, iattr, this.parentFrame);
+        this.inputFrame = new Frame(1, lastY, this.parentFrame.width, 1, iattr, this.parentFrame);
         this.inputFrame.open();
     }
 };
@@ -779,7 +785,7 @@ PrivateMsg.prototype._buildUserList = function () {
             var usr = sys.users[u];
             this.userList.push({
                 name: usr.name || '?', host: sys.host, bbs: sys.name || sys.host,
-                action: usr.action || '', age: usr.age || '', sex: usr.sex || '', timeon: usr.timeon || 0
+                action: remoteAction(usr), age: usr.age || '', sex: usr.sex || '', timeon: usr.timeon || 0
             });
         }
     }
@@ -791,7 +797,7 @@ PrivateMsg.prototype._buildUserList = function () {
             if (!uname || node.useron === user.number) continue;
             this.userList.push({
                 name: uname, host: system.inetaddr || system.host_name || 'localhost',
-                bbs: system.name + ' (local)', action: NodeAction[node.action] || '',
+                bbs: system.name + ' (local)', action: localAction(node),
                 age: '', sex: '', timeon: 0, local: true, userNum: node.useron
             });
         } catch (e) { }
@@ -840,5 +846,39 @@ try {
     NodeAction[NODE_LOGN] = 'Logging on'; NodeAction[NODE_LCHT] = 'In local chat';
     NodeAction[NODE_MCHT] = 'In multinode chat';
 } catch (e) { }
+
+// A node running an external program carries node.action == NODE_XTRN and a
+// 1-based node.aux index into the external program list. Resolve it to the
+// program's display name so the activity shows the actual door rather than a
+// generic "Running door".
+function doorNameFromAux(aux) {
+    if (!aux) return '';
+    try {
+        for (var i in xtrn_area.prog)
+            if (xtrn_area.prog[i].number == aux - 1) return xtrn_area.prog[i].name;
+    } catch (e) { }
+    return '';
+}
+
+function localAction(node) {
+    if (node.action == NODE_XTRN && node.aux) {
+        var name = doorNameFromAux(node.aux);
+        if (name) return name;
+    }
+    return NodeAction[node.action] || '';
+}
+
+// Remote users arrive via the inter-BBS broadcast, which (for JSON-capable
+// systems) carries a numeric 'naction' and an 'xtrn' program name alongside
+// the verbose 'action' string ("running external program NAME"). Prefer the
+// bare name; otherwise strip the redundant prefix so the name leads.
+function remoteAction(usr) {
+    if (usr && usr.xtrn && (usr.naction === NODE_XTRN || /running external program/i.test(usr.action || '')))
+        return String(usr.xtrn);
+    var a = String((usr && usr.action) || '');
+    return a.replace(/^\s*running external program\s+#\d+\s*$/i, 'a door')
+            .replace(/^\s*running external program\s+/i, '')
+            .replace(/^\s*at external program menu\s*$/i, 'xtrn menu');
+}
 
 registerModuleExports({ PrivateMsg: PrivateMsg });

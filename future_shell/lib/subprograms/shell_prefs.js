@@ -500,6 +500,7 @@ ShellPrefs.prototype._loadAvailableScreensavers = function () {
 ShellPrefs.prototype._reconcileScreensaverOrder = function () {
     var prefs = this.preferences.screensaver || {};
     var available = this._availableSavers || [];
+    var changed = false;
     var names = [];
     var disabledItems = [];
     for (var i = 0; i < available.length; i++) {
@@ -509,7 +510,9 @@ ShellPrefs.prototype._reconcileScreensaverOrder = function () {
     }
     if (!prefs.order.length) {
         prefs.order = names.slice(0);
+        changed = true;
     } else {
+        var originalOrder = prefs.order.slice(0);
         var filtered = [];
         for (var j = 0; j < prefs.order.length; j++) {
             var nm = prefs.order[j];
@@ -519,14 +522,29 @@ ShellPrefs.prototype._reconcileScreensaverOrder = function () {
             if (filtered.indexOf(names[k]) === -1) filtered.push(names[k]);
         }
         prefs.order = filtered;
+        if (originalOrder.length !== filtered.length) changed = true;
+        else {
+            for (var oi = 0; oi < filtered.length; oi++) {
+                if (filtered[oi] !== originalOrder[oi]) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
     }
     var enabledMap = prefs.enabled || {};
     for (var n = 0; n < prefs.order.length; n++) {
         var id = prefs.order[n];
-        if (!Object.prototype.hasOwnProperty.call(enabledMap, id)) enabledMap[id] = true;
+        if (!Object.prototype.hasOwnProperty.call(enabledMap, id)) {
+            enabledMap[id] = true;
+            changed = true;
+        }
     }
     for (var d = 0; d < disabledItems.length; d++) {
-        enabledMap[disabledItems[d].name] = false;
+        if (enabledMap[disabledItems[d].name] !== false) {
+            enabledMap[disabledItems[d].name] = false;
+            changed = true;
+        }
     }
     prefs.enabled = enabledMap;
     this._saverList = [];
@@ -551,6 +569,7 @@ ShellPrefs.prototype._reconcileScreensaverOrder = function () {
             index: baseCount + di
         });
     }
+    if (changed) this._touch();
 };
 
 ShellPrefs.prototype._labelForSaver = function (name) {

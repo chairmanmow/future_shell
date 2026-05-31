@@ -249,6 +249,13 @@ SystemInfo.prototype.refresh = function () {
 SystemInfo.prototype._ensureFrames = function () {
 	if (!this.parentFrame) return;
 
+	// Input line belongs on the very last screen row. The shell's "view" frame
+	// stops short of the bottom, so derive the extent from the top-level frame
+	// instead of parentFrame.height.
+	var rootFrame = this.parentFrame;
+	while (rootFrame.parent) rootFrame = rootFrame.parent;
+	var lastY = rootFrame.y + Math.max(2, rootFrame.height) - 1;
+
 	var currentY = 1;
 	var bannerHeight = 6;
 
@@ -269,16 +276,15 @@ SystemInfo.prototype._ensureFrames = function () {
 	currentY += 3;
 
 	if (!this.outputFrame) {
-		// Output frame: everything between header and input
-		var remainingHeight = this.parentFrame.height - currentY;
-		var h = Math.max(1, remainingHeight); // Leave 1 line for input at bottom
+		// Output frame: everything between header and input (input takes lastY)
+		var h = Math.max(1, lastY - currentY); // spans currentY..lastY-1
 		this.outputFrame = new Frame(1, currentY, this.parentFrame.width, h, ICSH_ATTR('SYSINFO_OUTPUT'), this.parentFrame);
 		this.outputFrame.open();
 	}
 
 	if (!this.inputFrame) {
 		// Input frame: bottom line
-		this.inputFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, ICSH_ATTR('SYSINFO_INPUT'), this.parentFrame);
+		this.inputFrame = new Frame(1, lastY, this.parentFrame.width, 1, ICSH_ATTR('SYSINFO_INPUT'), this.parentFrame);
 		this.inputFrame.open();
 	}
 };
@@ -313,16 +319,11 @@ SystemInfo.prototype._drawHeader = function () {
 	f.attr = borderAttr;
 	f.putmsg(ascii(218) + repeat(ascii(196), f.width - 2) + ascii(191) + '\r\n');
 
-	// Tab bar - calculate absolute screen coordinates for hotspots
-	// headerFrame is now at Y=7 (after 6 lines of banner) relative to parentFrame
-	// Line 1 of headerFrame = top border
-	// Line 2 of headerFrame = tab bar (where we add hotspots)
-	var parentAbsY = this.parentFrame ? this.parentFrame.y : 1;
-	var parentAbsX = this.parentFrame ? this.parentFrame.x : 1;
-	// headerFrame.y is relative position (7), so absolute Y = parentAbsY + headerFrame.y - 1 + line offset
-	// Line 2 of headerFrame in absolute coords = parentAbsY + 6 (banner height) + 1 (line 2)
-	var screenY = parentAbsY + 6 + 1;
-	var currentX = parentAbsX; // Start at parent's X position
+	// Tab bar hotspots. Frame coordinates are absolute, so the header frame's
+	// own x/y are the real screen position: line 1 of the header is the top
+	// border, line 2 is the tab bar (where the hotspots go).
+	var screenY = f.y + 1;       // tab bar is the second row of the header frame
+	var currentX = f.x;          // absolute left edge of the header frame
 
 	f.attr = borderAttr;
 	f.putmsg(ascii(179));

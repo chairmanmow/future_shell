@@ -26,8 +26,11 @@ var SHELL_KEY_TOKEN_RIGHT = (typeof KEY_RIGHT !== 'undefined') ? KEY_RIGHT : '\x
 var SHELL_KEY_TOKEN_LEFT = (typeof KEY_LEFT !== 'undefined') ? KEY_LEFT : '\x1B[D';
 var SHELL_KEY_TOKEN_HOME = (typeof KEY_HOME !== 'undefined') ? KEY_HOME : '\x1B[H';
 var SHELL_KEY_TOKEN_END = (typeof KEY_END !== 'undefined') ? KEY_END : '\x1B[F';
-var SHELL_KEY_TOKEN_PGUP = (typeof KEY_PGUP !== 'undefined') ? KEY_PGUP : '\x1B[5~';
-var SHELL_KEY_TOKEN_PGDN = (typeof KEY_PGDN !== 'undefined') ? KEY_PGDN : '\x1B[6~';
+// Normalize raw PgUp/PgDn escape sequences to the same control chars inkey()
+// already emits (KEY_PAGEUP '\x10' / KEY_PAGEDN '\x0e'), which is what the
+// subprograms match. Synchronet has no KEY_PGUP/KEY_PGDN.
+var SHELL_KEY_TOKEN_PGUP = (typeof KEY_PAGEUP !== 'undefined') ? KEY_PAGEUP : '\x10';
+var SHELL_KEY_TOKEN_PGDN = (typeof KEY_PAGEDN !== 'undefined') ? KEY_PAGEDN : '\x0e';
 var SHELL_KEY_TOKEN_INS = (typeof KEY_INSERT !== 'undefined') ? KEY_INSERT : ((typeof KEY_INS !== 'undefined') ? KEY_INS : '\x1B[2~');
 var SHELL_KEY_TOKEN_DEL = (typeof KEY_DELETE !== 'undefined') ? KEY_DELETE : ((typeof KEY_DEL !== 'undefined') ? KEY_DEL : '\x1B[3~');
 
@@ -133,6 +136,16 @@ var SHELL_COLOR_DEFAULTS = {
 // Add subprogram state to IconShell
 IconShell.prototype.init = function () {
     dbug("Initialize icon shell 42A", "init")
+    // IconShell is an intentionally long-running interactive process.
+    // Disable operation-callback time-limit watchdog for this runtime.
+    this._previousJsTimeLimit = null;
+    if (typeof js !== 'undefined' && js) {
+        if (typeof js.time_limit === 'number') this._previousJsTimeLimit = js.time_limit;
+        try {
+            js.time_limit = 0;
+            if (typeof js.counter === 'number') js.counter = 0;
+        } catch (_) { }
+    }
     // === Instance state ===
     // Main root frame hierarchy (root/view/crumb)
     var initialDims = this._getConsoleDimensions();
@@ -970,9 +983,18 @@ IconShell.prototype._handleConsoleResize = function (dims) {
 };
 
 IconShell.prototype._resolveScreensaverFrame = function (animationName) {
-    // Overlay screensavers (avatars_float, figlet_message) need a frame without children
-    // Background screensavers render behind content
+    // Overlay screensavers need a frame without children.
+    // Background screensavers render behind content.
     var isOverlay = (animationName === 'avatars_float' || animationName === 'figlet_message');
+    var preferredLayer = '';
+    try {
+        var animOpts = (this._screenSaver && this._screenSaver.animationOptions && animationName)
+            ? this._screenSaver.animationOptions[animationName]
+            : null;
+        if (animOpts) preferredLayer = String(animOpts.frame || animOpts.target || animOpts.layer || '').toLowerCase();
+    } catch (_) { }
+    if (preferredLayer === 'overlay' || preferredLayer === 'foreground' || preferredLayer === 'front') isOverlay = true;
+    if (preferredLayer === 'background' || preferredLayer === 'back') isOverlay = false;
     
     if (this.activeSubprogram) {
         // For overlay: use overlayFrame if available, else backgroundFrame
@@ -2015,6 +2037,10 @@ IconShell.prototype._applyScreensaverPreferences = function (prefs) {
                 }
                 enabled = filtered;
             }
+            if (this._screenSaver.registry && this._screenSaver.registry['ansi_gallery']) {
+                var ansiExplicitlyDisabled = !!(cfg.enabled && cfg.enabled.ansi_gallery === false);
+                if (!ansiExplicitlyDisabled && enabled.indexOf('ansi_gallery') === -1) enabled.push('ansi_gallery');
+            }
             if (!enabled.length) enabled.push('matrix_rain');
             var switchSeconds = (typeof cfg.switchIntervalSeconds === 'number') ? cfg.switchIntervalSeconds : 90;
             if (switchSeconds > 0 && switchSeconds < 5) switchSeconds = 5;
@@ -2835,6 +2861,9 @@ IconShell.prototype._cleanupMainLoop = function () {
     // Destroy screensaver (detach timer + prevent further ticks) BEFORE frame disposal
     if (this._screenSaver && typeof this._screenSaver.destroy === 'function') {
         try { this._screenSaver.destroy(); } catch (_) { }
+    }
+    if (typeof js !== 'undefined' && js && typeof this._previousJsTimeLimit === 'number') {
+        try { js.time_limit = this._previousJsTimeLimit; } catch (_) { }
     }
     if (typeof console.mouse_mode !== 'undefined') console.mouse_mode = false;
 };

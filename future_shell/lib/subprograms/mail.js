@@ -14,9 +14,12 @@ require('smbdefs.js', 'NET_FIDO', 'NETMSG_INTRANSIT', 'NETMSG_SENT', 'NETMSG_KIL
 require('userdefs.js', 'U_NAME');
 require('msgdefs.js', 'MM_REALNAME');
 
-// Fallback key codes if not defined globally (Synchronet usually defines in sbbsdefs.js)
-if (typeof KEY_PGUP === 'undefined') var KEY_PGUP = 0x4900;
-if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = 0x5100;
+// Page Up/Down arrive from inkey() as the control-char strings KEY_PAGEUP
+// ('\x10') / KEY_PAGEDN ('\x0e'); there is no KEY_PGUP/KEY_PGDN in Synchronet.
+if (typeof KEY_PAGEUP === 'undefined') var KEY_PAGEUP = '\x10';
+if (typeof KEY_PAGEDN === 'undefined') var KEY_PAGEDN = '\x0e';
+if (typeof KEY_PGUP === 'undefined') var KEY_PGUP = KEY_PAGEUP;
+if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = KEY_PAGEDN;
 if (typeof SCAN_TOYOU === 'undefined') var SCAN_TOYOU = (1 << 3);
 if (typeof SCAN_UNREAD === 'undefined') var SCAN_UNREAD = (1 << 5);
 if (typeof SCAN_NEW === 'undefined') var SCAN_NEW = (1 << 1);

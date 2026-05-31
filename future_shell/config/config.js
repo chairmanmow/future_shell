@@ -275,6 +275,72 @@ var BUILTIN_ACTIONS = {
 			}
 		}
 	}),
+	alert_settings: new SubprogramActionHandler('AlertSettings', {
+		module: 'future_shell/lib/subprograms/alert-settings.js',
+		queueName: 'alert-settings',
+		instanceProperty: 'alertSettingsSub',
+		loadFailureMessage: 'Failed loading alert-settings.js ',
+		missingMessage: 'AlertSettings class missing after load',
+		options: function () {
+			return {
+				parentFrame: this.root,
+				shell: this,
+				timer: this.timer,
+				userNumber: (typeof user !== 'undefined' && user && typeof user.number === 'number') ? user.number : null,
+				userAlias: (typeof user !== 'undefined' && user && user.alias) ? user.alias : null
+			};
+		},
+		onReuse: function (instance) {
+			if (!instance) return;
+			instance.parentFrame = this.root;
+			instance.shell = this;
+			instance.timer = this.timer;
+		}
+	}),
+	screensaver_settings: new SubprogramActionHandler('ScreensaverSettings', {
+		module: 'future_shell/lib/subprograms/screensaver-settings.js',
+		queueName: 'screensaver-settings',
+		instanceProperty: 'screensaverSettingsSub',
+		loadFailureMessage: 'Failed loading screensaver-settings.js ',
+		missingMessage: 'ScreensaverSettings class missing after load',
+		options: function () {
+			return {
+				parentFrame: this.root,
+				shell: this,
+				timer: this.timer,
+				userNumber: (typeof user !== 'undefined' && user && typeof user.number === 'number') ? user.number : null,
+				userAlias: (typeof user !== 'undefined' && user && user.alias) ? user.alias : null
+			};
+		},
+		onReuse: function (instance) {
+			if (!instance) return;
+			instance.parentFrame = this.root;
+			instance.shell = this;
+			instance.timer = this.timer;
+		}
+	}),
+	chat_settings: new SubprogramActionHandler('ChatSettings', {
+		module: 'future_shell/lib/subprograms/chat-settings.js',
+		queueName: 'chat-settings',
+		instanceProperty: 'chatSettingsSub',
+		loadFailureMessage: 'Failed loading chat-settings.js ',
+		missingMessage: 'ChatSettings class missing after load',
+		options: function () {
+			return {
+				parentFrame: this.root,
+				shell: this,
+				timer: this.timer,
+				userNumber: (typeof user !== 'undefined' && user && typeof user.number === 'number') ? user.number : null,
+				userAlias: (typeof user !== 'undefined' && user && user.alias) ? user.alias : null
+			};
+		},
+		onReuse: function (instance) {
+			if (!instance) return;
+			instance.parentFrame = this.root;
+			instance.shell = this;
+			instance.timer = this.timer;
+		}
+	}),
 	ticker_settings: new SubprogramActionHandler('TickerSettings', {
 		module: 'future_shell/lib/subprograms/ticker_settings.js',
 		queueName: 'ticker-settings',

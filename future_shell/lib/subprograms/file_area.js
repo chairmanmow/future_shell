@@ -107,16 +107,29 @@ FileArea.prototype.enter = function (done) {
 FileArea.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
 
+    // Span the full display: header on the first row, status on the very last
+    // row. The shell hands subprograms its "view" frame, which starts at row 2
+    // and stops one row above the crumb, so basing geometry on parentFrame
+    // leaves the header a row too low and the status a row or two too high.
+    // Derive the true extent from the top-level frame. Bounds are checked
+    // against the shared display, not the parent, so this is safe.
+    var rootFrame = this.parentFrame;
+    while (rootFrame.parent) rootFrame = rootFrame.parent;
+    var originX = rootFrame.x;
+    var topY = rootFrame.y;
+    var width = rootFrame.width;
+    var lastY = rootFrame.y + Math.max(3, rootFrame.height) - 1;
+
     if (!this.headerFrame) {
         var ha = this.paletteAttr('HEADER_ATTR');
-        this.headerFrame = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width, 1, ha, this.parentFrame);
+        this.headerFrame = new Frame(originX, topY, width, 1, ha, this.parentFrame);
         this.headerFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.headerFrame);
     }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 2);
+        var h = Math.max(1, (lastY - 1) - (topY + 1) + 1);
         var la = this.paletteAttr('LIST_INACTIVE');
-        this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, la, this.parentFrame);
+        this.listFrame = new Frame(originX, topY + 1, width, h, la, this.parentFrame);
         this.listFrame.open();
         this.listFrame.word_wrap = false;
         this.setBackgroundFrame(this.listFrame)
@@ -124,7 +137,7 @@ FileArea.prototype._ensureFrames = function () {
     }
     if (!this.statusFrame) {
         var sa = this.paletteAttr('STATUS_ATTR');
-        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.height, this.parentFrame.width, 1, sa, this.parentFrame);
+        this.statusFrame = new Frame(originX, lastY, width, 1, sa, this.parentFrame);
         this.statusFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
     }

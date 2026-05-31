@@ -303,18 +303,30 @@ Users.prototype._filterUsers = function () {
 
 Users.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
+    // Span the full display: header on the first row, status on the very last
+    // row. The shell hands subprograms its "view" frame, whose height stops one
+    // row above the crumb, so basing the status line on parentFrame.height
+    // leaves it a row or two short of the bottom. Derive the true extent from
+    // the top-level frame. Bounds are checked against the shared display (the
+    // whole screen), not the parent, so this is safe.
+    var rootFrame = this.parentFrame;
+    while (rootFrame.parent) rootFrame = rootFrame.parent;
+    var originX = rootFrame.x;
+    var topY = rootFrame.y;
+    var width = rootFrame.width;
+    var lastY = rootFrame.y + Math.max(2, rootFrame.height) - 1;
     if (!this.headerFrame) {
-        this.headerFrame = new Frame(1, 1, this.parentFrame.width, 1, this.paletteAttr('HEADER_FRAME'), this.parentFrame); this.headerFrame.open();
+        this.headerFrame = new Frame(originX, topY, width, 1, this.paletteAttr('HEADER_FRAME'), this.parentFrame); this.headerFrame.open();
         this.registerFrame(this.headerFrame);
     }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 2);
-        this.listFrame = new Frame(1, 2, this.parentFrame.width, h, this.paletteAttr('MAIN_FRAME'), this.parentFrame); this.listFrame.open();
+        var h = Math.max(1, (lastY - 1) - (topY + 1) + 1);
+        this.listFrame = new Frame(originX, topY + 1, width, h, this.paletteAttr('MAIN_FRAME'), this.parentFrame); this.listFrame.open();
         this.registerFrame(this.listFrame);
         this.listFrame.bottom();
     }
     if (!this.statusFrame) {
-        this.statusFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame); this.statusFrame.open();
+        this.statusFrame = new Frame(originX, lastY, width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame); this.statusFrame.open();
         this.registerFrame(this.statusFrame);
     }
 };

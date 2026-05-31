@@ -1280,6 +1280,17 @@ MRC.prototype._onControllerUpdate = function (snapshot) {
     this._invalidateWrappedMessageLines();
 
     this._needsRedraw = true;
+
+    // While the shell screensaver is active it suspends our cycle()/draw()
+    // (see IconShell._cycleActiveSubprogram), so incoming messages would not
+    // appear until the saver is dismissed. The shared MRC controller keeps
+    // ticking ungated, so render here so chat stays live over the animated
+    // background: messagesFrame is transparent and host is the screensaver's
+    // background frame, so the saver shows through between glyphs. Mirrors how
+    // the json-chat subprogram keeps updating during the screensaver.
+    if (this.running && this.shell && this.shell._saverActive) {
+        try { this.draw(); } catch (_) { }
+    }
 };
 
 /**
@@ -1573,6 +1584,7 @@ MRC.prototype._ensureFrames = function () {
     var buttonHeight = 2;
     if (!this.buttonsFrame) {
         this.buttonsFrame = new Frame(1, buttonTop, messageWidth, buttonHeight, controlsAttr, host);
+        this.buttonsFrame.transparent = true;
         this.buttonsFrame.open();
         this.registerFrame(this.buttonsFrame);
     } else {
@@ -1580,12 +1592,14 @@ MRC.prototype._ensureFrames = function () {
         this.buttonsFrame.width = messageWidth;
         this.buttonsFrame.height = buttonHeight;
     }
+    this.buttonsFrame.transparent = true;
     this.buttonsFrame.attr = controlsAttr;
 
     var controlsTop = buttonTop + buttonHeight;
     var controlsHeight = 1;
     if (!this.controlsFrame) {
         this.controlsFrame = new Frame(1, controlsTop, messageWidth, controlsHeight, controlsAttr, host);
+        this.controlsFrame.transparent = true;
         this.controlsFrame.open();
         this.registerFrame(this.controlsFrame);
     } else {
@@ -1593,6 +1607,7 @@ MRC.prototype._ensureFrames = function () {
         this.controlsFrame.width = messageWidth;
         this.controlsFrame.height = controlsHeight;
     }
+    this.controlsFrame.transparent = true;
     this.controlsFrame.attr = controlsAttr;
 
     var messagesTop = controlsTop + controlsHeight;
@@ -1602,6 +1617,7 @@ MRC.prototype._ensureFrames = function () {
         this.messagesFrame.word_wrap = false;
         this.messagesFrame.v_scroll = true;   // Enable vertical scrolling
         this.messagesFrame.lf_strict = true;  // Newlines trigger scroll at bottom
+        this.messagesFrame.transparent = true; // let background screensaver show through between glyphs
         this.messagesFrame.open();
         this.registerFrame(this.messagesFrame);
     } else {
@@ -1609,8 +1625,11 @@ MRC.prototype._ensureFrames = function () {
         this.messagesFrame.width = messageWidth;
         this.messagesFrame.height = messagesHeight;
     }
+    this.messagesFrame.transparent = true;
     this.messagesFrame.attr = messagesAttr;
-    this.setBackgroundFrame(this.messagesFrame);
+    // Background screensavers should target the host canvas, not the text frame.
+    // If they target messagesFrame directly, animation updates overwrite chat text.
+    this.setBackgroundFrame(host);
     if (!this.messageScroll) {
         this.messageScroll = new ScrollBar(this.messagesFrame, { autohide: true });
     }
@@ -2030,14 +2049,80 @@ MRC.prototype._renderMessages = function () {
     var y = 1;
     for (var i = start; i < end; i++) {
         if (y > height) break;
+        var line = wrappedLines[i];
+        if (line === undefined || line === null) line = '';
+        // Avoid writing trailing padding spaces so transparent background can show through.
+        if (line.length) line = line.replace(/[ \t]+$/g, '');
         this.messagesFrame.gotoxy(1, y++);
-        this.messagesFrame.putmsg(wrappedLines[i]);
+        this.messagesFrame.putmsg(line);
     }
+    this._sparsifyMessageSpaces();
     
     // Register URL hotspots for visible message lines
     this._registerUrlHotspots(wrappedLines, start, end);
     if (this.messageScroll) this.messageScroll.cycle();
     this.messagesFrame.cycle();
+};
+
+MRC.prototype._cellCharCode = function (ch) {
+    if (!ch || !ch.length) return 0;
+    try {
+        if (typeof ascii === 'function') return ascii(ch.charAt(0));
+    } catch (_) { }
+    try { return ch.charCodeAt(0); } catch (_) { }
+    return 0;
+};
+
+MRC.prototype._isInvisibleMessageCell = function (cell, frameBgColor) {
+    if (!cell || cell.ch === undefined || cell.ch === null) return false;
+    var attr = (typeof cell.attr === 'number')
+        ? cell.attr
+        : ((this.messagesFrame && typeof this.messagesFrame.attr === 'number') ? this.messagesFrame.attr : 0);
+    var bg = (attr >> 4) & 0x07;
+    var fg = attr & 0x0F;
+    var fgBase = fg & 0x07;
+    var fgBright = (fg & 0x08) !== 0;
+
+    var code = this._cellCharCode(cell.ch);
+    var isSpaceLike = (cell.ch === ' ' || code === 0 || code === 160);
+    var isBlockLike =
+        (code === 176 || code === 177 || code === 178 || code === 219 ||
+         code === 220 || code === 221 || code === 222 || code === 223 || code === 254);
+
+    // Plain background padding.
+    if (isSpaceLike && bg === frameBgColor) return true;
+
+    // Black-on-black and same-dark fg/bg are visually empty but still block lower layers.
+    if (bg === 0 && fgBase === 0 && (isSpaceLike || isBlockLike)) return true;
+    if (fgBase === bg && !fgBright && (bg === frameBgColor || isBlockLike)) return true;
+
+    return false;
+};
+
+// Aggressively convert invisible filler cells into transparent cells so
+// background screensavers show through consistently.
+MRC.prototype._sparsifyMessageSpaces = function () {
+    if (!this.messagesFrame || typeof this.messagesFrame.getData !== 'function') return;
+    var frame = this.messagesFrame;
+    var canClearData = (typeof frame.clearData === 'function');
+    var canSetData = (typeof frame.setData === 'function');
+    if (!canClearData && !canSetData) return;
+    var w = Math.max(1, frame.width | 0);
+    var h = Math.max(1, frame.height | 0);
+    var frameBgColor = (typeof frame.attr === 'number') ? ((frame.attr >> 4) & 0x07) : 0;
+    for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+            var d = null;
+            try { d = frame.getData(x, y, false); } catch (_) { d = null; }
+            if (!this._isInvisibleMessageCell(d, frameBgColor)) continue;
+            if (canClearData) {
+                try { frame.clearData(x, y, false); } catch (_) { }
+            } else if (canSetData) {
+                // Last-resort fallback for non-standard frame implementations.
+                try { frame.setData(x, y, ' ', 0, false); } catch (_) { }
+            }
+        }
+    }
 };
 
 MRC.prototype._invalidateWrappedMessageLines = function () {

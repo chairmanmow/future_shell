@@ -39,15 +39,21 @@ HelloWorld.prototype.enter = function (done) {
 
 HelloWorld.prototype._ensureFrames = function () {
 	if (!this.parentFrame) return;
+	// Input line belongs on the very last screen row. The shell's "view" frame
+	// stops short of the bottom, so derive the extent from the top-level frame
+	// instead of parentFrame.height.
+	var rootFrame = this.parentFrame;
+	while (rootFrame.parent) rootFrame = rootFrame.parent;
+	var lastY = rootFrame.y + Math.max(2, rootFrame.height) - 1;
 	if (!this.outputFrame) {
-		var h = Math.max(1, this.parentFrame.height - 1);
+		var h = Math.max(1, lastY - 1);
 		var outputAttr = this.paletteAttr('OUTPUT', ICSH_ATTR('HELLO_OUTPUT'));
 		this.outputFrame = new Frame(1, 1, this.parentFrame.width, h, outputAttr, this.parentFrame);
 		this.outputFrame.open();
 	}
 	if (!this.inputFrame) {
 		var inputAttr = this.paletteAttr('INPUT', ICSH_ATTR('HELLO_INPUT'));
-		this.inputFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, inputAttr, this.parentFrame);
+		this.inputFrame = new Frame(1, lastY, this.parentFrame.width, 1, inputAttr, this.parentFrame);
 		this.inputFrame.open();
 	}
 };

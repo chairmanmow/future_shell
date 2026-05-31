@@ -2485,22 +2485,36 @@ NewsReader.prototype._toDisplayText = function (text) {
 
 NewsReader.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
+    // The newsreader is a full-screen subprogram: its title bar belongs on the
+    // very first row and its status line on the very last row. The shell hands
+    // subprograms the "view" frame, which starts at row 2 (below the shell
+    // header) and stops one row above the crumb, so deriving geometry straight
+    // from parentFrame leaves the title a row too low and the status a row or
+    // two too high. Span the full display instead. Bounds are checked against
+    // the shared display (the whole screen), not the parent frame, so child
+    // frames may safely cover rows above/below the view.
+    var rootFrame = this.parentFrame;
+    while (rootFrame.parent) rootFrame = rootFrame.parent;
+    var baseX = rootFrame.x;
+    var baseY = rootFrame.y;
+    var totalW = rootFrame.width;
+    var totalH = Math.max(3, rootFrame.height);
     if (!this.headerFrame) {
-        this.headerFrame = new Frame(this.parentFrame.x, this.parentFrame.y, this.parentFrame.width, 1, this.paletteAttr('TITLE_FRAME'), this.parentFrame);
+        this.headerFrame = new Frame(baseX, baseY, totalW, 1, this.paletteAttr('TITLE_FRAME'), this.parentFrame);
         this.headerFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.headerFrame);
         this._headerDefaultAttr = this.headerFrame.attr;
     }
     if (!this.listFrame) {
-        var h = Math.max(1, this.parentFrame.height - 2);
-        this.listFrame = new Frame(this.parentFrame.x, this.parentFrame.y + 1, this.parentFrame.width, h, this.paletteAttr('CONTENT_FRAME'), this.parentFrame);
+        var h = Math.max(1, totalH - 2);
+        this.listFrame = new Frame(baseX, baseY + 1, totalW, h, this.paletteAttr('CONTENT_FRAME'), this.parentFrame);
         this.listFrame.open();
         this.listFrame.word_wrap = true;
         this.setBackgroundFrame(this.listFrame)
         if (typeof this.registerFrame === 'function') this.registerFrame(this.listFrame);
     }
     if (!this.statusFrame) {
-        this.statusFrame = new Frame(this.parentFrame.x, this.parentFrame.height, this.parentFrame.width, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame);
+        this.statusFrame = new Frame(baseX, baseY + totalH - 1, totalW, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame);
         this.statusFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
     }

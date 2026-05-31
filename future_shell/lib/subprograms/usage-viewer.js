@@ -6,7 +6,7 @@ if (typeof registerModuleExports !== 'function') {
 require('sbbsdefs.js',
     'BG_BLACK', 'BG_BLUE', 'BG_CYAN', 'BG_GREEN', 'BG_MAGENTA', 'BG_BROWN', 'BG_LIGHTGRAY',
     'LIGHTGRAY', 'WHITE', 'YELLOW', 'CYAN', 'MAGENTA', 'GREEN', 'RED', 'BLACK',
-    'KEY_UP', 'KEY_DOWN', 'KEY_PGUP', 'KEY_PGDN', 'KEY_HOME', 'KEY_END', 'KEY_LEFT', 'KEY_RIGHT'
+    'KEY_UP', 'KEY_DOWN', 'KEY_PAGEUP', 'KEY_PAGEDN', 'KEY_HOME', 'KEY_END', 'KEY_LEFT', 'KEY_RIGHT'
 );
 
 try { if (typeof Icon !== 'function') load('future_shell/lib/shell/icon.js'); } catch (e) { }
@@ -15,8 +15,12 @@ try { if (typeof SubprogramHotspotHelper !== 'function') load('future_shell/lib/
 
 if (typeof KEY_UP === 'undefined') var KEY_UP = 0x4800;
 if (typeof KEY_DOWN === 'undefined') var KEY_DOWN = 0x5000;
-if (typeof KEY_PGUP === 'undefined') var KEY_PGUP = 0x4900;
-if (typeof KEY_PGDN === 'undefined') var KEY_PGDN = 0x5100;
+// Synchronet delivers Page Up/Down from console.inkey() as the control-char
+// strings KEY_PAGEUP ('\x10', ctrl-p) and KEY_PAGEDN ('\x0e', ctrl-n). There is
+// no KEY_PGUP/KEY_PGDN in Synchronet; the old numeric scan-code fallbacks here
+// never matched a real keypress, which is why paging did nothing.
+if (typeof KEY_PAGEUP === 'undefined') var KEY_PAGEUP = '\x10';
+if (typeof KEY_PAGEDN === 'undefined') var KEY_PAGEDN = '\x0e';
 if (typeof KEY_HOME === 'undefined') var KEY_HOME = 0x4700;
 if (typeof KEY_END === 'undefined') var KEY_END = 0x4F00;
 if (typeof KEY_LEFT === 'undefined') var KEY_LEFT = 0x4B00;
@@ -315,27 +319,36 @@ UsageViewer.prototype._loadData = function () {
 UsageViewer.prototype.ensureFrames = function () {
     var host = this.hostFrame || this.parentFrame;
     if (!host) return;
-    var width = host.width;
-    var height = host.height;
-    // Defensive guard: if host not yet opened or has invalid dimensions, skip this cycle
-    if (typeof width !== 'number' || typeof height !== 'number' || width <= 0 || height <= 0) {
-        try { dbug('[usage-viewer] ensureFrames skipped (host dims invalid w=' + width + ' h=' + height + ')', 'usage'); } catch (_) { }
+    // Span the full display: header on the very first row, footer on the very
+    // last row. The host frame the shell hands us stops short of the bottom of
+    // the screen (it sits inside the shell's "view" region), so deriving the
+    // footer position straight from the host leaves a dead row or two beneath
+    // it. Walk up to the top-level frame and use its full extent instead.
+    // Bounds are checked against the shared display (the whole screen), not the
+    // parent frame, so child frames may safely cover the rows below the host.
+    var rootFrame = host;
+    while (rootFrame.parent) rootFrame = rootFrame.parent;
+    var originX = rootFrame.x;
+    var topY = rootFrame.y;
+    var width = rootFrame.width;
+    var fullHeight = rootFrame.height;
+    // Defensive guard: if frames not yet opened or have invalid dimensions, skip this cycle
+    if (typeof width !== 'number' || typeof fullHeight !== 'number' || width <= 0 || fullHeight <= 0) {
+        try { dbug('[usage-viewer] ensureFrames skipped (root dims invalid w=' + width + ' h=' + fullHeight + ')', 'usage'); } catch (_) { }
         return;
     }
-    if (height < 2) height = 2;
-    // Frame layout: header at top, padding row, list below, footer at bottom
+    if (fullHeight < 2) fullHeight = 2;
+    // Frame layout: header at top, padding row, list below, footer on last row
     var headerHeight = 5; // Space for back button and header info (lines 1-5)
     var paddingHeight = 1; // Visual breathing room between header and list
-    var footerHeight = 1; // Reserved for footer
-    var listHeight = Math.max(1, height - headerHeight - paddingHeight - footerHeight);
-    // Ensure we never create a frame taller than the host, otherwise Synchronet frame.js throws
-    if (listHeight < 1) listHeight = 1;
-    var detailHeight = 0; // deprecated (still keep frame for compatibility)
-    var headerY = host.y; // At the top of the screen
-    var listY = host.y + headerHeight + paddingHeight; // Below the header with padding
+    var footerHeight = 1; // Reserved for footer (always the last row)
+    var headerY = topY; // At the top of the screen
+    var footerY = topY + fullHeight - 1; // The very last row
+    var listY = topY + headerHeight + paddingHeight; // Below the header with padding
+    var listHeight = Math.max(1, (footerY - footerHeight) - listY + 1);
     if (this.listFrame) {
         var needsListRebuild = this.listFrame.width !== width || this.listFrame.height !== listHeight
-            || this.listFrame.x !== host.x || this.listFrame.y !== listY;
+            || this.listFrame.x !== originX || this.listFrame.y !== listY;
         if (needsListRebuild) {
             try { this.listFrame.close(); } catch (eCloseList) { }
             this.listFrame = null;
@@ -343,7 +356,7 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.listFrame) {
         var attr = this.paletteAttr('LIST') || (BG_BLACK | LIGHTGRAY);
-        this.listFrame = new Frame(host.x, listY, width, listHeight, WHITE | BG_BLUE || this.paletteAttr('CONTENT_FRAME'), this.hostFrame || this.parentFrame);
+        this.listFrame = new Frame(originX, listY, width, listHeight, WHITE | BG_BLUE || this.paletteAttr('CONTENT_FRAME'), this.hostFrame || this.parentFrame);
 
         this.listFrame.open();
         this.registerFrame(this.listFrame);
@@ -351,7 +364,7 @@ UsageViewer.prototype.ensureFrames = function () {
     this.setBackgroundFrame(this.listFrame);
     if (this.headerFrame) {
         var needsHeaderRebuild = this.headerFrame.width !== width || this.headerFrame.height !== headerHeight
-            || this.headerFrame.x !== host.x || this.headerFrame.y !== headerY;
+            || this.headerFrame.x !== originX || this.headerFrame.y !== headerY;
         if (needsHeaderRebuild) {
             try { this.headerFrame.close(); } catch (eCloseHeader) { }
             this.headerFrame = null;
@@ -359,13 +372,13 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.headerFrame) {
         var attr = this.paletteAttr('HEADER_FRAME') || (BG_BLUE | LIGHTGRAY);
-        this.headerFrame = new Frame(host.x, headerY, width, headerHeight, attr, this.hostFrame || this.parentFrame);
+        this.headerFrame = new Frame(originX, headerY, width, headerHeight, attr, this.hostFrame || this.parentFrame);
         try { this.headerFrame.open(); } catch (eDF) { }
         this.registerFrame(this.headerFrame);
     }
     if (this.footerFrame) {
-        var needsFooterRebuild = this.footerFrame.width !== width || this.footerFrame.height !== detailHeight
-            || this.footerFrame.x !== host.x || this.footerFrame.y !== host.y + host.height - detailHeight;
+        var needsFooterRebuild = this.footerFrame.width !== width || this.footerFrame.height !== footerHeight
+            || this.footerFrame.x !== originX || this.footerFrame.y !== footerY;
         if (needsFooterRebuild) {
             try { this.footerFrame.close(); } catch (eCloseFooter) { }
             this.footerFrame = null;
@@ -373,7 +386,7 @@ UsageViewer.prototype.ensureFrames = function () {
     }
     if (!this.footerFrame) {
         var footerAttr = this.paletteAttr('FOOTER_FRAME') || (BG_BLUE | LIGHTGRAY);
-        this.footerFrame = new Frame(this.parentFrame.x, this.parentFrame.height, this.parentFrame.width, 1, footerAttr, this.hostFrame || this.parentFrame);
+        this.footerFrame = new Frame(originX, footerY, width, footerHeight, footerAttr, this.hostFrame || this.parentFrame);
         try { this.footerFrame.open(); } catch (eFF) { }
         this.registerFrame(this.footerFrame);
     }
@@ -573,6 +586,9 @@ UsageViewer.prototype.draw = function () {
     var usedRows = (maxVisible * step) - spacer; // last block doesn't need trailing spacer
     var leftover = availableRows - usedRows;
     if (leftover >= blockHeight) maxVisible++;
+    // Remember how many program blocks fit on screen so PgUp/PgDn can move a
+    // full page of items at a time (each item is a multi-row block).
+    this._pageSize = maxVisible;
     // Adjust scroll window to keep selection visible
     if (this.programIndex < this.programTop) this.programTop = this.programIndex;
     while (this.programIndex >= this.programTop + maxVisible) this.programTop++;
@@ -745,14 +761,19 @@ UsageViewer.prototype.handleKey = function (key) {
                 this.draw();
             }
             return;
-        case KEY_PGUP:
-            this.programIndex = Math.max(0, this.programIndex - (this.listFrame ? Math.max(1, this.listFrame.height - 2) : 5));
+        case KEY_PAGEUP:
+        case '\x10': {
+            var pageUp = Math.max(1, this._pageSize || 1);
+            this.programIndex = Math.max(0, this.programIndex - pageUp);
             if (this.programIndex > maxIndex) this.programIndex = maxIndex;
             this._ensureSelectionVisible();
             this.draw();
             return;
-        case KEY_PGDN: {
-            this.programIndex = Math.min(maxIndex, this.programIndex + (this.listFrame ? Math.max(1, this.listFrame.height - 2) : 5));
+        }
+        case KEY_PAGEDN:
+        case '\x0e': {
+            var pageDown = Math.max(1, this._pageSize || 1);
+            this.programIndex = Math.min(maxIndex, this.programIndex + pageDown);
             if (this.programIndex < 0) this.programIndex = 0;
             this._ensureSelectionVisible();
             this.draw(); return;
@@ -1734,14 +1755,23 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     // Use absolute positioning: df.x, df.y provide the base, baseY is relative to df
     var absX = df.x || 1;
     var absY = (df.y || 1) + baseY - 1;  // Convert relative baseY to absolute
-    var blockFrame = new Frame(absX, absY, width, height, attr, this.hostFrame || this.parentFrame);
+    // When selected, grow the bordered box by one row at the bottom so the
+    // bottom border lands on the spacer row beneath the block instead of
+    // clipping the last row of the icon. Cap to the rows remaining in the list
+    // frame so we never draw past its bottom edge.
+    var boxHeight = height;
+    if (isSelected) {
+        var maxBoxHeight = (df.y + df.height) - absY; // rows from absY to bottom of list frame
+        boxHeight = Math.min(height + 1, maxBoxHeight);
+    }
+    var blockFrame = new Frame(absX, absY, width, boxHeight, attr, this.hostFrame || this.parentFrame);
     blockFrame.transparent = true;
     try { blockFrame.open(); } catch (e) { }
     blockFrame.clear(attr);
     this._programFrames.push(blockFrame);
 
     // Draw white border frame around selected item
-    if (isSelected && width >= 3 && height >= 2) {
+    if (isSelected && width >= 3 && boxHeight >= 2) {
         var borderAttr = BG_BLACK | WHITE;
         // Box-drawing characters (CP437): ┌\xDA ┐\xBF └\xC0 ┘\xD9 ─\xC4 │\xB3
         var TL = '\xDA', TR = '\xBF', BL = '\xC0', BR = '\xD9', HZ = '\xC4', VT = '\xB3';
@@ -1756,16 +1786,16 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
         blockFrame.gotoxy(width, 1);
         blockFrame.putmsg(TR);
         // Bottom border
-        blockFrame.gotoxy(1, height);
+        blockFrame.gotoxy(1, boxHeight);
         blockFrame.putmsg(BL);
         for (var bx = 2; bx < width; bx++) {
-            blockFrame.gotoxy(bx, height);
+            blockFrame.gotoxy(bx, boxHeight);
             blockFrame.putmsg(HZ);
         }
-        blockFrame.gotoxy(width, height);
+        blockFrame.gotoxy(width, boxHeight);
         blockFrame.putmsg(BR);
         // Side borders
-        for (var by = 2; by < height; by++) {
+        for (var by = 2; by < boxHeight; by++) {
             blockFrame.gotoxy(1, by);
             blockFrame.putmsg(VT);
             blockFrame.gotoxy(width, by);
@@ -1779,8 +1809,9 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     var iconHeight = (typeof ICSH_CONSTANTS !== 'undefined' && ICSH_CONSTANTS && ICSH_CONSTANTS.ICON_H) ? ICSH_CONSTANTS.ICON_H : 6;
     // Adjust padding when selected to account for border
     var borderOffset = isSelected ? 1 : 0;
-    // Reduce available height when selected (border takes 2 rows)
-    var availableHeight = isSelected ? Math.max(1, height - 2) : height;
+    // Reduce available height when selected (border takes 2 rows). The selected
+    // box was grown by one row above, so the icon keeps its full height.
+    var availableHeight = isSelected ? Math.max(1, boxHeight - 2) : boxHeight;
     iconHeight = Math.min(iconHeight, availableHeight);
     var leftPad = 1 + borderOffset;
     var gap = 2;
@@ -1829,7 +1860,7 @@ UsageViewer.prototype._drawProgramBlock = function (df, baseY, height, prog, ind
     lines.push(this.colorize('TEXT_TOTAL', 'Total players:', { reset: false }) + '  ' + this.colorize('TEXT_TOTAL', uCount + ''));
     lines.push('');
     // Adjust available rows when selected (border takes 2 rows)
-    var maxRows = isSelected ? height - 2 : height;
+    var maxRows = isSelected ? boxHeight - 2 : boxHeight;
     var rowOffset = borderOffset; // Start at row 2 when selected (after top border)
     for (var row = 0; row < maxRows && row < lines.length; row++) {
         var line = lines[row] || '';

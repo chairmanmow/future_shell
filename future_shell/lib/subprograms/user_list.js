@@ -64,12 +64,18 @@ UserList.prototype.applySort = function () {
 
 UserList.prototype.ensureFrames = function () {
 	if (!this.parentFrame) return;
+	// Status line belongs on the very last screen row. The shell's "view" frame
+	// stops short of the bottom, so derive the extent from the top-level frame
+	// instead of parentFrame.height.
+	var rootFrame = this.parentFrame;
+	while (rootFrame.parent) rootFrame = rootFrame.parent;
+	var lastY = rootFrame.y + Math.max(2, rootFrame.height) - 1;
 	if (!this.listFrame) {
-		var h = Math.max(1, this.parentFrame.height - 1);
+		var h = Math.max(1, lastY - 1);
 		this.listFrame = new Frame(1, 1, this.parentFrame.width, h, ICSH_ATTR('USERS_LIST'), this.parentFrame); this.listFrame.open();
 	}
 	if (!this.statusFrame) {
-		this.statusFrame = new Frame(1, this.parentFrame.height, this.parentFrame.width, 1, ICSH_ATTR('USERS_STATUS'), this.parentFrame); this.statusFrame.open();
+		this.statusFrame = new Frame(1, lastY, this.parentFrame.width, 1, ICSH_ATTR('USERS_STATUS'), this.parentFrame); this.statusFrame.open();
 	}
 };
 
