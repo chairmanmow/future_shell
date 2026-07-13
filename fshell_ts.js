@@ -3,6 +3,11 @@
  * Target of [shell:FSHELL_TS] in ctrl/main.ini (see fshell_ts/PORTING.md,
  * "Cutover").
  *
+ * CANONICAL COPY: launcher/fshell_ts.js in the fshell_ts repository.
+ * DEPLOYED COPY:  /sbbs/mods/fshell_ts.js — Synchronet resolves command
+ * shells from the mods/exec ROOT only, so this stub is copied there while
+ * everything else lives in the repo. Keep the two in sync.
+ *
  * This stub is deliberately the ONLY uncompiled JavaScript in the fshell_ts
  * system: the supervisor (crash restart/backoff/fallback/logoff policy)
  * lives INSIDE the bundle where it is typed and tested. The stub's single

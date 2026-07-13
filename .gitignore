@@ -25,3 +25,5 @@ future_shell/lib/3rdp/mrc/*.ini
 !future_shell/lib/3rdp/mrc/*.example.ini
 json-service-private.js
 avatars.js
+# fshell_ts is its own private repository (github.com/chairmanmow/fshell_ts)
+/fshell_ts/
