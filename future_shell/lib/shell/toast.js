@@ -316,9 +316,9 @@ function Toast(options) {
 
 Toast.prototype._renderProgramIcon = function (iconName) {
     if (!this.programIconFrame || !iconName) return;
-    var iconBase = 'future_shell/assets/' + iconName;
-    var binPath = system.mods_dir + iconBase + '.bin';
-    var ansPath = system.mods_dir + iconBase + '.ans';
+    var iconBase = system.text_dir + 'icons/' + iconName;
+    var binPath = iconBase + '.bin';
+    var ansPath = iconBase + '.ans';
     try {
         if (file_exists(binPath)) {
             this.programIconFrame.load(binPath, this.programIconFrame.width, this.programIconFrame.height);

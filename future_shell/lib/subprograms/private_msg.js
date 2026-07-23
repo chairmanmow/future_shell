@@ -13,6 +13,12 @@ if (typeof registerModuleExports !== 'function') {
 require('sbbsdefs.js', 'SS_USERON');
 require('text.js', 'TelegramFmt');
 
+// Spinning-globe backdrop for the USERS view (self-contained copy under
+// future_shell; see lib/effects/ascii_globe.js). Optional — the view degrades
+// gracefully to a plain background if the module or its texture is unavailable.
+var GlobeMod = null;
+try { GlobeMod = load({}, 'future_shell/lib/effects/ascii_globe.js'); } catch (_globeErr) { GlobeMod = null; }
+
 function PrivateMsg(opts) {
     opts = opts || {};
     Subprogram.call(this, { name: 'private-msg', parentFrame: opts.parentFrame, shell: opts.shell });
@@ -36,6 +42,10 @@ function PrivateMsg(opts) {
     this.inboxText = '';
     this.outputFrame = null;
     this.inputFrame = null;
+    this.globeFrame = null;
+    this._globe = null;
+    this._lastGlobeTick = 0;
+    this.GLOBE_TICK_MS = 140;
     this._gridCols = 1;
     this._gridRows = 1;
     this._gridPageSize = 1;
@@ -174,11 +184,25 @@ PrivateMsg.prototype.cleanup = function () {
     if (this.hotspots) { try { this.hotspots.clear(); } catch (_) { } }
     try { if (this.outputFrame) this.outputFrame.close(); } catch (e) { }
     try { if (this.inputFrame) this.inputFrame.close(); } catch (e) { }
+    try { if (this.globeFrame) this.globeFrame.close(); } catch (e) { }
     this.outputFrame = this.inputFrame = null;
+    this.globeFrame = this._globe = null;
     if (this.lib && this.lib.sock) {
         try { this.lib.sock.close(); } catch (e) { }
     }
     Subprogram.prototype.cleanup.call(this);
+};
+
+// Animation tick — the shell calls this every ~50ms while we're the active
+// subprogram (and never while the screensaver is up, so the globe auto-pauses).
+// Only spin in the USERS view; throttle to GLOBE_TICK_MS. tick() cycles the
+// globe frame itself and never reorders the stack.
+PrivateMsg.prototype.cycle = function () {
+    if (!this.running || this.view !== 'USERS' || !this._globe || !this.globeFrame) return;
+    var now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : (time() * 1000);
+    if (now - this._lastGlobeTick < this.GLOBE_TICK_MS) return;
+    this._lastGlobeTick = now;
+    try { this._globe.tick(); } catch (_) { }
 };
 
 PrivateMsg.prototype._ensureFrames = function () {
@@ -189,10 +213,30 @@ PrivateMsg.prototype._ensureFrames = function () {
     var rootFrame = this.parentFrame;
     while (rootFrame.parent) rootFrame = rootFrame.parent;
     var lastY = rootFrame.y + Math.max(2, rootFrame.height) - 1;
+    var outH = Math.max(1, lastY - 1);
+    // Globe backdrop: opened BEFORE outputFrame so it composites BELOW it. The
+    // transparent outputFrame lets it show through the gutters between tiles in
+    // the USERS view. Sized to the output region (never the console). A resize
+    // closes+nulls these frames (subprogram _releaseFrameRefs); re-running here
+    // recreates the globe and re-binds the engine, keeping it resize-safe.
+    if (!this.globeFrame && GlobeMod && GlobeMod.AsciiGlobe) {
+        try {
+            var gw = Math.max(8, Math.min(this.parentFrame.width, outH * 2));
+            var gh = Math.max(6, outH - 2);
+            var gx = Math.max(1, Math.floor((this.parentFrame.width - gw) / 2) + 1);
+            var gy = Math.max(1, Math.floor((outH - gh) / 2) + 1);
+            this.globeFrame = new Frame(gx, gy, gw, gh, BG_BLACK | BLACK, this.parentFrame);
+            this.globeFrame.transparent = true;
+            this.globeFrame.open();
+            this._globe = new GlobeMod.AsciiGlobe(this.globeFrame);
+        } catch (_gfe) {
+            this.globeFrame = null;
+            this._globe = null;
+        }
+    }
     if (!this.outputFrame) {
-        var h = Math.max(1, lastY - 1);
         var attr = this.paletteAttr('NORMAL', BG_BLACK | LIGHTGRAY);
-        this.outputFrame = new Frame(1, 1, this.parentFrame.width, h, attr, this.parentFrame);
+        this.outputFrame = new Frame(1, 1, this.parentFrame.width, outH, attr, this.parentFrame);
         this.outputFrame.open();
     }
     if (!this.inputFrame) {
@@ -204,6 +248,12 @@ PrivateMsg.prototype._ensureFrames = function () {
 
 PrivateMsg.prototype._flushFrames = function (forceInvalidate) {
     forceInvalidate = !!forceInvalidate;
+    // Keep the stack order globe < output < input. Top the globe first (USERS
+    // view only) so the grid and input bar always composite above it; the globe
+    // tick() never calls .top(), so animation can't reorder the stack.
+    if (this.view === 'USERS' && this.globeFrame) {
+        try { this.globeFrame.top(); } catch (_) { }
+    }
     if (this.outputFrame) {
         try { this.outputFrame.top(); } catch (_) { }
         try {
@@ -228,6 +278,10 @@ PrivateMsg.prototype.draw = function () {
     this._ensureFrames();
     if (!this.outputFrame) return;
     var o = this.outputFrame;
+    // Only the USERS view reveals the globe; make the output frame transparent
+    // there so unwritten cells fall through to the globe, opaque elsewhere so
+    // INBOX/COMPOSE/DEST keep their solid black backdrop.
+    o.transparent = (this.view === 'USERS' && !!this.globeFrame);
     o.clear(); o.gotoxy(1, 1);
     // Clear hotspots when not in USERS view
     if (this.view !== 'USERS') {
@@ -264,6 +318,33 @@ PrivateMsg.prototype._drawInbox = function (o) {
     }
 };
 
+// Frame-local 1-based X of a tile's inner content column.
+PrivateMsg.prototype._cellInnerX = function (col) {
+    return col * PrivateMsg.SLOT_W + PrivateMsg.CELL_PAD + 1;
+};
+
+// Draw one tile text row. Non-selected cells write ONLY the visible glyph run
+// (gutters stay unwritten -> transparent -> the globe shows through). Selected
+// cells fill the full cell width so the highlight reads as a solid block.
+PrivateMsg.prototype._drawCell = function (o, col, y, color, text, fill) {
+    var CW = PrivateMsg.CELL_W;
+    text = (typeof text === 'string') ? text : '';
+    if (text.length > CW) text = text.substr(0, CW - 1) + '\xfa';
+    var ix = this._cellInnerX(col);
+    if (fill) {
+        var left = Math.floor((CW - text.length) / 2);
+        var s = '';
+        for (var i = 0; i < left; i++) s += ' ';
+        s += text;
+        while (s.length < CW) s += ' ';
+        o.gotoxy(ix, y);
+        o.putmsg(color + s + '\x01n');
+    } else {
+        o.gotoxy(ix + Math.floor((CW - text.length) / 2), y);
+        o.putmsg(color + text + '\x01n');
+    }
+};
+
 PrivateMsg.prototype._drawUsers = function (o) {
     var hdr = this.colorCode('HEADER');
     var norm = this.colorCode('NORMAL');
@@ -273,7 +354,6 @@ PrivateMsg.prototype._drawUsers = function (o) {
     var SW = PrivateMsg.SLOT_W;
     var AH = PrivateMsg.AVA_H;
     var CH = PrivateMsg.CELL_H;
-    var margin = _repeat(' ', PrivateMsg.CELL_PAD);
 
     var cols = Math.max(1, Math.floor(W / SW));
     var availH = Math.max(1, this.outputFrame.height - 2); // minus header+divider
@@ -327,70 +407,43 @@ PrivateMsg.prototype._drawUsers = function (o) {
         var avatars = [];
         for (var gc = 0; gc < cells.length; gc++) avatars.push(this._getAvatarRows(cells[gc].u));
 
-        // Row 1: Username
-        var line = '';
+        // Frame-local 1-based row of this tile group's first line (after the
+        // header line + divider). Each tile is CH rows tall.
+        var tileTop = headerRows + gr * CH + 1;
+
         for (var gc = 0; gc < cells.length; gc++) {
             var sel = (cells[gc].idx === this.cursorIdx);
-            var uColor = sel ? '\x01n\x016\x01h\x01w' : '\x01h\x01c';
-            line += margin + uColor + this._centerText(cells[gc].u.name, CW) + '\x01n' + margin;
-        }
-        o.putmsg(line + '\r\n');
+            var u = cells[gc].u;
+            var y = tileTop;
 
-        // Row 2: BBS name
-        line = '';
-        for (var gc = 0; gc < cells.length; gc++) {
-            var sel = (cells[gc].idx === this.cursorIdx);
-            var bColor = sel ? '\x01n\x016\x01h\x01w' : '\x01h\x01g';
-            line += margin + bColor + this._centerText(cells[gc].u.bbs || '', CW) + '\x01n' + margin;
-        }
-        o.putmsg(line + '\r\n');
-
-        // Rows 3-8: Avatar
-        for (var ar = 0; ar < AH; ar++) {
-            line = '';
-            for (var gc = 0; gc < cells.length; gc++) {
+            // Username
+            this._drawCell(o, gc, y++, sel ? '\x01n\x016\x01h\x01w' : '\x01h\x01c', u.name, sel);
+            // BBS name
+            this._drawCell(o, gc, y++, sel ? '\x01n\x016\x01h\x01w' : '\x01h\x01g', u.bbs || '', sel);
+            // Avatar rows — for users without one, leave the rows unwritten so
+            // the globe shows through (just a centered "no avatar" hint).
+            for (var ar = 0; ar < AH; ar++, y++) {
                 if (avatars[gc]) {
-                    line += margin + avatars[gc][ar] + margin;
-                } else {
-                    if (ar === 2) {
-                        line += margin + '\x01n\x01k\x01h' + this._centerText('no avatar', CW) + '\x01n' + margin;
-                    } else {
-                        line += margin + _repeat(' ', CW) + margin;
-                    }
+                    o.gotoxy(this._cellInnerX(gc), y);
+                    o.putmsg(avatars[gc][ar]);
+                } else if (ar === 2) {
+                    this._drawCell(o, gc, y, '\x01n\x01k\x01h', 'no avatar', false);
                 }
             }
-            o.putmsg(line + '\r\n');
-        }
+            // Separator
+            this._drawCell(o, gc, y++, sel ? '\x01n\x016\x01h\x01c' : '\x01n\x01c',
+                _repeat('\xc4', Math.min(CW - 2, 14)), sel);
+            // Activity
+            this._drawCell(o, gc, y, sel ? '\x01n\x016\x01h\x01y' : '\x01h\x01y', u.action || '', sel);
 
-        // Row 9: Separator (highlight selected)
-        line = '';
-        for (var gc = 0; gc < cells.length; gc++) {
-            var sel = (cells[gc].idx === this.cursorIdx);
-            var sepColor = sel ? '\x01n\x016\x01h\x01c' : '\x01n\x01c';
-            line += margin + sepColor + this._centerText(_repeat('\xc4', Math.min(CW - 2, 14)), CW) + '\x01n' + margin;
-        }
-        o.putmsg(line + '\r\n');
-
-        // Row 10: Activity
-        line = '';
-        for (var gc = 0; gc < cells.length; gc++) {
-            var sel = (cells[gc].idx === this.cursorIdx);
-            var aColor = sel ? '\x01n\x016\x01h\x01y' : '\x01h\x01y';
-            line += margin + aColor + this._centerText(cells[gc].u.action || '', CW) + '\x01n' + margin;
-        }
-        o.putmsg(line + '\r\n');
-
-        // Build hotspot definitions for each tile in this grid row
-        for (var gc = 0; gc < cells.length; gc++) {
+            // Hotspot rectangle for this tile (absolute coords, unchanged)
             var tileIndex = cells[gc].idx - startIdx; // page-relative index for hotspot key
             if (tileIndex < 36) {
                 var cmd = (tileIndex < 10) ? String(tileIndex) : String.fromCharCode('A'.charCodeAt(0) + (tileIndex - 10));
-                var hx = oX + gc * SW;                            // absolute X
-                var hy = oY + headerRows + gr * CH;               // absolute Y (top of tile)
                 hotspotDefs.push({
                     key: cmd,
-                    x: hx,
-                    y: hy,
+                    x: oX + gc * SW,                       // absolute X
+                    y: oY + headerRows + gr * CH,          // absolute Y (top of tile)
                     width: Math.max(1, SW),
                     height: Math.max(1, CH),
                     swallow: false,
@@ -400,6 +453,14 @@ PrivateMsg.prototype._drawUsers = function (o) {
                 this._hotspotMap[cmd] = cells[gc].idx;
             }
         }
+    }
+
+    // Feed the globe the same user set so its pins track who's online.
+    if (this._globe && GlobeMod) {
+        try {
+            if (GlobeMod.rebuildActiveMarkerColorMap) GlobeMod.rebuildActiveMarkerColorMap(this.userList);
+            this._globe.setPins(GlobeMod.buildGlobePins(this.userList));
+        } catch (_pinErr) { }
     }
 
     // Activate hotspots
@@ -775,6 +836,73 @@ PrivateMsg.prototype._pollResponses = function (timeoutMs) {
     }
 };
 
+// webv4 records each logged-in web user as an INI session file at
+// data/user/<usernum>.web and treats it as live while the file mtime is inside
+// the [web] inactivity window. We mirror that convention (same as the
+// webv4_custom sidebar's nodelist.js) to surface our own web users here.
+PrivateMsg.prototype._webConfig = function () {
+    if (this._webCfg) return this._webCfg;
+    var cfg = { inactivity: 900, guestNum: 0 };
+    try {
+        var f = new File(system.ctrl_dir + 'modopts.ini');
+        if (f.open('r')) {
+            var inact = f.iniGetValue('web', 'inactivity', 900);
+            if (inact > 0) cfg.inactivity = inact;
+            var guestAlias = f.iniGetValue('web', 'guest', 'Guest');
+            f.close();
+            if (guestAlias) { try { cfg.guestNum = system.matchuser(guestAlias) || 0; } catch (e) { } }
+        }
+    } catch (e) { }
+    this._webCfg = cfg;
+    return cfg;
+};
+
+PrivateMsg.prototype._readWebSession = function (usernum) {
+    try {
+        var f = new File(format('%suser/%04d.web', system.data_dir, usernum));
+        if (!f.open('r')) return null;
+        var o = f.iniGetObject();
+        f.close();
+        return o || null;
+    } catch (e) { return null; }
+};
+
+// Scan webv4 sessions for live web users. `seen` is a map of userNums already
+// listed (terminal nodes + self); fresh web-only users are added and recorded
+// back into it.
+PrivateMsg.prototype._fetchLocalWebUsers = function (seen) {
+    var out = [];
+    var cfg = this._webConfig();
+    var files;
+    try { files = directory(system.data_dir + 'user/*.web'); } catch (e) { return out; }
+    if (!files || !files.length) return out;
+    for (var i = 0; i < files.length; i++) {
+        var path = files[i];
+        var num = parseInt(file_getname(path), 10);
+        if (!num || num < 1 || num > system.lastuser) continue;
+        if (seen && seen[num]) continue;                          // already a node / self
+        if (time() - file_date(path) >= cfg.inactivity) continue; // stale / logged out
+        if (cfg.guestNum && num === cfg.guestNum) continue;       // hide shared guest account
+        var usr;
+        try { usr = new User(num); } catch (e) { continue; }
+        if (!usr || !usr.alias) continue;
+        if (usr.settings & (USER_DELETED | USER_INACTIVE)) continue;
+        if (usr.settings & USER_QUIET) continue;                  // user opted out of the online list
+        var sess = this._readWebSession(num) || {};
+        var act = String(sess.action || sess.xtrn || '');
+        out.push({
+            name: usr.alias,
+            host: system.inetaddr || system.host_name || 'localhost',
+            bbs: system.name + ' (web)',
+            action: act || 'browsing',
+            age: '', sex: '', timeon: 0,
+            local: true, web: true, userNum: num
+        });
+        if (seen) seen[num] = true;
+    }
+    return out;
+};
+
 PrivateMsg.prototype._buildUserList = function () {
     this.userList = [];
     if (!this.lib || !this.lib.sys_list) return;
@@ -789,12 +917,17 @@ PrivateMsg.prototype._buildUserList = function () {
             });
         }
     }
+    // Track userNums already listed (terminal nodes) plus self, so a user who
+    // is connected both ways — or the current user — isn't listed twice.
+    var seen = {};
+    if (typeof user !== 'undefined' && user.number) seen[user.number] = true;
     for (var n = 0; n < system.nodes; n++) {
         try {
             var node = system.get_node(n + 1);
             if (!node || node.status !== NODE_INUSE) continue;
             var uname = system.username(node.useron);
             if (!uname || node.useron === user.number) continue;
+            seen[node.useron] = true;
             this.userList.push({
                 name: uname, host: system.inetaddr || system.host_name || 'localhost',
                 bbs: system.name + ' (local)', action: localAction(node),
@@ -802,6 +935,12 @@ PrivateMsg.prototype._buildUserList = function () {
             });
         } catch (e) { }
     }
+    // Local web users (webv4 sessions; they hold no node). host=system.inetaddr
+    // makes them messageable through the existing MSP telegram path unchanged.
+    try {
+        var webUsers = this._fetchLocalWebUsers(seen);
+        for (var w = 0; w < webUsers.length; w++) this.userList.push(webUsers[w]);
+    } catch (e) { }
     this.userList.sort(function (a, b) {
         if (a.local && !b.local) return -1;
         if (!a.local && b.local) return 1;

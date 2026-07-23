@@ -341,6 +341,28 @@ var BUILTIN_ACTIONS = {
 			instance.timer = this.timer;
 		}
 	}),
+	newsreader_settings: new SubprogramActionHandler('NewsreaderSettings', {
+		module: 'future_shell/lib/subprograms/newsreader-settings.js',
+		queueName: 'newsreader-settings',
+		instanceProperty: 'newsreaderSettingsSub',
+		loadFailureMessage: 'Failed loading newsreader-settings.js ',
+		missingMessage: 'NewsreaderSettings class missing after load',
+		options: function () {
+			return {
+				parentFrame: this.root,
+				shell: this,
+				timer: this.timer,
+				userNumber: (typeof user !== 'undefined' && user && typeof user.number === 'number') ? user.number : null,
+				userAlias: (typeof user !== 'undefined' && user && user.alias) ? user.alias : null
+			};
+		},
+		onReuse: function (instance) {
+			if (!instance) return;
+			instance.parentFrame = this.root;
+			instance.shell = this;
+			instance.timer = this.timer;
+		}
+	}),
 	ticker_settings: new SubprogramActionHandler('TickerSettings', {
 		module: 'future_shell/lib/subprograms/ticker_settings.js',
 		queueName: 'ticker-settings',

@@ -193,10 +193,28 @@ Subprogram.prototype.exit = function () {
 };
 
 Subprogram.prototype.handleKey = function (key) {
+    key = this._resolveHotspotToken(key);
+    if (key === undefined) return true; // mid-token: consumed, awaiting more chars
     if (this._handleKey && typeof this._handleKey === 'function') {
         return this._handleKey(key);
     }
     if (key === '\x1B') this.exit();
+};
+
+// Buffer incoming keys and collapse a complete pipe-delimited hotspot token
+// (|m3| etc.) into the single dispatch key the subprogram's handler expects.
+// Returns the original key when it is not part of any active token, the
+// matched token string when one completes, or undefined while a partial token
+// is still being assembled (caller should treat undefined as "consumed").
+// Subprograms that override handleKey() should call this at the top of their
+// override; the base handleKey() above does it automatically.
+Subprogram.prototype._resolveHotspotToken = function (key) {
+    if (!this.hotspots || typeof this.hotspots.matchKey !== 'function') return key;
+    var m = this.hotspots.matchKey(key);
+    if (!m) return key;
+    if (m.pending) return undefined;
+    if (m.token) return m.token;
+    return key;
 };
 
 Subprogram.prototype.draw = function () { };

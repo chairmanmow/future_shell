@@ -1451,7 +1451,7 @@ UsageViewer.prototype._ensureIconLookup = function () {
     this._iconLookup = {};
     var dirBase = system.mods_dir;
     if (dirBase && dirBase.slice(-1) !== '/' && dirBase.slice(-1) !== '\\') dirBase += '/';
-    dirBase += 'future_shell/assets/';
+    dirBase = system.text_dir + 'icons/';
     var patterns = ['*.bin', '*.ans'];
     for (var p = 0; p < patterns.length; p++) {
         var list;
@@ -1714,7 +1714,7 @@ UsageViewer.prototype._renderProgramIcon = function (frame, info) {
     if (info.iconFile && width > 0 && height > 0) {
         var basePath = system.mods_dir;
         if (basePath && basePath.slice(-1) !== '/' && basePath.slice(-1) !== '\\') basePath += '/';
-        basePath += 'future_shell/assets/' + info.iconFile;
+        basePath = system.text_dir + 'icons/' + info.iconFile;
         var binPath = basePath + '.bin';
         var ansPath = basePath + '.ans';
         try {

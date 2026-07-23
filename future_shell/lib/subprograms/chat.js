@@ -9,6 +9,23 @@ if (typeof registerModuleExports !== 'function') {
     try { load('future_shell/lib/util/lazy.js'); } catch (_) { }
 }
 
+// Clickable URLs in chat scrollback. Excludes \x01 (Ctrl-A attr codes) and '|'
+// so the match stops before any color codes or hotspot tokens in the line.
+var _urlPattern = /https?:\/\/[^\s<>"'\x01|]+/gi;
+
+function findUrls(plainText) {
+    if (!plainText || typeof plainText !== 'string') return [];
+    var results = [];
+    var m;
+    _urlPattern.lastIndex = 0;
+    while ((m = _urlPattern.exec(plainText)) !== null) {
+        var url = m[0];
+        url = url.replace(/[).,;:!?]+$/, ''); // trim trailing punctuation
+        results.push({ url: url, index: m.index, length: url.length });
+    }
+    return results;
+}
+
 function Chat(jsonchat, opts) {
     opts = opts || {};
     Subprogram.call(this, {
@@ -18,6 +35,7 @@ function Chat(jsonchat, opts) {
         timer: opts.timer
     });
     this.hotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'chat', layerName: 'chat-controls', priority: 70 });
+    this._urlHotspots = new SubprogramHotspotHelper({ shell: this.shell, owner: 'chat-urls', layerName: 'chat-urls', priority: 69 });
     this.jsonchat = jsonchat; // persistent backend instance
     this.input = "";
     this._inputCursor = 0;      // cursor position in input string
@@ -46,6 +64,9 @@ function Chat(jsonchat, opts) {
     this._hotspotActionMap = {};
     this._hotspotBuffer = '';
     this._hotspotTokenSeq = 0;
+    this._urlHotspotHandlers = {};   // token -> url, rebuilt each transcript render
+    this._urlHotspotCounter = 0;
+    this._pendingUrlHotspotDefs = null;
     this._activeRosterModal = null;
     this.done = null;
     this.lastSender = null; // State tracking for last sender
@@ -364,11 +385,12 @@ Chat.prototype.enter = function (done) {
         this.draw();
         this._done = (typeof done === 'function') ? done : function () { };
     }
-    // Award points for joining chat
+    // Award points for joining chat (via the shell wrapper so the BBScoin
+    // readout updates/flashes).
     try {
         var shell = (typeof IconShell !== 'undefined' && IconShell._activeInstance) ? IconShell._activeInstance : null;
-        if (shell && shell._pointsSystem && typeof shell._pointsSystem.award === 'function') {
-            shell._pointsSystem.award('joinedChat');
+        if (shell && typeof shell.awardPoints === 'function') {
+            shell.awardPoints('joinedChat');
         }
     } catch (e) { /* ignore */ }
     // Start periodic redraw timer (every minute) using Synchronet Timer
@@ -1052,11 +1074,12 @@ Chat.prototype.handleKey = function (key) {
                 time: (new Date()).getTime()
             };
             var chan = (this.jsonchat.channels && this.currentChannel) ? this.jsonchat.channels[this.currentChannel.toUpperCase()] : null;
-            // Award points for sending chat message
+            // Award points for sending chat message (via the shell wrapper so
+            // the BBScoin readout updates/flashes).
             try {
                 var shell = (typeof IconShell !== 'undefined' && IconShell._activeInstance) ? IconShell._activeInstance : null;
-                if (shell && shell._pointsSystem && typeof shell._pointsSystem.award === 'function') {
-                    shell._pointsSystem.award('sentChatMessage');
+                if (shell && typeof shell.awardPoints === 'function') {
+                    shell.awardPoints('sentChatMessage');
                 }
             } catch (e) { /* ignore */ }
             // Render immediately for sender
@@ -1682,6 +1705,7 @@ Chat.prototype._showBitmapViewer = function () {
     this._bitmapViewerActive = true;
     
     // Stash current hotspots and register dismiss hotspot covering entire chat area
+    if (this._urlHotspots) { try { this._urlHotspots.stash(); } catch (_) { } }
     if (this.hotspots) {
         this.hotspots.stash();
         // Register a clickable hotspot to dismiss - covers whole parent frame for easy click-to-close
@@ -1973,6 +1997,7 @@ Chat.prototype._closeBitmapViewer = function () {
     if (this.hotspots) {
         this.hotspots.restore();
     }
+    if (this._urlHotspots) { try { this._urlHotspots.restore(); } catch (_) { } }
     
     this._needsRedraw = true;
     if (this.running) {
@@ -3017,7 +3042,12 @@ Chat.prototype._clearControlHotspots = function (opts) {
         if (opts && opts.hard) this.hotspots.clear();
         else this.hotspots.deactivate();
     }
+    if (this._urlHotspots) {
+        if (opts && opts.hard) this._urlHotspots.clear();
+        else this._urlHotspots.deactivate();
+    }
     this._hotspotActionMap = {};
+    this._urlHotspotHandlers = {};
     this._controlButtonHotkeyMap = {};
     this._hotspotBuffer = '';
 };
@@ -3129,12 +3159,18 @@ Chat.prototype._handleControlHotkey = function (key) {
 };
 
 Chat.prototype._processControlHotspotInput = function (key) {
-    if (!key || !this._hotspotActionMap) return false;
+    if (!key) return false;
+    var urlMap = this._urlHotspotHandlers || {};
     var hasToken = false;
     for (var probe in this._hotspotActionMap) {
         if (Object.prototype.hasOwnProperty.call(this._hotspotActionMap, probe)) {
             hasToken = true;
             break;
+        }
+    }
+    if (!hasToken) {
+        for (var uprobe in urlMap) {
+            if (Object.prototype.hasOwnProperty.call(urlMap, uprobe)) { hasToken = true; break; }
         }
     }
     if (!hasToken) {
@@ -3152,6 +3188,18 @@ Chat.prototype._processControlHotspotInput = function (key) {
             this._hotspotBuffer = '';
         }
     }
+    if (!handled) {
+        for (var ut in urlMap) {
+            if (!Object.prototype.hasOwnProperty.call(urlMap, ut)) continue;
+            if (!ut || !ut.length) continue;
+            if (this._hotspotBuffer.slice(-ut.length) === ut) {
+                this._openChatUrl(urlMap[ut]);
+                this._hotspotBuffer = '';
+                handled = true;
+                break;
+            }
+        }
+    }
     if (handled) return true;
     if (this._hotspotBuffer.length) {
         var keep = false;
@@ -3164,6 +3212,12 @@ Chat.prototype._processControlHotspotInput = function (key) {
             }
         }
         if (!keep) {
+            for (var ut2 in urlMap) {
+                if (!Object.prototype.hasOwnProperty.call(urlMap, ut2)) continue;
+                if (ut2.indexOf(this._hotspotBuffer) === 0) { keep = true; break; }
+            }
+        }
+        if (!keep) {
             this._hotspotBuffer = '';
             return false;
         }
@@ -3171,6 +3225,14 @@ Chat.prototype._processControlHotspotInput = function (key) {
         return true;
     }
     return false;
+};
+
+// Open a URL clicked in the chat scrollback via the shell's text browser.
+Chat.prototype._openChatUrl = function (url) {
+    if (!url) return;
+    if (this.shell && typeof this.shell.openWebsite === 'function') {
+        this.shell.openWebsite(url);
+    }
 };
 
 Chat.prototype.initFrames = function () {
@@ -4259,6 +4321,12 @@ Chat.prototype._renderTranscriptBubbles = function (visibleBlocks, totalHeight) 
     var frame = this.chatTranscriptFrame;
     if (!frame) return;
 
+    // Begin a fresh URL-hotspot pass; _renderBubble accumulates clickable
+    // URL regions, flushed to the hotspot layer once the transcript is drawn.
+    this._urlHotspotHandlers = {};
+    this._urlHotspotCounter = 0;
+    this._pendingUrlHotspotDefs = [];
+
     // Reset renderStart/renderEnd on all visible block groups
     for (var r = 0; r < visibleBlocks.length; r++) {
         if (visibleBlocks[r] && visibleBlocks[r].group) {
@@ -4273,6 +4341,7 @@ Chat.prototype._renderTranscriptBubbles = function (visibleBlocks, totalHeight) 
         var cx = Math.max(1, Math.floor((frame.width - emptyText.length) / 2) + 1);
         frame.gotoxy(cx, Math.max(1, Math.floor(frame.height / 2)));
         frame.putmsg(emptyText, DARKGRAY);
+        this._flushUrlHotspots();
         return;
     }
 
@@ -4289,6 +4358,15 @@ Chat.prototype._renderTranscriptBubbles = function (visibleBlocks, totalHeight) 
             row += 1; // gap between blocks
         }
     }
+
+    this._flushUrlHotspots();
+};
+
+// Push the URL-hotspot regions accumulated during this render onto the layer.
+Chat.prototype._flushUrlHotspots = function () {
+    if (!this._urlHotspots) return;
+    this._urlHotspots.set(this._pendingUrlHotspotDefs || []);
+    this._pendingUrlHotspotDefs = null;
 };
 
 Chat.prototype._renderBubble = function (frame, block, startRow) {
@@ -4328,6 +4406,7 @@ Chat.prototype._renderBubble = function (frame, block, startRow) {
         if (y >= 1 && y <= frame.height) {
             frame.gotoxy(bubbleX, y);
             frame.putmsg(' ' + this._padRight(brow.text || '', block.width - 2) + ' ', bubbleAttr);
+            this._collectUrlHotspots(frame, brow.text, bubbleX, y);
         }
     }
 
@@ -4338,6 +4417,33 @@ Chat.prototype._renderBubble = function (frame, block, startRow) {
     }
 
     return startRow + block.height;
+};
+
+// Find URLs in a rendered bubble row and queue clickable hotspots for them.
+// The row is drawn at frame-relative gotoxy(bubbleX, y) (1-based) with a single
+// leading pad space, so brow.text[0] sits at 1-based display column
+// frame.x + bubbleX. console.add_hotspot expects 0-based screen coords (term->row
+// is documented 0-based; see js_console.cpp), so we subtract 1 on both axes.
+Chat.prototype._collectUrlHotspots = function (frame, text, bubbleX, y) {
+    if (!this._pendingUrlHotspotDefs || !text) return;
+    var urls = findUrls(text);
+    if (!urls.length) return;
+    var baseX = frame.x + bubbleX - 1;      // 0-based screen col of brow.text[0]
+    var hotY = frame.y + y - 2;             // 0-based screen row of this bubble line
+    for (var u = 0; u < urls.length; u++) {
+        var info = urls[u];
+        var token = '~u' + (this._urlHotspotCounter++).toString(36) + '~';
+        this._urlHotspotHandlers[token] = info.url;
+        this._pendingUrlHotspotDefs.push({
+            key: token,
+            x: baseX + info.index,
+            y: hotY,
+            width: info.length,
+            height: 1,
+            swallow: false,
+            owner: 'chat:url'
+        });
+    }
 };
 
 Chat.prototype._padRight = function (text, width) {

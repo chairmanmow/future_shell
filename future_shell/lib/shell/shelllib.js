@@ -102,6 +102,13 @@ var SHELL_COLOR_DEFAULTS = {
     STATUS_BAR: { BG: BG_BLACK, FG: WHITE },
     MOUSE_ON: { BG: BG_BLACK, FG: WHITE },
     MOUSE_OFF: { BG: BG_BLACK, FG: WHITE },
+    // Notification status badge (replaces the mouse readout, bottom-right).
+    NOTIFY_ON: { BG: BG_BLACK, FG: (typeof LIGHTGREEN !== 'undefined' ? LIGHTGREEN : 10) },
+    NOTIFY_SNOOZE: { BG: BG_BLACK, FG: (typeof YELLOW !== 'undefined' ? YELLOW : 14) },
+    NOTIFY_OFF: { BG: BG_BLACK, FG: (typeof LIGHTRED !== 'undefined' ? LIGHTRED : 12) },
+    // BBScoin balance readout (bottom-right, after the notification badge).
+    BBSCOIN: { BG: BG_BLACK, FG: (typeof YELLOW !== 'undefined' ? YELLOW : 14) },
+    BBSCOIN_FLASH: { BG: BG_BLACK, FG: (typeof LIGHTMAGENTA !== 'undefined' ? LIGHTMAGENTA : 13) },
     FRAME_STANDARD: { BG: BG_BLACK, FG: LIGHTGRAY },
     LABEL: { BG: BG_BLACK, FG: LIGHTGRAY },
     SELECTED: { BG: (typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)), FG: (typeof WHITE !== 'undefined' ? WHITE : 7) }
@@ -205,6 +212,24 @@ IconShell.prototype.init = function () {
     this._maxToastsPerType = MAX_TOASTS_PER_TYPE;
     this._lastLaunchEventId = undefined;
     this._shellPrefsInstance = null;
+    // Unseen-notification counter (runtime only): notifications the user did
+    // not see live -> suppressed (snooze/off) plus digest items still held in
+    // the batch queue. Consumed by the Phase 2 status indicator. Reset by
+    // markNotificationsSeen() (on view / unsnooze).
+    // Missed-notification store (runtime only): notifications the user did not
+    // see live -> suppressed (snooze/off) plus digest items still held in the
+    // batch queue. The unseen count is its length; the CTRL-V center reads it.
+    // Held items are removed when their digest batch surfaces as a toast.
+    this._missed = [];
+    this._missedSeq = 0;
+    // Notification status badge animation state (see grid_nav.js indicator).
+    this._notifyAnimPhase = 0;
+    this._notifyStatusKey = null;
+    // BBScoin balance readout state (see grid_nav.js bbsCoinIndicator).
+    // _bbsCoinBalance is the last-known ledger balance; _bbsCoinFlash drives the
+    // transient LIGHT_MAGENTA "+N/-N BBScoin" delta shown for ~10s on a change.
+    this._bbsCoinBalance = null;        // null = not yet seeded
+    this._bbsCoinFlash = { delta: 0, until: 0 };
     // Toast batching/grouping: coalesce rapid toasts from same category
     this._toastBatchQueue = {};       // { category: [opts, opts, ...] }
     this._toastBatchTimers = {};      // { category: timeoutId }
@@ -220,12 +245,14 @@ IconShell.prototype.init = function () {
     this._gridHotspotLayerId = null;
     this._toastHotspotLayerId = null;
     this._screensaverHotspotLayerId = null;
+    this._tickerHotspotLayerId = null;
     if (typeof HotSpotManager === 'function') {
         try {
             this.hotspotManager = new HotSpotManager({ console: console, baseLayerName: 'shell-grid', baseLayerPriority: 10 });
             this._gridHotspotLayerId = this.hotspotManager.getBaseLayerId();
             this._toastHotspotLayerId = this.hotspotManager.ensureLayer('toast-overlay', 100, { active: false });
             this._screensaverHotspotLayerId = this.hotspotManager.ensureLayer('screensaver', 200, { active: false });
+            this._tickerHotspotLayerId = this.hotspotManager.ensureLayer('ticker', 5, { active: true });
         } catch (hotspotErr) {
             this.hotspotManager = null;
             try { dbug('hotspot manager init error: ' + hotspotErr, 'hotspot'); } catch (_) { }
@@ -346,7 +373,12 @@ IconShell.prototype.init = function () {
                     return;
                 }
                 dbug("Showing toast: " + trimmed, "toast");
-                self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, height: 6, timeout: 8000, category: 'node' });
+                // Both telegrams and direct node messages are addressed AT the
+                // user, so they share the 'telegram' category (defaults to
+                // individual delivery; user-muteable in alert settings). A
+                // reliable structured sender isn't available here, so per-sender
+                // muting is not wired for this producer.
+                self.showToast({ title: type === 'telegram' ? "Incoming message" : "Alert", message: trimmed, height: 6, timeout: 8000, category: 'telegram' });
             } catch (e) { dbug('node toast error: ' + e, 'toast'); }
         });
         this._chatPollEvent = this.timer.addEvent(1000, true, function () {
@@ -363,6 +395,19 @@ IconShell.prototype.init = function () {
         });
         this._folderFlushEvent = this.timer.addEvent(300, true, function () {
             self._flushPendingFolderRedraw();
+        });
+        // Animate the notification status badge (2-3 frame label<->hotkey-hint
+        // flip). 8s/frame keeps it from being distracting. Self-guards: only
+        // animates on the desktop when the badge exists.
+        this._notifyIndicatorEvent = this.timer.addEvent(8000, true, function () {
+            self._cycleNotifyIndicator();
+        });
+        // Reconcile the BBScoin balance against the ledger every ~10s so the
+        // readout reflects external credit changes (future_api points/add etc.),
+        // not just in-session awards. Also lets the magenta flash expire back to
+        // yellow on its own.
+        this._bbsCoinReconcileEvent = this.timer.addEvent(10000, true, function () {
+            self._reconcileBBSCoin();
         });
     }
 
@@ -390,7 +435,7 @@ IconShell.prototype.init = function () {
     if (typeof ShellTicker === 'function') {
         var tickerConfig = (typeof ICSH_SETTINGS !== 'undefined' && ICSH_SETTINGS && ICSH_SETTINGS.ticker) ? ICSH_SETTINGS.ticker : {};
         try {
-            this._ticker = new ShellTicker({ shell: this, config: tickerConfig });
+            this._ticker = new ShellTicker({ shell: this, config: tickerConfig, hotspotManager: this.hotspotManager, hotspotLayerId: this._tickerHotspotLayerId });
             if (this._ticker.enabled && this.timer) {
                 this._ticker.attach(this.timer);
                 dbug('[shell] Ticker initialized with ' + this._ticker._feedUrls.length + ' feed(s)', 'ticker');
@@ -420,13 +465,85 @@ IconShell.prototype.init = function () {
     try {
         this._pointsSystem = load({}, system.mods_dir + 'points/points.js');
         if (this._pointsSystem) {
-            this._pointsSystem.award('loggedIn');
-            this._pointsSystem.award('joinedChat'); // Auto-join main chat at init
+            // _bbsCoinBalance is still null here, so these award (and persist)
+            // without flashing the readout on first paint.
+            this.awardPoints('loggedIn');
+            this.awardPoints('joinedChat'); // Auto-join main chat at init
             this._pointsSystem.checkDailyLogin();
+            // Seed the readout baseline from the ledger (includes the awards above
+            // plus any daily/streak bonus) so the first paint shows the real total.
+            this._seedBBSCoinBalance();
             dbug('[shell] Points system initialized', 'points');
         }
     } catch (e) {
         dbug('[shell] Points system not available: ' + e, 'points');
+    }
+};
+
+// Award points and keep the BBScoin readout in sync. All in-session award call
+// sites should go through this (not _pointsSystem.award directly) so the bottom
+// row updates and flashes. Safe no-op if the points system is unavailable.
+// While the readout is not yet seeded (_bbsCoinBalance === null, i.e. during
+// init), awards still persist but do not flash.
+IconShell.prototype.awardPoints = function (action, opts) {
+    if (!this._pointsSystem || typeof this._pointsSystem.award !== 'function') return 0;
+    var awarded = 0;
+    try { awarded = this._pointsSystem.award(action, opts) || 0; } catch (e) { return 0; }
+    if (awarded > 0 && this._bbsCoinBalance !== null) {
+        this._bbsCoinBalance += awarded;
+        this._noteBBSCoinDelta(awarded);
+    }
+    return awarded;
+};
+
+// Seed the cached balance from the ledger without flashing, then repaint the
+// readout if its frame already exists (the first drawFolder paints the coin
+// before this seed runs, so without the repaint it would show "0 BBScoin").
+IconShell.prototype._seedBBSCoinBalance = function () {
+    if (!this._pointsSystem || typeof this._pointsSystem.getBalance !== 'function') return;
+    try {
+        var b = this._pointsSystem.getBalance();
+        this._bbsCoinBalance = (b && typeof b.balance === 'number') ? b.balance : 0;
+    } catch (e) {
+        this._bbsCoinBalance = 0;
+    }
+    if (this.bbsCoinIndicator && typeof this._updateBBSCoinIndicator === 'function') {
+        try { this._updateBBSCoinIndicator(); } catch (e) { }
+    }
+};
+
+// Start the ~10s LIGHT_MAGENTA "+N/-N BBScoin" flash and repaint the readout.
+IconShell.prototype._noteBBSCoinDelta = function (delta) {
+    if (!delta) return;
+    this._bbsCoinFlash = { delta: delta, until: Date.now() + 10000 };
+    if (typeof this._updateBBSCoinIndicator === 'function') {
+        try { this._updateBBSCoinIndicator(); } catch (e) { }
+    }
+};
+
+// Timer-driven reconcile: pick up external credit changes (future_api
+// points/add|remove|transfer write the same ledger) and let an expired flash
+// revert to yellow.
+IconShell.prototype._reconcileBBSCoin = function () {
+    if (!this._pointsSystem || typeof this._pointsSystem.getBalance !== 'function') return;
+    var newBalance = null;
+    try {
+        var b = this._pointsSystem.getBalance();
+        newBalance = (b && typeof b.balance === 'number') ? b.balance : null;
+    } catch (e) { return; }
+    if (newBalance === null) return;
+
+    if (this._bbsCoinBalance === null) {
+        this._bbsCoinBalance = newBalance;
+    } else if (newBalance !== this._bbsCoinBalance) {
+        var delta = newBalance - this._bbsCoinBalance;
+        this._bbsCoinBalance = newBalance;
+        this._noteBBSCoinDelta(delta); // flash for the external change
+    }
+
+    // Repaint so an expired flash window reverts to the yellow balance.
+    if (typeof this._updateBBSCoinIndicator === 'function') {
+        try { this._updateBBSCoinIndicator(); } catch (e) { }
     }
 };
 
@@ -774,11 +891,64 @@ IconShell.prototype.processKeyboardInput = function (ch) {
         this._handleSubprogramKey(ch);
         return;
     }
+    // Ticker headline click: buffer chars and match '|TK|' token
+    // Uses pipe-delimited token to avoid prefix conflict with grid tokens (~gN~).
+    // Control chars < 32 are silently dropped by the C stuff_str function,
+    // so we use a printable multi-char token that survives injection.
+    var _tkToken = '|TK|';
+    this._tickerHotspotBuf = (this._tickerHotspotBuf || '') + ch;
+    if (this._tickerHotspotBuf.length > 8) {
+        this._tickerHotspotBuf = this._tickerHotspotBuf.slice(-8);
+    }
+    if (this._tickerHotspotBuf.indexOf(_tkToken) !== -1) {
+        this._tickerHotspotBuf = '';
+        if (this._ticker && typeof this._ticker.getCurrentHeadlineLink === 'function') {
+            var headlineLink = this._ticker.getCurrentHeadlineLink();
+            if (headlineLink) {
+                this.openWebsite(headlineLink);
+                return true;
+            }
+        }
+        return true;
+    }
+    var _tkSliceLen = Math.min(_tkToken.length, this._tickerHotspotBuf.length);
+    if (_tkSliceLen > 0 && _tkToken.substring(0, _tkSliceLen) === this._tickerHotspotBuf.slice(-_tkSliceLen)) {
+        return true;
+    }
+    this._tickerHotspotBuf = '';
+    if (this._handleNotificationHotkey(ch)) return true;
     if (this._handleNavigationKey(ch)) return true;
     if (this._handleTypeaheadKey(ch)) return true;
     if (this._handleHotkeyAction(ch)) return true;
     if (this._handleHotkeyItemSelection(ch)) return true;
     return false;
+};
+
+/**
+ * Open a URL in the standalone text browser (external program).
+ * Writes the URL to a temp file in the node directory, then launches
+ * the WEBBROWSER xtrn via runExternal().
+ *
+ * @param {string} url  The URL to open
+ */
+IconShell.prototype.openWebsite = function (url) {
+    if (!url) return;
+    var self = this;
+    self.runExternal(function () {
+        var urlFile = system.node_dir + 'browser_url.txt';
+        var f = new File(urlFile);
+        if (f.open('w')) { f.writeln(url); f.close(); }
+        bbs.exec_xtrn('WEBBROWSER');
+    }, { programId: 'WEBBROWSER' });
+};
+
+// True when a chat join/leave originates from a different BBS than ours.
+// Local presence is already reported via node messages, so we only toast
+// for guests arriving from other systems (e.g. futureland.today).
+IconShell.prototype._isRemoteChatSystem = function (sysName) {
+    if (!sysName) return false; // unknown origin -> treat as local, stay quiet
+    var norm = function (s) { return String(s).toLowerCase().replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, ''); };
+    return norm(sysName) !== norm(system.name);
 };
 
 IconShell.prototype._processChatUpdate = function (packet) {
@@ -819,26 +989,32 @@ IconShell.prototype._processChatUpdate = function (packet) {
     if (packet && packet.oper && packet.oper.toUpperCase() === "SUBSCRIBE") {
         var joinNick = packet.data && packet.data.nick ? packet.data.nick : 'Someone';
         var joinSystem = packet.data && packet.data.system ? packet.data.system : system.name;
-        this.showToast({
-            message: joinNick + ' from ' + joinSystem + " is here.",
-            avatar: { username: joinNick, netaddr: joinSystem },
-            title: joinNick,
-            launch: 'chat',
-            category: 'json-chat',
-            sender: joinNick
-        });
+        // Only notify for guests from other BBSes. Local join/leave is already
+        // surfaced by node messages, so a toast for it is just noise.
+        if (this._isRemoteChatSystem(joinSystem)) {
+            this.showToast({
+                message: joinNick + ' from ' + joinSystem + " is here.",
+                avatar: { username: joinNick, netaddr: joinSystem },
+                title: joinNick,
+                launch: 'chat',
+                category: 'json-chat',
+                sender: joinNick
+            });
+        }
     }
     if (packet && packet.oper && packet.oper.toUpperCase() === "UNSUBSCRIBE") {
         var leaveNick = packet.data && packet.data.nick ? packet.data.nick : 'Someone';
         var leaveSystem = packet.data && packet.data.system ? packet.data.system : system.name;
-        this.showToast({
-            message: leaveNick + ' from ' + leaveSystem + " has left.",
-            avatar: { username: leaveNick, netaddr: leaveSystem },
-            title: leaveNick,
-            launch: 'chat',
-            category: 'json-chat',
-            sender: leaveNick
-        });
+        if (this._isRemoteChatSystem(leaveSystem)) {
+            this.showToast({
+                message: leaveNick + ' from ' + leaveSystem + " has left.",
+                avatar: { username: leaveNick, netaddr: leaveSystem },
+                title: leaveNick,
+                launch: 'chat',
+                category: 'json-chat',
+                sender: leaveNick
+            });
+        }
     }
 
 };
@@ -871,8 +1047,11 @@ IconShell.prototype._disposeShellFrames = function () {
     this._screensaverHotspotActive = false;
     if (typeof this._clearHotspots === 'function') this._clearHotspots();
     if (typeof this._closePreviousFrames === 'function') this._closePreviousFrames();
-    if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') {
-        try { this.mouseIndicator.close(); } catch (e) { }
+    if (this.notifyIndicator && typeof this.notifyIndicator.close === 'function') {
+        try { this.notifyIndicator.close(); } catch (e) { }
+    }
+    if (this.bbsCoinIndicator && typeof this.bbsCoinIndicator.close === 'function') {
+        try { this.bbsCoinIndicator.close(); } catch (e) { }
     }
     if (this.headerFrame && typeof this.headerFrame.close === 'function') {
         try { this.headerFrame.close(); } catch (e) { }
@@ -886,7 +1065,8 @@ IconShell.prototype._disposeShellFrames = function () {
     if (this.root && typeof this.root.close === 'function') {
         try { this.root.close(); } catch (e) { }
     }
-    this.mouseIndicator = null;
+    this.notifyIndicator = null;
+    this.bbsCoinIndicator = null;
     this.crumb = null;
     this.view = null;
     this.headerFrame = null;
@@ -945,7 +1125,8 @@ IconShell.prototype._createShellFrames = function (dims) {
     this.crumb.open();
     this._refreshHeaderFrame();
     this.subFrame = this.view;
-    this.mouseIndicator = null;
+    this.notifyIndicator = null;
+    this.bbsCoinIndicator = null;
     if (typeof console !== 'undefined' && typeof console.mouse_mode !== 'undefined') {
         console.mouse_mode = !!this.mouseActive;
     }
@@ -1996,6 +2177,14 @@ IconShell.prototype._getShellPrefs = function () {
     } catch (_) { }
     try {
         this._shellPrefsInstance = new ShellPrefs(opts);
+        // Once per session: an "until logout" snooze from a prior session must
+        // not carry over. Done here (single construction point) rather than in
+        // _load(), which reloadShellPrefs re-runs on every toast.
+        if (typeof this._shellPrefsInstance.resetUntilLogoutSnooze === 'function') {
+            try {
+                if (this._shellPrefsInstance.resetUntilLogoutSnooze()) this._shellPrefsInstance.save();
+            } catch (_resetErr) { }
+        }
     } catch (instantiateErr) {
         try { dbug('[shell-prefs] instantiate failed: ' + instantiateErr, 'settings'); } catch (_) { }
         this._shellPrefsInstance = null;
@@ -2010,6 +2199,305 @@ IconShell.prototype.reloadShellPrefs = function () {
         try { prefs._load(); } catch (e) { try { dbug('[shell-prefs] reload failed: ' + e, 'settings'); } catch (_) { } }
     }
     return prefs;
+};
+
+// ---- Missed-notification store (runtime) --------------------------------
+
+IconShell.prototype._NOTIFY_MISSED_CAP = 50;
+
+// Record a missed notification (suppressed or held). Returns an id so a held
+// digest item can be removed later when its batch surfaces. Keeps newest at
+// the end; trims to the cap by dropping the oldest.
+IconShell.prototype._recordMissed = function (opts, category, sender) {
+    if (!this._missed) this._missed = [];
+    this._missedSeq = (this._missedSeq || 0) + 1;
+    var id = this._missedSeq;
+    opts = opts || {};
+    this._missed.push({
+        id: id,
+        ts: Date.now(),
+        title: (typeof opts.title === 'string') ? opts.title : '',
+        message: (typeof opts.message === 'string') ? opts.message : ((typeof opts.body === 'string') ? opts.body : ''),
+        category: category || null,
+        sender: sender || null
+    });
+    var cap = this._NOTIFY_MISSED_CAP;
+    if (this._missed.length > cap) this._missed.splice(0, this._missed.length - cap);
+    return id;
+};
+
+// Remove a held entry by id once its digest batch is surfaced (no longer missed).
+IconShell.prototype._removeMissed = function (id) {
+    if (!this._missed || id == null) return;
+    for (var i = this._missed.length - 1; i >= 0; i--) {
+        if (this._missed[i].id === id) { this._missed.splice(i, 1); return; }
+    }
+};
+
+IconShell.prototype.getUnseenNotificationCount = function () {
+    return (this._missed && this._missed.length) || 0;
+};
+
+// Snapshot of missed notifications, oldest-first (caller reverses for newest-first).
+IconShell.prototype.getMissedNotifications = function () {
+    return (this._missed) ? this._missed.slice() : [];
+};
+
+// Clear the store (the CTRL-V center / unsnooze marks everything seen).
+IconShell.prototype.markNotificationsSeen = function () {
+    this._missed = [];
+    return 0;
+};
+
+// ---- Notification hotkeys (desktop) -------------------------------------
+// CTRL-S snooze (toggle/picker), CTRL-T on/off, CTRL-V view+clear unseen.
+// Routed from processKeyboardInput only when no subprogram is active, so they
+// never steal CTRL keys from editors/apps. Control chars are matched literally
+// (CTRL_S='\x13', CTRL_T='\x14', CTRL_V='\x16' per key_defs.js).
+IconShell.prototype._handleNotificationHotkey = function (ch) {
+    if (typeof ch !== 'string' || ch.length !== 1) return false;
+    if (ch === '\x13') { this._onNotifySnoozeKey(); return true; }   // CTRL-S
+    if (ch === '\x14') { this._toggleNotifications(); return true; } // CTRL-T
+    if (ch === '\x16') { this._viewNotifications(); return true; }   // CTRL-V
+    return false;
+};
+
+// Reset the badge animation to its primary "[STATE]" frame and redraw now.
+IconShell.prototype._refreshNotifyIndicator = function () {
+    this._notifyAnimPhase = 0;
+    this._notifyStatusKey = null;
+    if (this.notifyIndicator && typeof this._updateNotifyIndicator === 'function') {
+        try { this._updateNotifyIndicator(); } catch (_) { }
+    }
+};
+
+IconShell.prototype._formatSnoozeDuration = function (ms) {
+    var mins = Math.round(ms / 60000);
+    if (mins >= 60 && mins % 60 === 0) {
+        var hrs = mins / 60;
+        return hrs + ' hour' + (hrs === 1 ? '' : 's');
+    }
+    if (mins >= 60) {
+        return (mins / 60).toFixed(1) + ' hours';
+    }
+    return mins + ' minute' + (mins === 1 ? '' : 's');
+};
+
+// CTRL-S: when snoozed, resume immediately; otherwise open the duration picker.
+IconShell.prototype._onNotifySnoozeKey = function () {
+    var prefs = this._getShellPrefs();
+    if (!prefs) return;
+    var state = 'on';
+    try { state = prefs.getGlobalState(); } catch (_) { }
+    if (state === 'snooze') {
+        try { prefs.clearSnooze(); prefs.save(); } catch (_) { }
+        this._refreshNotifyIndicator();
+        this.showToast({ title: 'Notifications', message: 'Snooze cleared - notifications on.', timeout: 4000 });
+        return;
+    }
+    this._openSnoozePicker();
+};
+
+// Inline snooze duration picker. value: ms>0 = timed, 0 = until logout,
+// -1 = cancel. Uses the shared Modal chooser (numeric hotspots enabled).
+IconShell.prototype._openSnoozePicker = function () {
+    var self = this;
+    if (typeof Modal === 'undefined' || typeof Modal.createChooser !== 'function') {
+        // Modal unavailable: fall back to a sensible default rather than no-op.
+        self._applySnooze(30 * 60 * 1000);
+        return;
+    }
+    Modal.createChooser({
+        title: 'Snooze notifications',
+        parentFrame: this.root,
+        items: [
+            { label: '15 minutes', value: 15 * 60 * 1000 },
+            { label: '30 minutes', value: 30 * 60 * 1000 },
+            { label: '1 hour', value: 60 * 60 * 1000 },
+            { label: 'Until I log out', value: 0 },
+            { label: 'Cancel', value: -1 }
+        ],
+        hotspots: { enabled: true },
+        onChoose: function (value) {
+            if (typeof value !== 'number' || value < 0) return; // Cancel
+            self._applySnooze(value);
+        },
+        onCancel: function () { },
+        // The desktop has no resume hook, so the area the modal covered isn't
+        // repainted on close. Force a folder redraw to restore the icons/badge.
+        onClose: function () { self._restoreDesktopAfterModal(); }
+    });
+};
+
+// Repaint the desktop after a shell-level modal closes over it. The folder grid
+// frames are siblings of the modal under root and don't auto-redraw on reveal.
+IconShell.prototype._restoreDesktopAfterModal = function () {
+    if (this.activeSubprogram && this.activeSubprogram.running) return;
+    try { this.drawFolder(); } catch (_) { }
+};
+
+IconShell.prototype._applySnooze = function (ms) {
+    var prefs = this._getShellPrefs();
+    if (!prefs) return;
+    try { prefs.setGlobalSnooze(ms); prefs.save(); } catch (_) { }
+    this._refreshNotifyIndicator();
+    var label = (ms > 0) ? ('for ' + this._formatSnoozeDuration(ms)) : 'until you log out';
+    this.showToast({ title: 'Notifications', message: 'Snoozed ' + label + '. CTRL-S to resume.', timeout: 5000 });
+};
+
+// CTRL-T: hard on/off toggle. Turning on also lifts any active snooze.
+IconShell.prototype._toggleNotifications = function () {
+    var prefs = this._getShellPrefs();
+    if (!prefs) return;
+    var state = 'on';
+    try { state = prefs.getGlobalState(); } catch (_) { }
+    var turnOn = (state !== 'on'); // off OR snooze -> on; on -> off
+    try {
+        if (turnOn) {
+            // clearSnooze only lifts a snooze; from 'off' we must set 'on'
+            // explicitly. Do both so on-from-snooze and on-from-off both work.
+            prefs.clearSnooze();
+            prefs.setGlobalState('on');
+        } else {
+            prefs.setGlobalState('off');
+        }
+        prefs.save();
+    } catch (_) { }
+    this._refreshNotifyIndicator();
+    this.showToast({ title: 'Notifications', message: turnOn ? 'Notifications on.' : 'Notifications off.', timeout: 4000 });
+};
+
+// CTRL-V: the notification center. A modal overlay list of MISSED notifications
+// (suppressed while snoozed/off, plus held digest items), newest first. ENTER
+// reads the full text in place; ESC closes; C clears. Closing marks all seen.
+IconShell.prototype._viewNotifications = function () {
+    var self = this;
+    var entries = this.getMissedNotifications();
+    entries = entries.slice().reverse(); // newest first
+
+    if (!entries.length) {
+        this.showToast({ title: 'Notifications', message: 'Nothing missed.', timeout: 3000 });
+        return;
+    }
+    if (typeof Modal !== 'function') {
+        // No modal layer available: degrade to the old mark-seen behavior.
+        this.showToast({ title: 'Notifications', message: entries.length + ' missed.', timeout: 4000 });
+        this.markNotificationsSeen();
+        this._refreshNotifyIndicator();
+        return;
+    }
+
+    var cols = (typeof console !== 'undefined' && console.screen_columns) ? console.screen_columns : 80;
+    var rows = (typeof console !== 'undefined' && console.screen_rows) ? console.screen_rows : 24;
+    var width = Math.min(64, Math.max(40, cols - 6));
+    var height = Math.min(rows - 2, Math.max(10, entries.length + 6));
+
+    var sel = 0, scroll = 0, detail = false;
+
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+    function fmtTime(ts) {
+        try { var d = new Date(ts); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+        catch (_) { return '--:--'; }
+    }
+    function catLabel(c) {
+        return (typeof self._getCategoryLabel === 'function') ? self._getCategoryLabel(c) : (c || 'note');
+    }
+    function visibleCount(m) { return Math.max(1, m.height - 4); }
+    function clamp() { if (sel < 0) sel = 0; if (sel >= entries.length) sel = entries.length - 1; }
+    function ensureVis(m) {
+        var vc = visibleCount(m);
+        if (sel < scroll) scroll = sel; else if (sel >= scroll + vc) scroll = sel - vc + 1;
+        if (scroll < 0) scroll = 0;
+    }
+    function wrap(text, w) {
+        text = String(text == null ? '' : text).replace(/\r\n/g, '\n').replace(/\x01./g, '');
+        var out = [];
+        var paras = text.split('\n');
+        for (var p = 0; p < paras.length; p++) {
+            var words = paras[p].split(/\s+/);
+            var line = '';
+            for (var i = 0; i < words.length; i++) {
+                var wd = words[i];
+                if (!line.length) { line = wd; }
+                else if ((line.length + 1 + wd.length) <= w) { line += ' ' + wd; }
+                else { out.push(line); line = wd; }
+                while (line.length > w) { out.push(line.substr(0, w)); line = line.substr(w); }
+            }
+            out.push(line);
+        }
+        return out;
+    }
+
+    function render(frame, m) {
+        try {
+            var innerW = m.width - 4;
+            var vc = visibleCount(m);
+            // Clear content rows (leave border + title)
+            for (var y = 0; y <= vc; y++) { frame.gotoxy(2, 2 + y); frame.putmsg(Array(innerW + 1).join(' ')); }
+            if (detail) {
+                var e = entries[sel];
+                var head = fmtTime(e.ts) + '  ' + catLabel(e.category) + (e.sender ? (' / ' + e.sender) : '');
+                frame.gotoxy(2, 2); frame.putmsg('\x01h\x01y' + head.substr(0, innerW) + '\x01n');
+                var body = wrap(e.message || (e.title || '(no text)'), innerW);
+                for (var i = 0; i < body.length && i < vc - 1; i++) { frame.gotoxy(2, 4 + i); frame.putmsg('\x01n\x01w' + body[i] + '\x01n'); }
+                frame.gotoxy(2, m.height - 1); frame.putmsg('\x01h\x01kESC/Left: back to list\x01n');
+            } else {
+                ensureVis(m);
+                for (var row = 0; row < vc; row++) {
+                    var idx = scroll + row;
+                    if (idx >= entries.length) break;
+                    var en = entries[idx];
+                    var seld = (idx === sel);
+                    var who = catLabel(en.category) + (en.sender ? (' ' + en.sender) : '');
+                    var line = fmtTime(en.ts) + ' ' + who + ': ' + (en.message || en.title || '');
+                    line = line.replace(/\r\n|\n/g, ' ').replace(/\x01./g, '');
+                    line = (seld ? '> ' : '  ') + line;
+                    if (line.length > innerW) line = line.substr(0, innerW);
+                    frame.gotoxy(2, 2 + row); frame.putmsg((seld ? '\x01h\x01w' : '\x01n') + line + '\x01n');
+                }
+                if (scroll > 0) { frame.gotoxy(m.width - 2, 1); frame.putmsg('\x01h\x01w^\x01n'); }
+                if (scroll + vc < entries.length) { frame.gotoxy(m.width - 2, m.height - 1); frame.putmsg('\x01h\x01wv\x01n'); }
+            }
+            frame.cycle();
+        } catch (_) { }
+    }
+
+    new Modal({
+        type: 'custom',
+        title: ' Missed Notifications (' + entries.length + ') ',
+        width: width,
+        height: height,
+        overlay: true,
+        captureKeys: true,
+        parentFrame: this.root,
+        render: function (frame, m) { render(frame, m); },
+        keyHandler: function (k, m) {
+            if (!k) return false;
+            if (detail) {
+                // Any of ESC / Left / Enter returns to the list.
+                if (k === '\x1b' || k === '\x1d' || k === '\r' || k === '\n') { detail = false; render(m.frame, m); }
+                return true;
+            }
+            switch (k) {
+                case '\x1b': m.close(null); return true;             // ESC
+                case 'c': case 'C': self.markNotificationsSeen(); m.close(null); return true;
+                case '\x1e': sel--; clamp(); ensureVis(m); render(m.frame, m); return true; // up
+                case '\x0a': sel++; clamp(); ensureVis(m); render(m.frame, m); return true; // down
+                case '\x10': sel -= visibleCount(m); clamp(); ensureVis(m); render(m.frame, m); return true; // pgup
+                case '\x0e': sel += visibleCount(m); clamp(); ensureVis(m); render(m.frame, m); return true; // pgdn
+                case '\x02': sel = 0; ensureVis(m); render(m.frame, m); return true; // home
+                case '\x05': sel = entries.length - 1; ensureVis(m); render(m.frame, m); return true; // end
+                case '\r': case '\x06': detail = true; render(m.frame, m); return true; // enter / right -> detail
+                default: return true; // swallow everything else while open
+            }
+        },
+        onClose: function () {
+            // Viewing the center marks the missed items seen.
+            self.markNotificationsSeen();
+            self._refreshNotifyIndicator();
+            self._restoreDesktopAfterModal();
+        }
+    });
 };
 
 IconShell.prototype._applyScreensaverPreferences = function (prefs) {
@@ -2158,25 +2646,34 @@ IconShell.prototype.showToast = function (params) {
     var category = (typeof opts.category === 'string' && opts.category.length) ? opts.category : null;
     var sender = (typeof opts.sender === 'string' && opts.sender.length) ? opts.sender : null;
     
-    // Check notification preferences
+    // Resolve delivery preference: 'suppress' | 'digest' | 'individual'.
+    // getCategoryDelivery unifies global snooze/off, per-sender mute, the
+    // per-category master switch and the per-category mode.
+    var delivery = null;
     if (category || sender) {
         var prefs = this.reloadShellPrefs();
-        if (prefs && typeof prefs.shouldDisplayNotification === 'function') {
-            var allow = true;
-            try { allow = prefs.shouldDisplayNotification(category, sender); }
-            catch (_) { allow = true; }
-            try { dbug('[toast] prefs check category=' + (category || '') + ' sender=' + (sender || '') + ' allow=' + allow, 'toast'); } catch (_) { }
-            if (!allow) {
-                try { dbug('[toast] suppressed category=' + (category || 'unknown') + ' sender=' + (sender || 'unknown'), 'toast'); } catch (_) { }
+        if (prefs && typeof prefs.getCategoryDelivery === 'function') {
+            try { delivery = prefs.getCategoryDelivery(category, sender); }
+            catch (_) { delivery = null; }
+            try { dbug('[toast] delivery category=' + (category || '') + ' sender=' + (sender || '') + ' -> ' + delivery, 'toast'); } catch (_) { }
+            if (delivery === 'suppress') {
+                this._recordMissed(opts, category, sender);
+                try { dbug('[toast] suppressed category=' + (category || 'unknown') + ' sender=' + (sender || 'unknown') + ' missed=' + this.getUnseenNotificationCount(), 'toast'); } catch (_) { }
                 return null;
             }
         }
     }
 
-    // Determine if this category should be batched
-    var shouldBatch = category && this._batchableCategories.indexOf(category) >= 0;
-    
-    // If not a batchable category, show immediately
+    // Decide batching. 'digest' always batches into a grouped periodic summary;
+    // 'individual' shows immediately. When prefs are unavailable (delivery
+    // null) fall back to the legacy _batchableCategories list so behavior is
+    // unchanged for callers without a category/sender.
+    var shouldBatch;
+    if (delivery === 'digest') shouldBatch = true;
+    else if (delivery === 'individual') shouldBatch = false;
+    else shouldBatch = category && this._batchableCategories.indexOf(category) >= 0;
+
+    // If not batched, show immediately
     if (!shouldBatch) {
         return this._showToastImmediate(opts);
     }
@@ -2185,14 +2682,18 @@ IconShell.prototype.showToast = function (params) {
     if (!this._toastBatchQueue) this._toastBatchQueue = {};
     if (!this._toastBatchQueue[category]) this._toastBatchQueue[category] = [];
     
-    // Store the opts for later
+    // A queued digest item is "held" (received but not yet surfaced) -> counts
+    // as missed until the batch is flushed/merged into a visible grouped toast.
+    var heldMissedId = this._recordMissed(opts, category, sender);
+    // Store the opts for later (missedId lets flush/merge drop it from the store)
     this._toastBatchQueue[category].push({
         opts: opts,
         launch: launch,
         action: action,
-        sender: sender
+        sender: sender,
+        missedId: heldMissedId
     });
-    
+
     try { dbug('[toast] queued for batch category=' + category + ' queueLen=' + this._toastBatchQueue[category].length, 'toast'); } catch (_) { }
 
     // If there's already a grouped toast showing for this category, update its count
@@ -2239,7 +2740,9 @@ IconShell.prototype._flushToastBatch = function (category) {
     this._toastBatchQueue[category] = [];
     
     if (count === 0) return;
-    
+    // These held items are now being surfaced -> no longer missed.
+    for (var mi = 0; mi < queue.length; mi++) this._removeMissed(queue[mi].missedId);
+
     try { dbug('[toast] flushing batch category=' + category + ' count=' + count, 'toast'); } catch (_) { }
     
     var threshold = this._toastBatchThreshold || 2;
@@ -2318,6 +2821,8 @@ IconShell.prototype._updateGroupedToastCount = function (category) {
     // Get current queue count
     var queue = this._toastBatchQueue && this._toastBatchQueue[category];
     var queueCount = queue ? queue.length : 0;
+    // Merged into the visible grouped toast -> these leave the missed store.
+    if (queueCount > 0) { for (var mq = 0; mq < queue.length; mq++) this._removeMissed(queue[mq].missedId); }
     var existingCount = (toast.__shellMeta && toast.__shellMeta.groupedCount) || 0;
     var newCount = existingCount + queueCount;
     

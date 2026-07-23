@@ -295,7 +295,7 @@ SystemInfo.prototype._drawBanner = function () {
 	f.clear();
 
 	// Load and display .bin file using frame.load()
-	var binFile = js.exec_dir + 'future_shell/assets/text/' + this.bannerFile;
+	var binFile = system.text_dir + 'icons/text/' + this.bannerFile;
 	if (file_exists(binFile)) {
 		try {
 			f.load(binFile, f.width, f.height);
@@ -520,7 +520,7 @@ SystemInfo.prototype._drawSystemInfoView = function () {
 };
 
 SystemInfo.prototype._loadMsgFile = function (filename) {
-	var msgFile = js.exec_dir + 'future_shell/assets/text/' + filename;
+	var msgFile = system.text_dir + 'icons/text/' + filename;
 	var lines = [];
 	try {
 		var file = new File(msgFile);

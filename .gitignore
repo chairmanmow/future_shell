@@ -27,3 +27,6 @@ json-service-private.js
 avatars.js
 # fshell_ts is its own private repository (github.com/chairmanmow/fshell_ts)
 /fshell_ts/
+
+# npm dependencies
+node_modules/

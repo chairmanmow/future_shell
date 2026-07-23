@@ -33,7 +33,6 @@ function FileArea(opts) {
     this.iconCells = [];          // [{icon,label,index,iconObj,labelText}]
     this._gridLayout = null;      // { type:'libs'|'dirs', cols, visibleRows, total, rows, cellWidth, cellHeight }
     this._hotspotMap = {};
-    this._hotspotChars = null;
     this._iconExistCache = {};
 
     // Data / state
@@ -76,7 +75,6 @@ FileArea.prototype._resetState = function () {
     this.iconCells = [];
     this._gridLayout = null;
     this._hotspotMap = {};
-    this._hotspotChars = null;
     this._iconExistCache = {};
 
     this.state = 'libs';
@@ -322,7 +320,7 @@ FileArea.prototype._iconExists = function (name) {
     if (this._iconExistCache.hasOwnProperty(name)) return this._iconExistCache[name];
     var baseDir = (system && system.mods_dir) ? system.mods_dir : (js && js.exec_dir ? js.exec_dir : '');
     if (baseDir && baseDir.charAt(baseDir.length - 1) !== '/' && baseDir.charAt(baseDir.length - 1) !== '\\') baseDir += '/';
-    var base = baseDir + 'future_shell/assets/' + name;
+    var base = system.text_dir + 'icons/' + name;
     var ok = false;
     try {
         ok = file_exists(base + '.bin') || file_exists(base + '.ans');
@@ -380,12 +378,13 @@ FileArea.prototype.clearCellBorder = function (cell) {
     }
 };
 
-FileArea.prototype._ensureHotspotChars = function () {
-    if (this._hotspotChars && this._hotspotChars.length) return this._hotspotChars;
-    var chars = [], used = {};
-    function add(s) { for (var i = 0; i < s.length; i++) { var ch = s.charAt(i); if (!used[ch]) { used[ch] = true; chars.push(ch); } } }
-    add('1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*()-_=+[]{};:,./?');
-    this._hotspotChars = chars; return chars;
+// Mint a collision-proof |mN| hotspot token (see SubprogramHotspotHelper).
+// Replaces the old single-alphanumeric-key pool, which capped hotspots and
+// collided with keys the user might press.
+FileArea.prototype._nextHotspotToken = function () {
+    if (this.hotspots && typeof this.hotspots.nextToken === 'function') return this.hotspots.nextToken();
+    this._fallbackHotspotCounter = (this._fallbackHotspotCounter || 0) + 1;
+    return '|m' + this._fallbackHotspotCounter.toString(36) + '|';
 };
 
 FileArea.prototype._releaseHotspots = function () {
@@ -396,14 +395,12 @@ FileArea.prototype._releaseHotspots = function () {
 FileArea.prototype._registerGridHotspots = function (cells) {
     this._releaseHotspots();
     if (!cells || !cells.length) return;
-    var chars = this._ensureHotspotChars();
     var baseX = this.listFrame ? this.listFrame.x : 1;
     var baseY = this.listFrame ? this.listFrame.y : 1;
-    var max = Math.min(chars.length, cells.length);
     var defs = [];
-    for (var i = 0; i < max; i++) {
+    for (var i = 0; i < cells.length; i++) {
         var cell = cells[i]; if (!cell || !cell.icon) continue;
-        var cmd = chars[i];
+        var cmd = this._nextHotspotToken();
         var minX = baseX + cell.icon.x - 1;
         var maxX = minX + cell.icon.width - 1;
         var minY = baseY + cell.icon.y - 1;
@@ -431,13 +428,11 @@ FileArea.prototype._registerGridHotspots = function (cells) {
 FileArea.prototype._registerListHotspots = function (rows) {
     this._releaseHotspots();
     if (!rows || !rows.length || !this.listFrame) return;
-    var chars = this._ensureHotspotChars();
     var baseX = this.listFrame.x, baseY = this.listFrame.y, width = this.listFrame.width;
-    var max = Math.min(chars.length, rows.length);
     var defs = [];
-    for (var i = 0; i < max; i++) {
+    for (var i = 0; i < rows.length; i++) {
         var row = rows[i]; if (!row || typeof row.index !== 'number') continue;
-        var cmd = chars[i];
+        var cmd = this._nextHotspotToken();
         var absY = baseY + row.y - 1;
         defs.push({
             key: cmd,
@@ -655,6 +650,11 @@ FileArea.prototype._formatFileLine = function (idx, widths) {
 
 FileArea.prototype.handleKey = function (key) {
     if (!key) return;
+
+    // Collapse a clicked multi-char hotspot token (|mN|) into its dispatch key,
+    // or swallow the keystroke while a token is still mid-arrival.
+    key = this._resolveHotspotToken(key);
+    if (key === undefined) return true;
 
     // Hotspots first for grids and files list
     if (this._hotspotMap && this._hotspotMap[key] !== undefined) {

@@ -94,6 +94,22 @@ function saveLedger(userNum, data) {
     return false;
 }
 
+// Append a single entry to the user's ledger and persist (append-only, live).
+// This is the per-award write that makes points survive a raw disconnect and
+// update live. Matches the entry shape used by future_api/routes/points.js.
+function appendLedgerEntry(userNum, delta, note) {
+    if (!delta) return false;
+    var ledger = loadLedger(userNum);
+    var entry = {
+        timestamp: new Date().toISOString(),
+        delta: delta,
+        source: SOURCE
+    };
+    if (note) entry.note = note;
+    ledger.entries.push(entry);
+    return saveLedger(userNum, ledger);
+}
+
 // Get multiplier for current user
 function getUserMultiplier() {
     if (!config.multipliers) return 1.0;
@@ -184,12 +200,18 @@ function award(action, opts) {
     
     if (points <= 0) return 0;
     
-    // Track in session state on bbs object
+    // Track in session state on bbs object (drives per-action/per-session limits
+    // and the logoff recap).
     session.points[action] = (session.points[action] || 0) + points;
     session.counts[action] = (session.counts[action] || 0) + count;
-    
+
+    // Persist immediately (append-only) so points are never lost on a raw
+    // disconnect and the live readout updates as they are earned. Logoff no
+    // longer writes points — see commitSession().
+    appendLedgerEntry(user.number, points, action);
+
     log(LOG_DEBUG, 'points.js: Awarded ' + points + ' points for ' + action + ' to user ' + user.alias);
-    
+
     return points;
 }
 
@@ -246,56 +268,12 @@ function getSessionSummary() {
     return summary;
 }
 
-// Commit session points to the ledger (called at logoff)
-// This is the single write to persistent storage - append-only ledger entry
+// Logoff recap (read-only). Points are now written live in award() as they are
+// earned, so logoff does NOT write to the ledger — it only returns the session
+// summary for an activity/credit recap. (Writing here too would double-count.)
+// Streak/lastLogin persistence happens once at login in checkDailyLogin().
 function commitSession() {
-    var session = getSession();
-    
-    // Prevent double-commit
-    if (session.committed) {
-        log(LOG_DEBUG, 'points.js: Session already committed');
-        return getSessionSummary();
-    }
-    
-    var userNum = user.number;
-    var ledger = loadLedger(userNum);
-    var summary = getSessionSummary();
-    
-    // Only write to ledger if there are points to record
-    if (summary.totalPoints > 0) {
-        // Append single ledger entry: {timestamp, delta, source}
-        ledger.entries.push({
-            timestamp: new Date().toISOString(),
-            delta: summary.totalPoints,
-            source: SOURCE
-        });
-    }
-    
-    // Update streak tracking
-    var today = new Date().toDateString();
-    var lastLoginDate = ledger.lastLogin ? new Date(ledger.lastLogin).toDateString() : null;
-    
-    if (lastLoginDate && lastLoginDate !== today) {
-        var yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        if (lastLoginDate === yesterday.toDateString()) {
-            ledger.consecutiveDays = (ledger.consecutiveDays || 0) + 1;
-        } else {
-            ledger.consecutiveDays = 1;
-        }
-    } else if (!lastLoginDate) {
-        ledger.consecutiveDays = 1;
-    }
-    ledger.lastLogin = new Date().toISOString();
-    
-    saveLedger(userNum, ledger);
-    
-    // Mark session as committed
-    session.committed = true;
-    
-    log(LOG_INFO, 'points.js: Committed ' + summary.totalPoints + ' points to ledger for user ' + user.alias);
-    
-    return summary;
+    return getSessionSummary();
 }
 
 // Get user's balance by reducing the ledger
@@ -320,25 +298,35 @@ function getBalance(userNum) {
     };
 }
 
-// Check and award first login of day bonus
+// Check and award first login of day bonus, and persist the login marker +
+// streak (this is the once-per-session ledger update that commitSession used to
+// do at logoff).
 function checkDailyLogin() {
     var ledger = loadLedger(user.number);
     var today = new Date().toDateString();
     var lastLoginDate = ledger.lastLogin ? new Date(ledger.lastLogin).toDateString() : null;
-    
-    if (lastLoginDate !== today) {
-        award('firstLoginOfDay');
-        
-        // Check consecutive days
-        var yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        if (lastLoginDate === yesterday.toDateString()) {
-            var streak = (ledger.consecutiveDays || 0) + 1;
-            if (streak >= 2) {
-                award('consecutiveLoginDays', { count: Math.min(streak, 7) });
-            }
-        }
+
+    if (lastLoginDate === today) return; // already counted today
+
+    award('firstLoginOfDay');
+
+    // Compute new streak: +1 if last login was yesterday, else reset to 1.
+    var yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    var newStreak = (lastLoginDate === yesterday.toDateString())
+        ? ((ledger.consecutiveDays || 0) + 1)
+        : 1;
+
+    if (newStreak >= 2) {
+        award('consecutiveLoginDays', { count: Math.min(newStreak, 7) });
     }
+
+    // Reload before stamping the login marker so we keep the entries the awards
+    // above just appended, then persist lastLogin + streak once.
+    var fresh = loadLedger(user.number);
+    fresh.lastLogin = new Date().toISOString();
+    fresh.consecutiveDays = newStreak;
+    saveLedger(user.number, fresh);
 }
 
 // Debit points from ledger (for token withdrawal)

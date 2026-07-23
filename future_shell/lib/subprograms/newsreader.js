@@ -6,6 +6,10 @@ if (typeof Feed === 'undefined') {
 if (typeof utf8_cp437 === 'undefined') {
     try { load('utf8_cp437.js'); } catch (_encErr) { }
 }
+// KEY_ENTER is not in sbbsdefs.js and load() scoping makes it unreliable as a
+// global, so define it locally (same guard other subprograms use). Under
+// "use strict" a bare reference to an undefined KEY_ENTER would throw.
+if (typeof KEY_ENTER === 'undefined') var KEY_ENTER = '\r';
 load("future_shell/lib/subprograms/subprogram.js");
 load('future_shell/lib/subprograms/subprogram_hotspots.js');
 if (typeof registerModuleExports !== 'function') {
@@ -694,6 +698,7 @@ function NewsReader(opts) {
 
     this.feedCache = {};
     this.headerFrame = null;
+    this.tabFrame = null;
     this.statusFrame = null;
     this.listFrame = null;
     this.articleIconFrame = null;
@@ -753,7 +758,16 @@ function NewsReader(opts) {
         TEXT_NORMAL: { FG: LIGHTGRAY },
         TEXT_BOLD: { FG: LIGHTMAGENTA },
         LIST_TIME: { FG: CYAN },
-        LOADING_MODAL: { BG: BG_RED, FG: WHITE }
+        LOADING_MODAL: { BG: BG_RED, FG: WHITE },
+        TAB_BAR: { BG: BG_BLACK, FG: DARKGRAY },
+        TAB_ACTIVE: { BG: BG_CYAN, FG: WHITE },
+        TAB_INACTIVE: { BG: BG_BLACK, FG: LIGHTGRAY },
+        CARD_META: { FG: CYAN },
+        CARD_TITLE: { FG: WHITE },
+        CARD_SNIPPET: { FG: LIGHTGRAY },
+        CARD_SOURCE: { FG: LIGHTGREEN },
+        TOPIC_ON: { BG: BG_GREEN, FG: WHITE },
+        TOPIC_OFF: { BG: BG_BLACK, FG: LIGHTGRAY }
     });
 }
 extend(NewsReader, Subprogram);
@@ -859,6 +873,29 @@ NewsReader.prototype._resetState = function () {
     this._articleLinkButtonWidth = null;
     this._articleLinkButtonX = null;
     this._articleLinkButtonY = null;
+
+    // ── Passive "Feed" mode (Newsflip) ──────────────────────────────────
+    // Two tabs share this subprogram: 'feed' (passive cached feed, default)
+    // and 'search' (the active category/feed browser above). The search-mode
+    // state machine (this.state = categories/feeds/articles/...) is untouched;
+    // feed mode runs its own self-contained states so the working active flow
+    // can't regress.
+    this.mode = 'feed';
+    this._feedTopics = this._feedLoadTopics();
+    this.feedItems = [];
+    this.feedIndex = 0;
+    this._feedResumeApplied = false;   // resume to last-read article once, on first build
+    this._feedReadSaveTs = 0;          // throttle disk writes of read position
+    this.feedReadLines = [];
+    this.feedReadScroll = 0;
+    this.feedReadArticle = null;
+    this._feedHeroFrame = null;
+    this._feedTextBox = null;
+    this._feedSixelActive = false;
+    this._feedInterestSel = 0;
+    // Default tab lands on the card feed; first run (no saved interests) shows
+    // the interest picker so the feed isn't empty/unfiltered.
+    this.state = (this._feedTopics && this._feedTopics.length) ? 'feed_cards' : 'feed_interests';
 };
 
 NewsReader.prototype._nodeHasVisibleContent = function (node) {
@@ -1260,10 +1297,10 @@ NewsReader.prototype._iconExists = function (iconName) {
     if (typeof file_exists === 'function') {
         try {
             // Check newsreader subdirectory first, then fall back to main assets
-            var newsreaderBase = baseDir + 'future_shell/assets/newsreader/' + iconName;
+            var newsreaderBase = system.text_dir + 'icons/newsreader/' + iconName;
             exists = file_exists(newsreaderBase + '.bin') || file_exists(newsreaderBase + '.ans');
             if (!exists) {
-                var pathBase = baseDir + 'future_shell/assets/' + iconName;
+                var pathBase = system.text_dir + 'icons/' + iconName;
                 exists = file_exists(pathBase + '.bin') || file_exists(pathBase + '.ans');
             }
         } catch (_iconExistsErr) {
@@ -1762,11 +1799,14 @@ NewsReader.prototype._addHotspotArea = function (key, swallow, minX, maxX, start
 
 NewsReader.prototype._applyPendingHotspots = function () {
     if (!this._pendingHotspotDefs) this._pendingHotspotDefs = [];
+    // Tab hotspots must survive every screen's hotspot rebuild, so prepend them
+    // to whatever the active screen registered before pushing to the manager.
+    var allDefs = this._tabHotspotDefs().concat(this._pendingHotspotDefs);
     if (this.hotspots && typeof this.hotspots.set === 'function') {
-        this.hotspots.set(this._pendingHotspotDefs);
+        this.hotspots.set(allDefs);
     } else if (typeof console !== 'undefined' && typeof console.add_hotspot === 'function') {
-        for (var i = 0; i < this._pendingHotspotDefs.length; i++) {
-            var def = this._pendingHotspotDefs[i];
+        for (var i = 0; i < allDefs.length; i++) {
+            var def = allDefs[i];
             if (!def) continue;
             var key = def.key;
             var swallow = !!def.swallow;
@@ -2485,71 +2525,140 @@ NewsReader.prototype._toDisplayText = function (text) {
 
 NewsReader.prototype._ensureFrames = function () {
     if (!this.parentFrame) return;
-    // The newsreader is a full-screen subprogram: its title bar belongs on the
-    // very first row and its status line on the very last row. The shell hands
-    // subprograms the "view" frame, which starts at row 2 (below the shell
-    // header) and stops one row above the crumb, so deriving geometry straight
-    // from parentFrame leaves the title a row too low and the status a row or
-    // two too high. Span the full display instead. Bounds are checked against
-    // the shared display (the whole screen), not the parent frame, so child
-    // frames may safely cover rows above/below the view.
+    // Parent everything to the base-class hostFrame so the screensaver can
+    // stash/cover/restore us as one subtree. The hostFrame only spans the view
+    // height, though, so derive the VERTICAL extent from the real display root —
+    // otherwise the status line lands 2-3 rows short of the actual bottom.
+    if (!this.hostFrame || (typeof this.hostFrame.is_open !== 'undefined' && !this.hostFrame.is_open)) {
+        if (typeof this._ensureHostFrame === 'function') this._ensureHostFrame();
+    }
+    var host = this.hostFrame || this.parentFrame;
     var rootFrame = this.parentFrame;
     while (rootFrame.parent) rootFrame = rootFrame.parent;
-    var baseX = rootFrame.x;
-    var baseY = rootFrame.y;
-    var totalW = rootFrame.width;
-    var totalH = Math.max(3, rootFrame.height);
+    var baseX = host.x;
+    var baseY = host.y;
+    var totalW = host.width;
+    var totalH = Math.max(3, (rootFrame.y + rootFrame.height) - baseY);
     if (!this.headerFrame) {
-        this.headerFrame = new Frame(baseX, baseY, totalW, 1, this.paletteAttr('TITLE_FRAME'), this.parentFrame);
+        this.headerFrame = new Frame(baseX, baseY, totalW, 1, this.paletteAttr('TITLE_FRAME'), host);
         this.headerFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.headerFrame);
         this._headerDefaultAttr = this.headerFrame.attr;
     }
+    // Dedicated tab row (Feed / Search) directly beneath the title bar.
+    if (!this.tabFrame) {
+        this.tabFrame = new Frame(baseX, baseY + 1, totalW, 1, this.paletteAttr('TAB_BAR'), host);
+        this.tabFrame.open();
+        if (typeof this.registerFrame === 'function') this.registerFrame(this.tabFrame);
+    }
     if (!this.listFrame) {
-        var h = Math.max(1, totalH - 2);
-        this.listFrame = new Frame(baseX, baseY + 1, totalW, h, this.paletteAttr('CONTENT_FRAME'), this.parentFrame);
+        // Title (row 1) + tabs (row 2) + status (last row) => body loses 3 rows.
+        var h = Math.max(1, totalH - 3);
+        this.listFrame = new Frame(baseX, baseY + 2, totalW, h, this.paletteAttr('CONTENT_FRAME'), host);
         this.listFrame.open();
         this.listFrame.word_wrap = true;
-        this.setBackgroundFrame(this.listFrame)
+        // Transparent body so the screensaver (rendered into hostFrame, which
+        // sits behind us) shows through the gaps between the article text —
+        // text floats over the animation (chat.js does the same). hostFrame is
+        // the screensaver background; we no longer route it onto listFrame.
+        this.listFrame.transparent = true;
         if (typeof this.registerFrame === 'function') this.registerFrame(this.listFrame);
     }
+    this.setBackgroundFrame(host);
     if (!this.statusFrame) {
-        this.statusFrame = new Frame(baseX, baseY + totalH - 1, totalW, 1, this.paletteAttr('FOOTER_FRAME'), this.parentFrame);
+        this.statusFrame = new Frame(baseX, baseY + totalH - 1, totalW, 1, this.paletteAttr('FOOTER_FRAME'), host);
         this.statusFrame.open();
         if (typeof this.registerFrame === 'function') this.registerFrame(this.statusFrame);
     }
 
 };
 
+// ── Screensaver composition hooks (mirror chat.js) ──────────────────────
+// Overlay savers want one full-area frame rather than fighting our child
+// frames, so hand them the hostFrame; background savers use the listFrame we
+// registered via setBackgroundFrame().
+NewsReader.prototype.overlayFrame = function () {
+    return this.hostFrame || this.listFrame || null;
+};
+
+NewsReader.prototype.pauseForReason = function (reason) {
+    if (reason === 'screensaver_on') {
+        // Raw sixel graphics and the hero child frame live outside / on top of
+        // the frame buffer and would bleed through the saver — drop them.
+        this._pendingSixel = null;
+        this._clearPaintedSixel();
+        this._destroyFeedHero();
+        this._destroyFeedTextBox();
+    }
+    try { Subprogram.prototype.pauseForReason.call(this, reason); } catch (e) {}
+};
+
+NewsReader.prototype.resumeForReason = function (reason) {
+    try { Subprogram.prototype.resumeForReason.call(this, reason); } catch (e) {}
+    // Full repaint so header/tabs/body/status (and any hero) are restored.
+    if (reason === 'screensaver_off') { try { this.draw(); } catch (e) {} }
+};
+
+NewsReader.prototype.clearScreensaverOverlay = function () {
+    try { Subprogram.prototype.clearScreensaverOverlay.call(this); } catch (e) {}
+    try { this.draw(); } catch (e) {}
+};
+
 NewsReader.prototype.draw = function () {
     this._ensureFrames();
     if (!this.listFrame) return;
+    // Any screen other than the card feed must wipe a lingering sixel banner
+    // (raw graphics aren't tracked by the Frame buffer). Done before rendering
+    // so freshly drawn text isn't clobbered.
+    if (!(this.mode === 'feed' && this.state === 'feed_cards')) { this._clearPaintedSixel(); this._destroyFeedTextBox(); }
     this._refreshStatus();
-    if (this.state !== 'categories') this._destroyCategoryIcons();
-    if (this.state !== 'feeds') this._destroyFeedIcons();
-    switch (this.state) {
-        case 'categories':
-            this._drawCategories();
-            break;
-        case 'feeds':
-            this._drawFeeds();
-            break;
-        case 'articles':
-            this._drawArticles();
-            break;
-        case 'article_images':
-            this._drawArticleImages();
-            break;
-        case 'article':
-            this._drawArticle();
-            break;
-        default:
-            if (typeof log === 'function') log('NewsReader unknown state: ' + this.state);
-            break;
+    this._renderTabs();
+    if (this.mode === 'feed') {
+        // Feed mode renders no icon grids; make sure any stragglers are gone.
+        this._destroyCategoryIcons();
+        this._destroyFeedIcons();
+        switch (this.state) {
+            case 'feed_interests':
+                this._drawFeedInterests();
+                break;
+            case 'feed_read':
+                this._drawFeedRead();
+                break;
+            case 'feed_cards':
+            default:
+                this._drawFeedCards();
+                break;
+        }
+    } else {
+        if (this.state !== 'categories') this._destroyCategoryIcons();
+        if (this.state !== 'feeds') this._destroyFeedIcons();
+        switch (this.state) {
+            case 'categories':
+                this._drawCategories();
+                break;
+            case 'feeds':
+                this._drawFeeds();
+                break;
+            case 'articles':
+                this._drawArticles();
+                break;
+            case 'article_images':
+                this._drawArticleImages();
+                break;
+            case 'article':
+                this._drawArticle();
+                break;
+            default:
+                if (typeof log === 'function') log('NewsReader unknown state: ' + this.state);
+                break;
+        }
     }
     if (this.parentFrame && typeof this.parentFrame.cycle === 'function') {
         try { this.parentFrame.cycle(); } catch (_eCycle) { }
     }
+    // Sixel hero (if any) must paint AFTER the frame cycle — the Frame system
+    // doesn't track raw cursor graphics, so blitting before cycle() gets erased.
+    if (this._pendingSixel) this._blitPendingSixel();
 };
 
 NewsReader.prototype._drawCategories = function () {
@@ -3193,7 +3302,11 @@ NewsReader.prototype._renderList = function (items, formatter) {
 };
 
 NewsReader.prototype._cleanup = function () {
-    var frames = ['headerFrame', 'statusFrame', 'listFrame'];
+    this._feedSaveReadPos(true);   // persist read position on exit/teardown
+    this._clearPaintedSixel();
+    this._destroyFeedHero();
+    this._destroyFeedTextBox();
+    var frames = ['headerFrame', 'tabFrame', 'statusFrame', 'listFrame'];
     for (var i = 0; i < frames.length; i++) {
         var key = frames[i];
         var frame = this[key];
@@ -3408,6 +3521,25 @@ NewsReader.prototype._replaceUnicodePunctuation = function (text) {
 NewsReader.prototype.handleKey = function (key) {
     log('NewsReader handleKey: ' + key);
     if (!key) return;
+
+    // ── Tab switching (keyboard TAB, or a click on a tab hotspot) ────────
+    if (key === NEWSREADER_TAB_FEED_CMD) { this._switchMode('feed'); return; }
+    if (key === NEWSREADER_TAB_SEARCH_CMD) { this._switchMode('search'); return; }
+    if (key === '\t' || key === 'KEY_TAB') { this._switchMode(this.mode === 'feed' ? 'search' : 'feed'); return; }
+
+    // ── Feed (passive) mode owns its own state machine ───────────────────
+    // Guard it: a render error on one bad article (odd title/snippet/image)
+    // must never wedge navigation. Without this, _feedFlip advances the index
+    // but the throwing draw() leaves the screen stuck on the old card while
+    // arrows appear dead (TAB still works because it is handled above).
+    if (this.mode === 'feed') {
+        try { this._handleFeedKey(key); }
+        catch (e) {
+            log('newsreader feed handleKey error: ' + e);
+            try { this._setStatus('Could not render this story - press an arrow to continue.'); } catch (_) {}
+        }
+        return;
+    }
 
     switch (this.state) {
         case 'categories': {
@@ -4821,5 +4953,867 @@ NewsReader.prototype._formatTimestamp = function (ts) {
 
 
 
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  PASSIVE "FEED" MODE (Newsflip)
+ *  A cache-driven, card-at-a-time news feed living behind the "Feed" tab.
+ *  Reads the same data the website's Newsflip uses:
+ *    - articles:  system.data_dir + 'newsflip/articles.json'
+ *    - interests: system.data_dir + 'newsflip/prefs/user<N>.json'  (shared w/ web)
+ *    - full text: via the shared newsflip_content.js extractor (Readability)
+ *  Self-contained states so the active/search flow above can't regress.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+// Hotspot click commands MUST be single PRINTABLE chars. The shell injects a
+// hotspot's command into the key stream and (a) silently drops control chars
+// <0x20 and (b) delivers multi-char tokens one char at a time, so only single
+// printable chars round-trip cleanly to handleKey. These are picked to sit
+// OUTSIDE the grid's hotspot-char pool (alnum + !@#$%^&*()-_=+[]{};:,./?) so a
+// Search-mode grid cell can never collide with a tab/feed control.
+var NEWSREADER_TAB_FEED_CMD = '<';      // click "Feed" tab
+var NEWSREADER_TAB_SEARCH_CMD = '>';    // click "Search" tab
+var NEWSREADER_FEED_OPEN_CMD = '\\';    // click the card body to read
+var NEWSREADER_FEED_SAVE_CMD = '|';     // click "Save & view feed"
+// Interest rows reuse digit hotspot chars 1-9,0 => topic index 0..9 (feed mode
+// has no icon grid, so digits are free there and double as keyboard toggles).
+function newsreaderTopicCharForIndex(i) { return (i < 9) ? String(i + 1) : '0'; }
+function newsreaderTopicIndexForChar(c) {
+    if (c === '0') return 9;
+    if (c >= '1' && c <= '9') return c.charCodeAt(0) - 49;
+    return -1;
+}
+
+// Topic taxonomy — mirrors newsflip.ssjs TOPICS so interests are interchangeable.
+var NEWSREADER_FEED_TOPICS = [
+    { id: 'top',           label: 'Top Stories' },
+    { id: 'tech',          label: 'Tech' },
+    { id: 'business',      label: 'Business' },
+    { id: 'science',       label: 'Science' },
+    { id: 'sports',        label: 'Sports' },
+    { id: 'entertainment', label: 'Entertainment' },
+    { id: 'health',        label: 'Health' },
+    { id: 'travel',        label: 'Travel' },
+    { id: 'politics',      label: 'Politics' },
+    { id: 'quirky',        label: 'Quirky' }
+];
+
+/* ── tab bar rendering + hotspots ─────────────────────────────────────── */
+
+NewsReader.prototype._renderTabs = function () {
+    if (!this.tabFrame) return;
+    var feedActive = (this.mode === 'feed');
+    var feedLabel = ' Feed ';
+    var searchLabel = ' Search ';
+    var gap = '  ';
+    var f = this.tabFrame;
+    f.clear(this.paletteAttr('TAB_BAR'));
+    f.gotoxy(1, 1);
+    f.attr = this.paletteAttr(feedActive ? 'TAB_ACTIVE' : 'TAB_INACTIVE');
+    f.putmsg(feedLabel);
+    f.attr = this.paletteAttr('TAB_BAR');
+    f.putmsg(gap);
+    f.attr = this.paletteAttr(feedActive ? 'TAB_INACTIVE' : 'TAB_ACTIVE');
+    f.putmsg(searchLabel);
+    // remember absolute click regions for _tabHotspotDefs()
+    var feedCol0 = 0;
+    var searchCol0 = feedLabel.length + gap.length;
+    this._tabLayout = {
+        feed: { x: f.x + feedCol0, y: f.y, w: feedLabel.length },
+        search: { x: f.x + searchCol0, y: f.y, w: searchLabel.length }
+    };
+};
+
+NewsReader.prototype._tabHotspotDefs = function () {
+    if (!this._tabLayout) return [];
+    var t = this._tabLayout;
+    return [
+        { key: NEWSREADER_TAB_FEED_CMD, x: t.feed.x, y: t.feed.y, width: t.feed.w, height: 1, swallow: true },
+        { key: NEWSREADER_TAB_SEARCH_CMD, x: t.search.x, y: t.search.y, width: t.search.w, height: 1, swallow: true }
+    ];
+};
+
+/* ── mode switching ───────────────────────────────────────────────────── */
+
+NewsReader.prototype._switchMode = function (mode) {
+    if (mode !== 'feed' && mode !== 'search') return;
+    if (mode === this.mode) { this.draw(); return; }
+    if (this.mode === 'feed') this._feedSaveReadPos(true);   // remember our spot before leaving
+    this._clearPaintedSixel();
+    this._destroyFeedHero();
+    this._destroyFeedTextBox();
+    this._releaseHotspots();
+    this._destroyArticleIcon();
+    this._destroyArticleLinkButton();
+    this.mode = mode;
+    if (mode === 'feed') {
+        this._feedTopics = this._feedLoadTopics();
+        this.feedItems = [];
+        this.feedIndex = 0;
+        this.state = (this._feedTopics && this._feedTopics.length) ? 'feed_cards' : 'feed_interests';
+    } else {
+        // Re-enter the active browser at its root category view.
+        this.state = 'categories';
+        this.selectedIndex = 0;
+        this.scrollOffset = 0;
+        this.categoryStack = [];
+        if (this._categoryTree) {
+            this.categoryStack.push(this._categoryTree);
+            this.categories = this._visibleChildren(this._categoryTree);
+        } else {
+            this.categories = this._buildCategories();
+        }
+    }
+    this.draw();
+};
+
+/* ── data access (shared Newsflip cache) ──────────────────────────────── */
+
+NewsReader.prototype._feedDataDir = function () { return system.data_dir + 'newsflip/'; };
+
+NewsReader.prototype._feedLoadArticles = function () {
+    try {
+        var f = new File(this._feedDataDir() + 'articles.json');
+        if (!f.exists || !f.open('r')) return [];
+        var raw = f.read(); f.close();
+        if (!raw || !raw.length) return [];
+        var arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch (e) { log('newsreader feed: articles load error: ' + e); return []; }
+};
+
+NewsReader.prototype._feedPrefsPath = function () {
+    // Key on the Synchronet user number so interests sync with the website.
+    if (!user || !user.number || user.number < 1) return null;
+    return this._feedDataDir() + 'prefs/user' + user.number + '.json';
+};
+
+NewsReader.prototype._feedLoadTopics = function () {
+    try {
+        var p = this._feedPrefsPath();
+        if (!p) return [];
+        var f = new File(p);
+        if (!f.exists || !f.open('r')) return [];
+        var raw = f.read(); f.close();
+        if (!raw) return [];
+        var obj = JSON.parse(raw);
+        return (obj && Array.isArray(obj.topics)) ? obj.topics.slice(0) : [];
+    } catch (e) { return []; }
+};
+
+NewsReader.prototype._feedSaveTopics = function (topics) {
+    var p = this._feedPrefsPath();
+    if (!p) return false;   // guests have no persistent prefs (matches web)
+    try {
+        var dir = this._feedDataDir() + 'prefs/';
+        if (!file_isdir(dir)) mkdir(dir);
+        var f = new File(p);
+        if (!f.open('w')) return false;
+        f.write(JSON.stringify({ topics: topics || [] }));
+        f.close();
+        return true;
+    } catch (e) { log('newsreader feed: prefs save error: ' + e); return false; }
+};
+
+NewsReader.prototype._feedBuildItems = function () {
+    var arts = this._feedLoadArticles();
+    var topics = this._feedTopics || [];
+    var filtered = arts;
+    if (topics.length) {
+        var set = {};
+        for (var i = 0; i < topics.length; i++) set[topics[i]] = true;
+        filtered = arts.filter(function (a) { return a && set[a.topic]; });
+        if (!filtered.length) filtered = arts;   // never show an empty feed
+    }
+    filtered.sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
+    this.feedItems = filtered;
+    if (this.feedIndex < 0) this.feedIndex = 0;
+    if (this.feedIndex >= filtered.length) this.feedIndex = 0;
+    // On the first build of the session, resume to the last article we left on.
+    // (Not on later rebuilds — colour-mode toggle / interest changes keep place.)
+    if (!this._feedResumeApplied) {
+        this._feedResumeApplied = true;
+        this._feedApplyResume();
+    }
+};
+
+/* ── read-position persistence (resume where you left off) ─────────────── */
+// Stored per-user in its OWN file (not prefs/user{N}.json, which the website
+// rewrites wholesale on "save topics" and would clobber). Anchored to the
+// article id (a stable hash of the link), since the feed reorders/refreshes
+// between sessions and a numeric index would point at a different story.
+NewsReader.prototype._feedReadStatePath = function () {
+    if (!user || !user.number || user.number < 1) return null;   // guests: session-only
+    return this._feedDataDir() + 'read/user' + user.number + '.json';
+};
+
+NewsReader.prototype._feedLoadReadPos = function () {
+    try {
+        var p = this._feedReadStatePath();
+        if (!p) return null;
+        var f = new File(p);
+        if (!f.exists || !f.open('r')) return null;
+        var raw = f.read(); f.close();
+        if (!raw) return null;
+        var obj = JSON.parse(raw);
+        return (obj && obj.lastId) ? obj : null;
+    } catch (e) { return null; }
+};
+
+NewsReader.prototype._feedSaveReadPos = function (force) {
+    var p = this._feedReadStatePath();
+    if (!p) return;
+    if (!this.feedItems || !this.feedItems.length) return;
+    var item = this.feedItems[this.feedIndex];
+    if (!item || !item.id) return;
+    var now = Date.now();
+    if (!force && this._feedReadSaveTs && (now - this._feedReadSaveTs) < 750) return;  // throttle held-key flips
+    this._feedReadSaveTs = now;
+    try {
+        var dir = this._feedDataDir() + 'read/';
+        if (!file_isdir(dir)) mkdir(dir);
+        var f = new File(p);
+        if (!f.open('w')) return;
+        f.write(JSON.stringify({ lastId: item.id, savedAt: Math.round(now / 1000) }));
+        f.close();
+    } catch (e) { log('newsreader feed: read-pos save error: ' + e); }
+};
+
+// Resume to the exact article we left on if it's still in the feed. If it aged
+// out, do nothing — feedIndex stays at the top and we start fresh, the way
+// yesterday's page has no bearing on where you open today's paper.
+NewsReader.prototype._feedApplyResume = function () {
+    var pos = this._feedLoadReadPos();
+    var items = this.feedItems;
+    if (!pos || !items || !items.length) return;
+    for (var i = 0; i < items.length; i++) {
+        if (items[i] && items[i].id === pos.lastId) { this.feedIndex = i; return; }
+    }
+};
+
+NewsReader.prototype._feedSourceLabel = function (s) {
+    if (!s) return 'News';
+    return String(s).replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+};
+
+NewsReader.prototype._feedRelativeTime = function (ts) {
+    if (!ts) return '';
+    var now = Date.now() / 1000;
+    var d = now - ts;
+    if (d < 0) d = 0;
+    if (d < 3600) return Math.max(1, Math.round(d / 60)) + 'm ago';
+    if (d < 86400) return Math.round(d / 3600) + 'h ago';
+    return Math.round(d / 86400) + 'd ago';
+};
+
+/* ── feed-mode key dispatch ───────────────────────────────────────────── */
+
+NewsReader.prototype._handleFeedKey = function (key) {
+    switch (this.state) {
+        case 'feed_interests': this._handleFeedInterestsKey(key); break;
+        case 'feed_read': this._handleFeedReadKey(key); break;
+        case 'feed_cards':
+        default: this._handleFeedCardsKey(key); break;
+    }
+};
+
+NewsReader.prototype._feedKeyIs = function (key, names) {
+    if (key === undefined || key === null) return false;
+    // Build once. CRITICAL: reference KEY_* only behind `typeof` guards — some
+    // (notably KEY_ENTER) are NOT defined in every load context, and a bare ref
+    // in this literal throws a ReferenceError that silently kills every key
+    // routed through here. Literal control codes are what inkey() actually
+    // emits (verified): up=0x1e down=0x0a left=0x1d right=0x06 enter=0x0d.
+    if (!this.__feedKeyMap) {
+        var UP    = (typeof KEY_UP    !== 'undefined') ? KEY_UP    : '\x1e';
+        var DOWN  = (typeof KEY_DOWN  !== 'undefined') ? KEY_DOWN  : '\x0a';
+        var LEFT  = (typeof KEY_LEFT  !== 'undefined') ? KEY_LEFT  : '\x1d';
+        var RIGHT = (typeof KEY_RIGHT !== 'undefined') ? KEY_RIGHT : '\x06';
+        var ENTER = (typeof KEY_ENTER !== 'undefined') ? KEY_ENTER : '\r';
+        this.__feedKeyMap = {
+            up:    [UP, '\x1e', 'KEY_UP', 'UP'],
+            down:  [DOWN, '\x0a', 'KEY_DOWN', 'DOWN'],
+            left:  [LEFT, '\x1d', 'KEY_LEFT', 'LEFT'],
+            right: [RIGHT, '\x06', 'KEY_RIGHT', 'RIGHT'],
+            enter: [ENTER, '\r', 'KEY_ENTER'],   // NOT '\n' (0x0a) — that is DOWN
+            esc:   ['\x1B', 'ESC'],
+            back:  ['\b', '\x08', '\x7F'],
+            pgup:  ['\x10', 'KEY_PAGEUP'],
+            pgdn:  ['\x0e', 'KEY_PAGEDN']
+        };
+    }
+    var map = this.__feedKeyMap;
+    for (var n = 0; n < names.length; n++) {
+        var arr = map[names[n]];
+        if (!arr) continue;
+        for (var i = 0; i < arr.length; i++) if (key === arr[i]) return true;
+    }
+    return false;
+};
+
+NewsReader.prototype._handleFeedCardsKey = function (key) {
+    if (key === NEWSREADER_FEED_OPEN_CMD || this._feedKeyIs(key, ['enter'])) { this._openFeedRead(); return; }
+    if (key === 'wheel_up' || this._feedKeyIs(key, ['left', 'up'])) { this._feedFlip(-1); return; }
+    if (key === 'wheel_down' || this._feedKeyIs(key, ['right', 'down'])) { this._feedFlip(1); return; }
+    if (key === 'T' || key === 't') { this.state = 'feed_interests'; this._feedInterestSel = 0; this.draw(); return; }
+    if (key === 'C' || key === 'c') { this._feedToggleColorMode(); return; }
+    if (this._feedKeyIs(key, ['esc', 'back'])) { this.exit(); return; }
+};
+
+// Cycle image colour mode live (16-color -> truecolor -> sixel) and persist it.
+NewsReader.prototype._feedToggleColorMode = function () {
+    var order = ['16', 'truecolor', 'sixel'];
+    var labels = { '16': '16-color', 'truecolor': 'Truecolor', 'sixel': 'Sixel' };
+    var idx = order.indexOf(this._feedColorMode());
+    if (idx < 0) idx = 0;
+    var next = order[(idx + 1) % order.length];
+    try {
+        var store = (this.shell && typeof this.shell._getShellPrefs === 'function') ? this.shell._getShellPrefs() : null;
+        if (store && typeof store.setNewsreaderColorMode === 'function') store.setNewsreaderColorMode(next);
+    } catch (e) {}
+    this._tcCache = {};            // drop cached renders so the new mode rebuilds
+    this._clearPaintedSixel();
+    this._destroyFeedHero();
+    this._setStatus('Image colour: ' + labels[next]);
+    this.draw();
+};
+
+NewsReader.prototype._feedFlip = function (delta) {
+    if (!this.feedItems || !this.feedItems.length) return;
+    var n = this.feedItems.length;
+    this.feedIndex = (this.feedIndex + delta) % n;
+    if (this.feedIndex < 0) this.feedIndex += n;
+    this.draw();
+    this._feedSaveReadPos(false);   // throttled persist of where we are
+};
+
+/* ── card view ────────────────────────────────────────────────────────── */
+
+NewsReader.prototype._drawFeedCards = function () {
+    this._destroyArticleLinkButton();
+    this._gridLayout = null;
+    if (!this.feedItems || !this.feedItems.length) this._feedBuildItems();
+    var items = this.feedItems || [];
+    this._destroyFeedHero();
+    this._destroyFeedTextBox();
+    this._resetFrameSurface(this.listFrame, this.paletteAttr('CARD_SNIPPET'));
+
+    if (!items.length) {
+        this._setHeader('Feed');
+        this.listFrame.gotoxy(2, 2);
+        this.listFrame.putmsg(this._toDisplayText('No stories cached yet. Press T to choose interests, or check back soon.'));
+        this._setStatus('T=Interests   TAB=Search   ESC=Exit');
+        this._pendingHotspotDefs = [];
+        this._applyPendingHotspots();
+        return;
+    }
+    if (this.feedIndex < 0) this.feedIndex = 0;
+    if (this.feedIndex >= items.length) this.feedIndex = items.length - 1;
+    var item = items[this.feedIndex];
+    this._setHeader('Feed   ' + (this.feedIndex + 1) + ' / ' + items.length);
+
+    var lf = this.listFrame;
+    var width = lf.width;
+    var bodyH = lf.height;
+    // The image fills from the top down to whatever height it naturally needs
+    // (never cut off), capped so the text band always has room. The text box
+    // then sits DIRECTLY below the image (no fixed gap).
+    var minBand = Math.min(bodyH - 1, Math.max(7, Math.floor(bodyH * 0.30)));
+    var maxImageRows = Math.max(0, bodyH - minBand);
+
+    var now = Date.now();
+    var allowNetwork = !(this._feedLastDrawTs && (now - this._feedLastDrawTs) < 200);
+
+    // 1) Image (top). Returns the actual rows it rendered.
+    var heroRows = 0;
+    try {
+        var imageUrl = this._feedUsableImageUrl(item.image);
+        if (imageUrl && maxImageRows > 0) heroRows = this._renderHeroFill(imageUrl, width, maxImageRows, allowNetwork) || 0;
+    } catch (eImg) { log('newsreader feed: image error: ' + eImg); heroRows = 0; }
+
+    // 2) Text box directly below the image, filling the rest of the body.
+    var boxTop = (heroRows > 0) ? heroRows : 0;
+    var boxH = Math.max(1, bodyH - boxTop);
+    try {
+        this._renderFeedTextBox(item, lf.x, lf.y + boxTop, width, boxH);
+    } catch (eBox) {
+        log('newsreader feed: textbox error (idx ' + this.feedIndex + '): ' + eBox);
+        try {
+            this._renderFeedTextBox({
+                title: item.title, source: item.source, timestamp: item.timestamp,
+                snippet: '(This story could not be displayed - use the arrows to continue.)'
+            }, lf.x, lf.y + boxTop, width, boxH);
+        } catch (eFallback) {}
+    }
+
+    this._setStatus('ENTER=Read  \x11/\x10=Flip  T=Interests  C=Color  TAB=Search  ESC=Exit');
+
+    // Whole body is clickable to read the article.
+    this._pendingHotspotDefs = [];
+    this._addHotspotArea(NEWSREADER_FEED_OPEN_CMD, false, lf.x + 1, lf.x + lf.width - 2, lf.y, lf.y + lf.height - 2);
+    this._applyPendingHotspots();
+    this._feedLastDrawTs = Date.now();
+};
+
+// Clean + vet a feed image URL. Returns '' for anything that isn't a real photo:
+// known click-tracking / beacon redirects (e.g. Drudge's feedpress.me/link gifs,
+// which serve a 1x1 red pixel and render as a solid red rectangle), non-http
+// URLs, and data URIs. Also un-escapes HTML entities the scraper left in query
+// strings (&amp; -> &). The renderer applies a second, size-based guard.
+NewsReader.prototype._feedUsableImageUrl = function (url) {
+    if (!url) return '';
+    url = String(url).replace(/&amp;/gi, '&').replace(/&#0*38;/g, '&').replace(/^\s+|\s+$/g, '');
+    if (!/^https?:\/\//i.test(url)) return '';
+    // Narrow: only reject clear click/redirect beacons that serve 1x1 pixels.
+    // (Generic tracking PARAMS like utm_ appear on real image URLs — don't match
+    // those; the renderer's size guard catches any other tiny pixels.)
+    var junk = /(feedpress\.me\/link\/|feedproxy\.google\.com\/~r\/|doubleclick\.net\/|googleadservices\.com\/)/i;
+    if (junk.test(url)) return '';
+    return url;
+};
+
+// Resolve the image colour mode from the shared shell preferences.
+NewsReader.prototype._feedColorMode = function () {
+    try {
+        var store = (this.shell && typeof this.shell._getShellPrefs === 'function') ? this.shell._getShellPrefs() : null;
+        if (store && typeof store.getNewsreaderColorMode === 'function') return store.getNewsreaderColorMode();
+    } catch (e) {}
+    return 'truecolor';
+};
+
+NewsReader.prototype._tcModule = function () {
+    if (this._tcImage !== undefined) return this._tcImage;
+    this._tcImage = null;
+    try { this._tcImage = load('future_shell/lib/util/tc_image.js'); }
+    catch (e) { log('newsreader feed: tc_image load failed: ' + e); }
+    return this._tcImage;
+};
+
+// Render the hero image for the current colour mode and return the rows used:
+//   'sixel'     -> DEC sixel graphics (highest fidelity, capable terminals)
+//   'truecolor' -> 24-bit half-block rows blitted raw after the frame cycle
+//   '16'        -> legacy 16-colour ANSI half-block in a child frame
+// allowNetwork=false skips uncached work during fast scrolling.
+NewsReader.prototype._renderHeroFill = function (url, cols, rows, allowNetwork) {
+    var mode = this._feedColorMode();
+    if (mode === 'sixel') {
+        if (allowNetwork === false) return 0;   // sixel re-encodes per draw
+        return (this._renderHeroSixel && this._renderHeroSixel(url)) ? (this._feedSixelRows || 0) : 0;
+    }
+    if (mode === '16') {
+        // 16-colour ANSI hero, filling up to `rows` (never cut off short).
+        return this._renderHeroImage(url, rows, allowNetwork);
+    }
+    var tc = this._tcModule();
+    if (!tc || !tc.available || !tc.available()) return 0;
+    var cacheKey = url + '|' + cols + 'x' + rows;
+    this._tcCache = this._tcCache || {};
+    var cached = this._tcCache[cacheKey];
+    if (!cached && allowNetwork === false) return 0;   // don't block fast scroll
+    if (!cached) {
+        var path = this._feedFetchToTemp(url);
+        if (!path) return 0;
+        try { cached = tc.renderHalfBlock(path, cols, rows); }
+        catch (e) { log('newsreader feed: truecolor render error: ' + e); cached = null; }
+        finally { try { if (file_exists(path)) file_remove(path); } catch (_) {} }
+        if (!cached) return 0;
+        // Bound the cache so long sessions don't grow unbounded.
+        var keys = Object.keys(this._tcCache);
+        if (keys.length > 24) delete this._tcCache[keys[0]];
+        this._tcCache[cacheKey] = cached;
+    }
+    // Queue the raw blit (handled after the frame cycle in draw()).
+    this._pendingSixel = {
+        tcRows: cached.rows,
+        x: this.listFrame.x,
+        y: this.listFrame.y,
+        rows: cached.rowCount,
+        clearCols: cols
+    };
+    this._feedSixelActive = true;
+    log('newsreader feed: truecolor queued ' + cached.rowCount + ' rows at ' + this.listFrame.x + ',' + this.listFrame.y);
+    return cached.rowCount;
+};
+
+// Bottom-band text box: opaque frame with source/headline/snippet over the image.
+NewsReader.prototype._renderFeedTextBox = function (item, x, y, w, h) {
+    this._destroyFeedTextBox();
+    var bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+    var fg = (typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7;
+    var host = this.hostFrame || this.parentFrame;
+    this._feedTextBox = new Frame(x, y, w, h, bg | fg, host);
+    this._feedTextBox.open();
+    this._feedTextBox.transparent = false;   // solid black band, on top of the image
+    if (typeof this.registerFrame === 'function') this.registerFrame(this._feedTextBox);
+    var box = this._feedTextBox;
+    box.clear(bg | fg);
+
+    var iw = Math.max(4, w - 2);
+    var row = 1;
+    // source - time
+    var src = this._feedSourceLabel(item.source);
+    var when = this._feedRelativeTime(item.timestamp);
+    box.attr = this.paletteAttr('CARD_SOURCE');
+    box.gotoxy(2, row);
+    box.putmsg(this._toDisplayText(src + (when ? '  -  ' + when : '')));
+    row += 2;
+    // headline (up to 3 lines)
+    var titleLines = this._wrapText(this._toDisplayText(this._simplifyText(item.title || 'Untitled')), iw);
+    box.attr = this.paletteAttr('CARD_TITLE');
+    for (var ti = 0; ti < titleLines.length && ti < 3 && row <= h; ti++) {
+        box.gotoxy(2, row); box.putmsg(titleLines[ti]); row++;
+    }
+    row += 1;
+    // snippet (fill the rest of the band)
+    var snipLines = this._wrapText(this._toDisplayText(this._simplifyText(item.snippet || '')), iw);
+    box.attr = this.paletteAttr('CARD_SNIPPET');
+    for (var si = 0; si < snipLines.length && row <= h; si++) {
+        box.gotoxy(2, row); box.putmsg(snipLines[si]); row++;
+    }
+};
+
+NewsReader.prototype._destroyFeedTextBox = function () {
+    if (this._feedTextBox) {
+        try { this._deleteFrame(this._feedTextBox); } catch (e) {}
+        this._feedTextBox = null;
+    }
+};
+
+NewsReader.prototype._renderHeroImage = function (url, maxImgRows, allowNetwork) {
+    // 16-color mode: ANSI half-block hero rendered into a child frame at the top
+    // of the body, sized to the image's natural height up to maxImgRows (no hard
+    // 12-row cut-off). Sixel and truecolor are the other selectable modes.
+    try {
+        var isCached = this.imageAnsiCache && this.imageAnsiCache[url];
+        if (!isCached && allowNetwork === false) return 0;
+        var preview = this._getImageAnsi(url);
+        if (!preview || typeof preview.ansi !== 'string' || !preview.ansi.length) {
+            log('newsreader feed: 16-color: no ANSI preview for ' + url);
+            return 0;
+        }
+        var cap = Math.max(4, (typeof maxImgRows === 'number' && maxImgRows > 0) ? maxImgRows : Math.floor(this.listFrame.height * 0.6));
+        var rows = Math.min(cap, preview.rows || cap);
+        this._destroyFeedHero();
+        var bg = (typeof BG_BLACK === 'number') ? BG_BLACK : 0;
+        this._feedHeroFrame = new Frame(1, 1, this.listFrame.width, rows, bg, this.listFrame);
+        this._feedHeroFrame.open();
+        if (typeof this.registerFrame === 'function') this.registerFrame(this._feedHeroFrame);
+        this._renderAnsiPreview(this._feedHeroFrame, preview, { maxRows: rows });
+        return rows;
+    } catch (e) { log('newsreader feed: hero render error: ' + e); return 0; }
+};
+
+NewsReader.prototype._destroyFeedHero = function () {
+    if (this._feedHeroFrame) {
+        try { this._deleteFrame(this._feedHeroFrame); } catch (e) {}
+        this._feedHeroFrame = null;
+    }
+    this._feedSixelActive = false;
+    this._pendingSixel = null;
+};
+
+/* ── sixel hero (capable terminals) ───────────────────────────────────── */
+
+NewsReader.prototype._sixelModule = function () {
+    if (this._sixel !== undefined) return this._sixel;
+    this._sixel = null;
+    try { this._sixel = load('future_shell/lib/util/sixel.js'); }
+    catch (e) { log('newsreader feed: sixel module load failed: ' + e); }
+    return this._sixel;
+};
+
+// Sixel runs whenever the user has selected the 'sixel' colour mode and a local
+// img2sixel encoder exists. Selecting the mode IS the override: we deliberately
+// do NOT gate on cterm-version auto-detection (supported()/termSupports()),
+// because some sixel-capable terminals don't answer the DA query well and would
+// be wrongly excluded. The user's explicit mode choice is authoritative about
+// what their terminal can do; only the local encoder is a hard requirement.
+NewsReader.prototype._feedSixelEnabled = function () {
+    try {
+        var sx = this._sixelModule();
+        return !!(sx && sx.encoderAvailable && sx.encoderAvailable());
+    } catch (e) { return false; }
+};
+
+NewsReader.prototype._feedFetchToTemp = function (url) {
+    if (!url || !/^https?:\/\//i.test(url)) return null;
+    try {
+        load('http.js');
+        var req = new HTTPRequest();
+        req.recv_timeout = 12;
+        var body = req.Get(url);
+        if (!body || !body.length) return null;
+        var ext = /\.png(\?|$)/i.test(url) ? '.png' : (/\.gif(\?|$)/i.test(url) ? '.gif' : '.jpg');
+        var dir = (system.temp_dir || '/tmp/');
+        var path = dir + 'news_hero_' + Date.now() + '_' + (Math.random() * 1e6 | 0) + ext;
+        var f = new File(path);
+        if (!f.open('wb')) return null;
+        f.write(body); f.close();
+        return path;
+    } catch (e) { log('newsreader feed: hero fetch error: ' + e); return null; }
+};
+
+// Character-cell pixel size for a standard SyncTERM/cterm VGA font.
+var NEWSREADER_CELL_W = 8;
+var NEWSREADER_CELL_H = 16;
+
+// Encodes the hero NOW (slow), fit to a bounded top banner so it can never
+// overrun the text below, and defers the console blit to draw() (after the
+// frame cycle). Reserves exactly the rows the image occupies. Returns true if
+// a sixel hero was queued.
+NewsReader.prototype._renderHeroSixel = function (url) {
+    if (!this._feedSixelEnabled()) return false;
+    var sx = this._sixelModule();
+    if (!sx || typeof sx.fileToSixelFit !== 'function') return false;
+    var path = this._feedFetchToTemp(url);
+    if (!path) return false;
+    try {
+        // Banner box: full card width, up to ~half the body height.
+        var cardCols = this.listFrame.width;
+        var maxBannerRows = Math.min(12, Math.max(4, Math.floor(this.listFrame.height * 0.5)));
+        var maxWpx = cardCols * NEWSREADER_CELL_W;
+        var maxHpx = maxBannerRows * NEWSREADER_CELL_H;
+        var fit = sx.fileToSixelFit(path, maxWpx, maxHpx, { colors: 255 });
+        if (!fit || !fit.data) return false;
+        var rows = Math.max(1, Math.ceil((fit.h || maxHpx) / NEWSREADER_CELL_H));
+        this._feedSixelRows = rows;
+        this._pendingSixel = {
+            data: fit.data,
+            x: this.listFrame.x,
+            y: this.listFrame.y,
+            rows: rows,
+            clearCols: cardCols
+        };
+        this._feedSixelActive = true;
+        return true;
+    } catch (e) {
+        log('newsreader feed: sixel hero error: ' + e);
+        return false;
+    } finally {
+        try { if (file_exists(path)) file_remove(path); } catch (_) {}
+    }
+};
+
+// Raw-clear `rows` character rows of `cols` width at absolute (x,y). Used to
+// wipe a previously painted (possibly taller) sixel before re-blitting, since
+// the Frame buffer's dirty-tracking won't repaint unchanged cells over sixel.
+NewsReader.prototype._rawClearRows = function (x, y, cols, rows) {
+    try {
+        var blank = new Array(Math.max(1, cols | 0) + 1).join(' ');
+        var attr = ((typeof BG_BLACK === 'number') ? BG_BLACK : 0) | ((typeof LIGHTGRAY === 'number') ? LIGHTGRAY : 7);
+        for (var r = 0; r < rows; r++) {
+            if (typeof console.gotoxy === 'function') console.gotoxy(x, y + r);
+            if (typeof console.attributes !== 'undefined') console.attributes = attr;
+            console.write(blank);
+        }
+    } catch (e) {}
+};
+
+NewsReader.prototype._blitPendingSixel = function () {
+    var p = this._pendingSixel;
+    this._pendingSixel = null;
+    if (!p || (!p.data && !p.tcRows)) return;   // truecolor uses tcRows, sixel uses data
+    try {
+        if (p.tcRows) {
+            // Truecolor half-block image: one raw row at a time, top-aligned.
+            for (var i = 0; i < p.tcRows.length; i++) {
+                if (typeof console.gotoxy === 'function') console.gotoxy(p.x, p.y + i);
+                console.write(p.tcRows[i]);
+            }
+        } else if (p.data) {
+            // Sixel: clear the band first so a taller previous image can't ghost.
+            this._rawClearRows(p.x, p.y, p.clearCols || 1, (p.rows || 1) + 1);
+            if (typeof console.gotoxy === 'function') console.gotoxy(p.x, p.y);
+            console.write(p.data);
+        }
+        // Remember what we painted so we can wipe it when leaving the feed.
+        this._sixelPaintedRegion = { x: p.x, y: p.y, cols: p.clearCols || 1, rows: p.rows || 1 };
+    } catch (e) { log('newsreader feed: raw image blit error: ' + e); }
+};
+
+// Wipe the last-painted sixel band (used when leaving feed cards: tab switch,
+// screensaver, exit) so the raw graphic doesn't linger over the next screen.
+NewsReader.prototype._clearPaintedSixel = function () {
+    var reg = this._sixelPaintedRegion;
+    this._sixelPaintedRegion = null;
+    if (!reg) return;
+    this._rawClearRows(reg.x, reg.y, reg.cols, reg.rows);
+};
+
+/* ── full-text reader ─────────────────────────────────────────────────── */
+
+NewsReader.prototype._newsflipContentModule = function () {
+    if (this._newsflipContent !== undefined) return this._newsflipContent;
+    this._newsflipContent = null;
+    try { this._newsflipContent = load('newsflip_content.js'); }
+    catch (e) { log('newsreader feed: content module load failed: ' + e); }
+    return this._newsflipContent;
+};
+
+NewsReader.prototype._openFeedRead = function () {
+    var item = (this.feedItems && this.feedItems[this.feedIndex]) ? this.feedItems[this.feedIndex] : null;
+    if (!item) return;
+    this._feedSaveReadPos(true);   // opening to read is a strong "this is my spot"
+    this._destroyFeedHero();
+    var overlay = this._showLoadingOverlay('Fetching article...');
+    var contentHtml = '';
+    var mod = this._newsflipContentModule();
+    if (mod && typeof mod.getArticleContent === 'function') {
+        try {
+            var res = mod.getArticleContent(item);
+            if (res && res.content) contentHtml = res.content;
+        } catch (e) { log('newsreader feed: getArticleContent error: ' + e); }
+    }
+    if (overlay) this._hideLoadingOverlay();
+
+    // Build a synthetic article object _prepareArticleLines understands.
+    var article = {
+        title: item.title,
+        content: contentHtml,
+        summary: item.snippet || '',
+        link: item.link,
+        pubDate: item.timestamp ? new Date(item.timestamp * 1000) : ''
+    };
+    this.feedReadArticle = item;
+    this.feedReadLines = this._prepareArticleLines(article);
+    this.feedReadScroll = 0;
+    this.state = 'feed_read';
+    this._releaseHotspots();
+    this.draw();
+};
+
+NewsReader.prototype._drawFeedRead = function () {
+    this._destroyFeedHero();
+    this._gridLayout = null;
+    var item = this.feedReadArticle || {};
+    this._setHeader(this._toDisplayText(item.title || 'Article'));
+    this._resetFrameSurface(this.listFrame, this.paletteAttr('LIST_INACTIVE'));
+
+    var lines = this.feedReadLines || [];
+    var height = this.listFrame.height;
+    if (this.feedReadScroll < 0) this.feedReadScroll = 0;
+    var maxScroll = Math.max(0, lines.length - height);
+    if (this.feedReadScroll > maxScroll) this.feedReadScroll = maxScroll;
+
+    this.listFrame.attr = this.paletteAttr('TEXT_NORMAL');
+    for (var r = 0; r < height; r++) {
+        var li = this.feedReadScroll + r;
+        if (li >= lines.length) break;
+        // Per-line guard: one unrenderable line must not abort the whole reader.
+        try {
+            this.listFrame.gotoxy(1, r + 1);
+            this.listFrame.putmsg(this._toDisplayText(lines[li]));
+        } catch (eLine) { /* skip this line */ }
+    }
+
+    var more = (this.feedReadScroll < maxScroll);
+    this._setStatus((more ? '\x10=More  ' : '') + '\x11\x10=Scroll   BACKSPACE=Feed   TAB=Search   ESC=Feed');
+    this._pendingHotspotDefs = [];
+    this._applyPendingHotspots();
+};
+
+NewsReader.prototype._handleFeedReadKey = function (key) {
+    var height = this.listFrame ? this.listFrame.height : 20;
+    if (this._feedKeyIs(key, ['esc', 'back'])) {
+        this.state = 'feed_cards';
+        this._releaseHotspots();
+        this.draw();
+        return;
+    }
+    if (key === 'wheel_up' || this._feedKeyIs(key, ['up'])) { this.feedReadScroll -= 1; this.draw(); return; }
+    if (key === 'wheel_down' || this._feedKeyIs(key, ['down', 'enter'])) { this.feedReadScroll += 1; this.draw(); return; }
+    if (this._feedKeyIs(key, ['pgup'])) { this.feedReadScroll -= (height - 1); this.draw(); return; }
+    if (this._feedKeyIs(key, ['pgdn'])) { this.feedReadScroll += (height - 1); this.draw(); return; }
+};
+
+/* ── interests picker ─────────────────────────────────────────────────── */
+
+NewsReader.prototype._feedTopicEnabled = function (id) {
+    return (this._feedTopics || []).indexOf(id) >= 0;
+};
+
+NewsReader.prototype._feedToggleTopic = function (idx) {
+    var t = NEWSREADER_FEED_TOPICS[idx];
+    if (!t) return;
+    if (!this._feedTopics) this._feedTopics = [];
+    var pos = this._feedTopics.indexOf(t.id);
+    if (pos >= 0) this._feedTopics.splice(pos, 1);
+    else this._feedTopics.push(t.id);
+};
+
+NewsReader.prototype._drawFeedInterests = function () {
+    this._destroyFeedHero();
+    this._gridLayout = null;
+    this._setHeader('Feed - What are you into?');
+    this._resetFrameSurface(this.listFrame, this.paletteAttr('LIST_INACTIVE'));
+
+    if (typeof this._feedInterestSel !== 'number') this._feedInterestSel = 0;
+    var sel = this._feedInterestSel;
+    var startRow = 2;
+
+    this.listFrame.attr = this.paletteAttr('TEXT_NORMAL');
+    this.listFrame.gotoxy(2, startRow);
+    this.listFrame.putmsg(this._toDisplayText('Pick the topics you want in your feed:'));
+
+    this._pendingHotspotDefs = [];
+    var rowBase = startRow + 2;
+    for (var i = 0; i < NEWSREADER_FEED_TOPICS.length; i++) {
+        var t = NEWSREADER_FEED_TOPICS[i];
+        var on = this._feedTopicEnabled(t.id);
+        var marker = on ? '[X] ' : '[ ] ';
+        var isSel = (i === sel);
+        var attr = isSel ? this.paletteAttr('LIST_ACTIVE') : this.paletteAttr(on ? 'TOPIC_ON' : 'TOPIC_OFF');
+        var y = rowBase + i;
+        this.listFrame.attr = attr;
+        this.listFrame.gotoxy(2, y);
+        var hk = newsreaderTopicCharForIndex(i);
+        var label = ' ' + hk + ') ' + marker + t.label + ' ';
+        while (label.length < 26) label += ' ';
+        this.listFrame.putmsg(this._toDisplayText(label));
+        // per-row click toggles (single-char digit hotspot)
+        this._addHotspotArea(hk, false,
+            this.listFrame.x + 1, this.listFrame.x + 1 + label.length - 1,
+            this.listFrame.y + y - 1);
+    }
+
+    var saveY = rowBase + NEWSREADER_FEED_TOPICS.length + 1;
+    this.listFrame.attr = this.paletteAttr('LINK_BUTTON');
+    this.listFrame.gotoxy(2, saveY);
+    var saveLabel = '  Save & view feed  ';
+    this.listFrame.putmsg(this._toDisplayText(saveLabel));
+    this._addHotspotArea(NEWSREADER_FEED_SAVE_CMD, false,
+        this.listFrame.x + 1, this.listFrame.x + 1 + saveLabel.length - 1,
+        this.listFrame.y + saveY - 1);
+
+    this._setStatus('\x11\x10=Move   SPACE=Toggle   ENTER=Save   TAB=Search   ESC=Cancel');
+    this._applyPendingHotspots();
+};
+
+NewsReader.prototype._handleFeedInterestsKey = function (key) {
+    var count = NEWSREADER_FEED_TOPICS.length;
+    // topic row click / digit shortcut?
+    if (typeof key === 'string' && key.length === 1) {
+        var ti = newsreaderTopicIndexForChar(key);
+        if (ti >= 0 && ti < count) { this._feedInterestSel = ti; this._feedToggleTopic(ti); this.draw(); return; }
+    }
+    if (key === NEWSREADER_FEED_SAVE_CMD || key === 'S' || key === 's' || this._feedKeyIs(key, ['enter'])) { this._feedSaveInterests(); return; }
+    if (this._feedKeyIs(key, ['up'])) { this._feedInterestSel = (this._feedInterestSel - 1 + count) % count; this.draw(); return; }
+    if (this._feedKeyIs(key, ['down'])) { this._feedInterestSel = (this._feedInterestSel + 1) % count; this.draw(); return; }
+    if (key === ' ' || this._feedKeyIs(key, ['left', 'right'])) { this._feedToggleTopic(this._feedInterestSel); this.draw(); return; }
+    if (this._feedKeyIs(key, ['esc', 'back'])) {
+        // cancel: reload saved topics, go to cards (or exit if still none)
+        this._feedTopics = this._feedLoadTopics();
+        if (this._feedTopics.length) { this.state = 'feed_cards'; this.feedItems = []; this.draw(); }
+        else { this.exit(); }
+        return;
+    }
+};
+
+NewsReader.prototype._feedSaveInterests = function () {
+    this._feedSaveTopics(this._feedTopics || []);
+    this.feedItems = [];
+    this.feedIndex = 0;
+    this.state = 'feed_cards';
+    this.draw();
+};
 
 registerModuleExports({ NewsReader: NewsReader });

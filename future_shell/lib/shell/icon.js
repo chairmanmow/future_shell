@@ -63,8 +63,8 @@ Icon.prototype._renderIconFile = function (iconW, iconH) {
     var iconFile = this.data.iconFile;
     // Search paths: newsreader subdirectory first, then main assets
     var searchPaths = [
-        modsDir + "future_shell/assets/newsreader/" + iconFile,
-        modsDir + "future_shell/assets/" + iconFile
+        system.text_dir + "icons/newsreader/" + iconFile,
+        system.text_dir + "icons/" + iconFile
     ];
     for (var sp = 0; sp < searchPaths.length; sp++) {
         var binPath = searchPaths[sp] + ".bin";

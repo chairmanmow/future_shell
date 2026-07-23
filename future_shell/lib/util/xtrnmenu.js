@@ -10,8 +10,8 @@ var DYNAMIC_ICON_FILES = (function () {
 	var map = {};
 	try {
 		// js.exec_dir ends with subfunctions/ for this script; go up one to lib/ and into icons/
-		var iconPathBase = "future_shell/assets/"
-		var iconDir = system.mods_dir + iconPathBase;
+		var iconPathBase = system.text_dir + "icons/"
+		var iconDir = iconPathBase;
 		var list = directory(iconDir) || [];
 		var patterns = [iconDir + "*.ans", iconDir + "*.bin"];
 		for (var p = 0; p < patterns.length; p++) {

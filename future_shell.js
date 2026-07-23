@@ -1,9 +1,45 @@
-/* mods/chshell.js
- * Supervisor/entrypoint for IconShell (advanced) with BasicShell fallback.
- * Set Command Shell to: ?mods/chshell
+/* mods/future_shell.js
+ * Supervisor/entrypoint for the FUTURE_SHELL command shell.
+ *
+ * ==== fshell_ts CUTOVER FLAG (strangler) =================================
+ * true  => every FUTURE_SHELL user runs the TypeScript shell (fshell_ts
+ *          bundle), no per-user/SCFG changes needed.
+ * false => the original legacy IconShell/BasicShell below runs unchanged.
+ *
+ * Safety net: if the fshell_ts bundle fails to LOAD (missing/parse error),
+ * the session falls through to the legacy shell instead of stranding or
+ * logging off. Roll back the whole system by flipping this one flag.
+ *
+ * CANONICAL COPY: fshell_ts/launcher/future_shell.js (fshell_ts repo).
+ * DEPLOYED COPY:  /sbbs/mods/future_shell.js. Keep the two in sync.
+ * ========================================================================
  */
 
 "use strict";
+
+var USE_FSHELL_TS = true;
+
+if (USE_FSHELL_TS) {
+    var __fshell_ok = false;
+    try {
+        load("/sbbs/mods/fshell_ts/dist/fshell.js");
+        __fshell_ok = true;
+    } catch (__fshell_e) {
+        var __fshell_msg = "future_shell: fshell_ts bundle failed, falling back to legacy shell: " +
+            ((__fshell_e && __fshell_e.message) ? __fshell_e.message : String(__fshell_e)) +
+            ((__fshell_e && __fshell_e.fileName)
+                ? " (" + __fshell_e.fileName + ":" + (__fshell_e.lineNumber || "?") + ")" : "");
+        try { log(3 /* LOG_ERR */, __fshell_msg); } catch (_e1) { }
+        try { writeln("\r\n\x01n\x01h\x01r" + __fshell_msg + "\x01n"); } catch (_e2) { }
+    }
+    if (__fshell_ok) {
+        // The bundle's internal supervisor owned the session and returned
+        // normally (same contract as the FSHELL_TS stub) - never run legacy.
+        exit(0);
+    }
+}
+
+/* ==== legacy shell below, byte-identical ================================ */
 
 load("sbbsdefs.js"); // LOG_* and K_* constants
 

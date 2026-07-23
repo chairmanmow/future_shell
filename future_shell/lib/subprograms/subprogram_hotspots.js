@@ -46,8 +46,76 @@
         this._applyFallback(defs);
     };
 
+    // --- Collision-proof multi-char hotspot tokens -------------------------
+    // Legacy subprograms registered single alphanumeric keys as the click
+    // command. That capped them at ~90 hotspots and, worse, collided with the
+    // keys a user might actually press (clicking a row whose code was 's' would
+    // fire a Search command, and pressing 's' on the keyboard would select a
+    // row). We instead hand out pipe-delimited tokens such as |m1|, |m2|, ...
+    // A mouse click injects the whole token; a normal keypress can never
+    // accidentally produce one. We use pipes rather than tildes deliberately:
+    // the shell's grid hotspot handler treats any leading '~' as a pending
+    // grid token and would swallow it before a subprogram ever sees it (see
+    // the ticker's |TK| token in shelllib.js for the same workaround).
+    SubprogramHotspotHelper.prototype.nextToken = function () {
+        this._tokenCounter = (this._tokenCounter || 0) + 1;
+        return '|m' + this._tokenCounter.toString(36) + '|';
+    };
+
+    // Returns the list of currently-registered tokens (pipe-delimited keys from
+    // the most recent set()). Used by the buffered matcher.
+    SubprogramHotspotHelper.prototype._activeTokens = function () {
+        var out = [];
+        var defs = this._currentDefs || [];
+        var seen = {};
+        for (var i = 0; i < defs.length; i++) {
+            var k = defs[i] && defs[i].key;
+            if (typeof k !== 'string' || k.length < 3) continue;
+            if (k.charAt(0) !== '|' || k.charAt(k.length - 1) !== '|') continue;
+            if (seen[k]) continue;
+            seen[k] = true;
+            out.push(k);
+        }
+        return out;
+    };
+
+    // Feed a single incoming key. Mirrors the shell's grid hotspot buffering:
+    //   returns { token: '|m3|' } when a complete token has arrived,
+    //   returns { pending: true } when the buffer is a partial token prefix
+    //     (the caller should consume the key and wait for more),
+    //   returns null when the key is not part of any active token (the caller
+    //     should handle it normally).
+    SubprogramHotspotHelper.prototype.matchKey = function (ch) {
+        if (!ch || typeof ch !== 'string') return null;
+        var tokens = this._activeTokens();
+        if (!tokens.length) { this._matchBuf = ''; return null; }
+        this._matchBuf = (this._matchBuf || '') + ch;
+        if (this._matchBuf.length > 24) this._matchBuf = this._matchBuf.slice(-24);
+        var i, token;
+        for (i = 0; i < tokens.length; i++) {
+            if (this._matchBuf.indexOf(tokens[i]) !== -1) {
+                this._matchBuf = '';
+                return { token: tokens[i] };
+            }
+        }
+        for (i = 0; i < tokens.length; i++) {
+            token = tokens[i];
+            var sliceLen = Math.min(token.length, this._matchBuf.length);
+            if (sliceLen > 0 && token.substring(0, sliceLen) === this._matchBuf.slice(-sliceLen)) {
+                return { pending: true };
+            }
+        }
+        this._matchBuf = '';
+        return null;
+    };
+
+    SubprogramHotspotHelper.prototype.resetMatch = function () {
+        this._matchBuf = '';
+    };
+
     SubprogramHotspotHelper.prototype.clear = function () {
         this._currentDefs = [];
+        this._matchBuf = '';
         if (this._usingManager) {
             try { this.manager.clearLayer(this.layerId); } catch (_) { }
             try { this.manager.deactivateLayer(this.layerId); } catch (_) { }

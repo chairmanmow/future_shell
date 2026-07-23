@@ -423,7 +423,7 @@ TelnetGateway.prototype._iconFor = function (id) {
     if (!id) return { icon: fallback, fallback: true };
     var safe = ('' + id).toLowerCase().replace(/[^a-z0-9]+/g, '-');
     try {
-        var basePath = system.mods_dir + 'future_shell/assets/';
+        var basePath = system.text_dir + 'icons/';
         var gatewayPath = basePath + 'gateways/';
         var binPath = gatewayPath + safe + '.bin';
         var ansPath = gatewayPath + safe + '.ans';
@@ -612,7 +612,7 @@ TelnetGateway.prototype._gatewayIconPaths = function (gateway) {
     if (!modsBase && typeof js !== 'undefined' && js && js.exec_dir) modsBase = js.exec_dir;
     if (!modsBase) modsBase = '.';
     if (modsBase.slice(-1) !== '/' && modsBase.slice(-1) !== '\\') modsBase += '/';
-    var iconDir = modsBase + 'future_shell/assets/gateways/';
+    var iconDir = system.text_dir + 'icons/gateways/';
     return {
         safeId: safeId,
         binPath: iconDir + safeId + '.bin',

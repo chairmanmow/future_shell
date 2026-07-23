@@ -10,13 +10,49 @@ if (typeof JSONdb === 'undefined') {
 try { if (typeof Button !== 'function') load('future_shell/lib/util/layout/button.js'); } catch (_eBtn) { }
 try { if (typeof SubprogramHotspotHelper !== 'function') load('future_shell/lib/subprograms/subprogram_hotspots.js'); } catch (_eHs) { }
 
-var SHELL_PREFS_VERSION = 2;
+// v3 (2026-05): added per-category delivery `mode` (individual/digest/off),
+// global `snoozeUntil`, and the telegram/forum categories. See migration in
+// _load(). `state` (on/snooze/off) is retained as the per-category master
+// switch driving the legacy alert-settings UI; `mode` layers on top of it to
+// decide HOW an enabled category is delivered. getCategoryDelivery() unifies
+// the two for dispatch.
+var SHELL_PREFS_VERSION = 3;
 var SHELL_PREFS_VALID_STATES = { on: 'on', off: 'off', snooze: 'snooze' };
-var SHELL_PREFS_DEFAULT_CATEGORIES = ['mrc', 'json-chat', 'email', 'launch_notice', 'mrc_presence'];
+var SHELL_PREFS_VALID_MODES = { individual: 'individual', digest: 'digest', off: 'off' };
+var SHELL_PREFS_DEFAULT_CATEGORIES = ['mrc', 'json-chat', 'email', 'telegram', 'forum', 'launch_notice', 'mrc_presence'];
+// Categories addressed AT the user default to individual toasts; ambient
+// "other users' activity" categories default to a grouped digest.
+var SHELL_PREFS_INDIVIDUAL_CATEGORIES = ['telegram', 'email', 'forum'];
+var SHELL_PREFS_DIGEST_CATEGORIES = ['mrc', 'mrc-chat', 'json-chat', 'launch_notice', 'mrc_presence'];
 var SHELL_PREFS_DB_FILE = 'shell_prefs.json';
 var SHELL_PREFS_DB_SCOPE = 'ICSH_SHELL_PREFS';
 var SHELL_PREFS_LOG_PREFIX = '[ShellPrefs] ';
 var SHELL_PREFS_STATE_CYCLE = ['on', 'snooze', 'off'];
+
+// Default delivery mode for a category before the user customizes it.
+function _spDefaultCategoryMode(category) {
+    var key = String(category || '').toLowerCase();
+    for (var i = 0; i < SHELL_PREFS_DIGEST_CATEGORIES.length; i++) {
+        if (SHELL_PREFS_DIGEST_CATEGORIES[i] === key) return 'digest';
+    }
+    // Direct/addressed categories and anything unknown default to individual.
+    return 'individual';
+}
+
+function _spNormalizeMode(mode, fallback) {
+    if (!mode) return fallback || 'individual';
+    var key = String(mode).toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(SHELL_PREFS_VALID_MODES, key)) return key;
+    return fallback || 'individual';
+}
+
+// Monotonic-ish wall clock in ms. Date.now() exists in this engine, but guard
+// for any harness where it doesn't (fall back to time() seconds).
+function _spNow() {
+    if (typeof Date !== 'undefined' && Date.now) return Date.now();
+    if (typeof time === 'function') return time() * 1000;
+    return 0;
+}
 
 var _spDbInstance = null;
 var _spDbInitialized = false;
@@ -276,6 +312,7 @@ function _spDefaultPrefs() {
         updated: 0,
         notifications: {
             globalState: 'on',
+            snoozeUntil: 0,
             categories: {},
             senders: {}
         },
@@ -283,7 +320,12 @@ function _spDefaultPrefs() {
         mrc: _spDefaultMrcPrefs()
     };
     for (var i = 0; i < SHELL_PREFS_DEFAULT_CATEGORIES.length; i++) {
-        prefs.notifications.categories[SHELL_PREFS_DEFAULT_CATEGORIES[i]] = { state: 'on', updated: 0 };
+        var cat = SHELL_PREFS_DEFAULT_CATEGORIES[i];
+        prefs.notifications.categories[cat] = {
+            state: 'on',
+            mode: _spDefaultCategoryMode(cat),
+            updated: 0
+        };
     }
     return prefs;
 }
@@ -393,14 +435,59 @@ ShellPrefs.prototype._load = function () {
     }
     if (!this.preferences.notifications.categories) this.preferences.notifications.categories = {};
     if (!this.preferences.notifications.senders) this.preferences.notifications.senders = {};
+    var migrated = this._migrateNotificationsV3();
     this.preferences.version = SHELL_PREFS_VERSION;
-    if (changed) {
+    if (changed || migrated) {
         this._touch();
     } else {
         this._dirty = false;
         if (typeof stored.updated === 'number') this.preferences.updated = stored.updated;
     }
     this._initializeScreensaverState();
+};
+
+// Bring a loaded notifications block up to schema v3: backfill the per-category
+// delivery `mode` and ensure `snoozeUntil` exists. Idempotent and safe to run
+// on every _load() (reloadShellPrefs re-runs _load on the cached instance, so
+// this must NOT clear an until-logout snooze — that is done once at
+// construction by resetUntilLogoutSnooze()). Returns true if anything changed.
+ShellPrefs.prototype._migrateNotificationsV3 = function () {
+    var prefs = this.preferences.notifications;
+    var dirty = false;
+    if (typeof prefs.snoozeUntil !== 'number' || prefs.snoozeUntil < 0) {
+        prefs.snoozeUntil = 0;
+        dirty = true;
+    }
+    var cats = prefs.categories || {};
+    for (var key in cats) {
+        if (!Object.prototype.hasOwnProperty.call(cats, key)) continue;
+        var entry = cats[key];
+        if (!entry || typeof entry !== 'object') {
+            cats[key] = entry = { state: 'on', updated: 0 };
+            dirty = true;
+        }
+        if (!entry.mode || !Object.prototype.hasOwnProperty.call(SHELL_PREFS_VALID_MODES, entry.mode)) {
+            entry.mode = _spDefaultCategoryMode(key);
+            dirty = true;
+        }
+    }
+    return dirty;
+};
+
+// Clear an "until logout" snooze (globalState 'snooze' with snoozeUntil === 0)
+// so it never bleeds into a new session. Timed snoozes (snoozeUntil > 0) are
+// left intact to auto-expire lazily. Call ONCE per session at shell init, not
+// from _load(). Returns true if it changed state.
+ShellPrefs.prototype.resetUntilLogoutSnooze = function () {
+    var prefs = this.preferences.notifications;
+    if (!prefs) return false;
+    if (_spNormalizeState(prefs.globalState) === 'snooze' && (!prefs.snoozeUntil || prefs.snoozeUntil === 0)) {
+        prefs.globalState = 'on';
+        prefs.snoozeUntil = 0;
+        this._touch();
+        return true;
+    }
+    return false;
 };
 
 ShellPrefs.prototype._touch = function () {
@@ -412,7 +499,9 @@ ShellPrefs.prototype._ensureCategory = function (category) {
     var prefs = this.preferences.notifications;
     if (!prefs.categories) prefs.categories = {};
     if (!prefs.categories[category]) {
-        prefs.categories[category] = { state: 'on', updated: 0 };
+        prefs.categories[category] = { state: 'on', mode: _spDefaultCategoryMode(category), updated: 0 };
+    } else if (!prefs.categories[category].mode) {
+        prefs.categories[category].mode = _spDefaultCategoryMode(category);
     }
     return prefs.categories[category];
 };
@@ -1691,9 +1780,113 @@ ShellPrefs.prototype.getNotificationState = function (category, sender) {
     return _spEffectiveState(globalState, catState, senderState);
 };
 
+// ---- Global snooze ------------------------------------------------------
+// A timed snooze (ms > 0) lazily auto-expires back to 'on'. ms === 0 means
+// "until logout" (cleared by _migrateNotificationsV3 at next construction).
+
+ShellPrefs.prototype.setGlobalSnooze = function (durationMs) {
+    var prefs = this.preferences.notifications;
+    if (!prefs) {
+        this.preferences.notifications = prefs = { globalState: 'on', snoozeUntil: 0, categories: {}, senders: {} };
+    }
+    var ms = (typeof durationMs === 'number' && durationMs > 0) ? Math.floor(durationMs) : 0;
+    prefs.globalState = 'snooze';
+    prefs.snoozeUntil = ms > 0 ? (_spNow() + ms) : 0;
+    this._touch();
+    this._refreshRows();
+    this._renderList();
+    return true;
+};
+
+ShellPrefs.prototype.clearSnooze = function () {
+    var prefs = this.preferences.notifications;
+    if (!prefs) return false;
+    var changed = (prefs.globalState === 'snooze') || (prefs.snoozeUntil && prefs.snoozeUntil !== 0);
+    prefs.snoozeUntil = 0;
+    if (prefs.globalState === 'snooze') prefs.globalState = 'on';
+    if (changed) {
+        this._touch();
+        this._refreshRows();
+        this._renderList();
+    }
+    return changed;
+};
+
+// Lazily expire a timed snooze whose deadline has passed. Returns true if it
+// flipped the global state back to 'on'. Cheap; safe to call on every dispatch.
+ShellPrefs.prototype._expireSnoozeIfDue = function () {
+    var prefs = this.preferences.notifications;
+    if (!prefs || prefs.globalState !== 'snooze') return false;
+    if (typeof prefs.snoozeUntil === 'number' && prefs.snoozeUntil > 0 && _spNow() >= prefs.snoozeUntil) {
+        prefs.globalState = 'on';
+        prefs.snoozeUntil = 0;
+        this._touch();
+        return true;
+    }
+    return false;
+};
+
+ShellPrefs.prototype.getSnoozeInfo = function () {
+    this._expireSnoozeIfDue();
+    var prefs = this.preferences.notifications || {};
+    var active = _spNormalizeState(prefs.globalState) === 'snooze';
+    var until = (typeof prefs.snoozeUntil === 'number' && prefs.snoozeUntil > 0) ? prefs.snoozeUntil : 0;
+    return {
+        active: active,
+        until: active ? until : 0,
+        remainingMs: (active && until > 0) ? Math.max(0, until - _spNow()) : 0,
+        untilLogout: active && until === 0
+    };
+};
+
+// ---- Per-category delivery mode -----------------------------------------
+
+ShellPrefs.prototype.getCategoryMode = function (category) {
+    if (!category) return 'individual';
+    var prefs = this.preferences.notifications;
+    if (!prefs || !prefs.categories || !prefs.categories[category]) return _spDefaultCategoryMode(category);
+    return _spNormalizeMode(prefs.categories[category].mode, _spDefaultCategoryMode(category));
+};
+
+ShellPrefs.prototype.setCategoryMode = function (category, mode) {
+    if (!category) return false;
+    var normalized = _spNormalizeMode(mode, _spDefaultCategoryMode(category));
+    var entry = this._ensureCategory(category);
+    if (entry.mode === normalized) return true;
+    entry.mode = normalized;
+    entry.updated = _spNow();
+    this._touch();
+    this._refreshRows();
+    this._renderList();
+    return true;
+};
+
+// Resolve how a notification should be delivered RIGHT NOW, unifying the
+// global snooze/off switch, per-sender mute, the per-category master `state`,
+// and the per-category delivery `mode`. Returns 'individual' | 'digest' |
+// 'suppress'. This is the single entry point the shell dispatch consults.
+ShellPrefs.prototype.getCategoryDelivery = function (category, sender) {
+    this._expireSnoozeIfDue();
+    var globalState = this.getGlobalState();
+    if (globalState === 'off' || globalState === 'snooze') return 'suppress';
+    // Per-sender mute (off/snooze) wins over the category settings.
+    if (category && sender) {
+        var senderState = this.getSenderState(category, sender);
+        if (senderState === 'off' || senderState === 'snooze') return 'suppress';
+    }
+    // Legacy per-category master switch still fully honored.
+    if (category) {
+        var catState = this.getCategoryState(category);
+        if (catState === 'off' || catState === 'snooze') return 'suppress';
+        var mode = this.getCategoryMode(category);
+        if (mode === 'off') return 'suppress';
+        return (mode === 'digest') ? 'digest' : 'individual';
+    }
+    return 'individual';
+};
+
 ShellPrefs.prototype.shouldDisplayNotification = function (category, sender) {
-    var state = this.getNotificationState(category, sender);
-    return state !== 'off' && state !== 'snooze';
+    return this.getCategoryDelivery(category, sender) !== 'suppress';
 };
 
 ShellPrefs.prototype.updateFromObject = function (partial) {
@@ -1960,6 +2153,26 @@ ShellPrefs.prototype.setMrcMsgBg = function (color) {
     if (color < 0) color = 0;
     if (color > 7) color = 7;
     this.preferences.mrc.msg_bg = color;
+    this._touch();
+    this.save();
+};
+
+/**
+ * Newsreader image colour mode: 'truecolor' (24-bit half-block, default) or
+ * '16' (legacy CGA/ANSI). Stored under preferences.newsreader.
+ * @returns {string} 'truecolor' | '16'
+ */
+ShellPrefs.prototype.getNewsreaderColorMode = function () {
+    // Image colour mode for the News reader Feed: '16' | 'truecolor' | 'sixel'.
+    var nr = this.preferences.newsreader;
+    var mode = nr && nr.colorMode;
+    if (mode === 'truecolor' || mode === 'sixel' || mode === '16') return mode;
+    return '16';   // default to the reliable 16-color ANSI hero
+};
+
+ShellPrefs.prototype.setNewsreaderColorMode = function (mode) {
+    if (!this.preferences.newsreader) this.preferences.newsreader = {};
+    this.preferences.newsreader.colorMode = (mode === 'truecolor' || mode === 'sixel') ? mode : '16';
     this._touch();
     this.save();
 };

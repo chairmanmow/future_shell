@@ -18,6 +18,7 @@ function get_routes(ctx) {
 	load(base + "avatar.js");
 	load(base + "auth.js");
 	load(base + "wallet.js");
+	load(base + "points.js");
 
 	var routes = [];
 
@@ -64,6 +65,11 @@ function get_routes(ctx) {
 	// wallet.js defines make_wallet_route(ctx)
 	if (typeof make_wallet_route === "function") {
 		routes.push(make_wallet_route(ctx));
+	}
+
+	// points.js defines make_points_route(ctx)
+	if (typeof make_points_route === "function") {
+		routes.push(make_points_route(ctx));
 	}
 
 	return routes;

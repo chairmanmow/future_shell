@@ -23,6 +23,10 @@ require('sbbsdefs.js',
 
 // Notification states cycle in this order (matches the store's vocabulary).
 var ALERT_STATE_CYCLE = ['on', 'snooze', 'off'];
+// Per-category delivery modes (schema v3). Categories no longer use on/snooze/
+// off; they pick how an enabled category is delivered. Global on/off is the
+// master switch (snooze is a transient runtime state set via CTRL-S).
+var ALERT_MODE_CYCLE = ['individual', 'digest', 'off'];
 
 function _alertTitleCase(str) {
     str = String(str || '').replace(/[_\-]+/g, ' ');
@@ -135,7 +139,7 @@ AlertSettings.prototype._buildRows = function () {
             type: 'category',
             key: cats[i],
             label: _alertTitleCase(cats[i]),
-            state: this.store.getCategoryState(cats[i]),
+            mode: this.store.getCategoryMode(cats[i]),
             selectable: true
         });
     }
@@ -188,9 +192,17 @@ AlertSettings.prototype._renderHeader = function () {
     this._headerFrame.center(' Notification Settings ');
 };
 
-AlertSettings.prototype._stateLabel = function (state) {
+// Badge for a row: global rows show ON/SNOOZED/OFF; category rows show their
+// delivery mode INDIVIDUAL/DIGEST/OFF.
+AlertSettings.prototype._valueLabel = function (row) {
+    if (row && row.type === 'category') {
+        if (row.mode === 'off') return { text: 'OFF', attr: this.paletteAttr('STATE_OFF') };
+        if (row.mode === 'digest') return { text: 'DIGEST', attr: this.paletteAttr('STATE_SNOOZE') };
+        return { text: 'INDIVIDUAL', attr: this.paletteAttr('STATE_ON') };
+    }
+    var state = row ? row.state : 'on';
     if (state === 'off') return { text: 'OFF', attr: this.paletteAttr('STATE_OFF') };
-    if (state === 'snooze') return { text: 'SNOOZE', attr: this.paletteAttr('STATE_SNOOZE') };
+    if (state === 'snooze') return { text: 'SNOOZED', attr: this.paletteAttr('STATE_SNOOZE') };
     return { text: 'ON', attr: this.paletteAttr('STATE_ON') };
 };
 
@@ -229,9 +241,9 @@ AlertSettings.prototype._renderRow = function (row, isSelected, w) {
         f.putmsg(_alertPad(' ' + row.label, w));
         return;
     }
-    // global / category row: label + right-aligned state badge
+    // global / category row: label + right-aligned value badge
     var rowAttr = isSelected ? this.paletteAttr('ROW_ACTIVE') : this.paletteAttr('ROW_NORMAL');
-    var st = this._stateLabel(row.state);
+    var st = this._valueLabel(row);
     var labelStr = ' ' + (isSelected ? '\x01h' : '') + row.label + '\x01n';
     var labelLen = (' ' + row.label).length;
     var gap = Math.max(1, w - labelLen - st.text.length - 1);
@@ -296,21 +308,27 @@ AlertSettings.prototype._cycleCurrent = function (delta) {
     var row = this._rows[this._selectedIndex];
     if (!row || !this.store) return;
     if (typeof delta !== 'number' || !delta) delta = 1;
-    var pos = ALERT_STATE_CYCLE.indexOf(row.state);
-    if (pos === -1) pos = 0;
-    var len = ALERT_STATE_CYCLE.length;
-    var next = ALERT_STATE_CYCLE[(pos + delta + len) % len];
     if (row.type === 'global') {
-        this.store.setGlobalState(next);
+        // Master switch toggles ON/OFF. A transient snooze collapses to ON.
+        var cur = (row.state === 'off') ? 'off' : 'on';
+        var nextG = (cur === 'on') ? 'off' : 'on';
+        if (nextG === 'on' && typeof this.store.clearSnooze === 'function') {
+            try { this.store.clearSnooze(); } catch (_) { }
+        }
+        this.store.setGlobalState(nextG);
         row.state = this.store.getGlobalState();
     } else if (row.type === 'category') {
-        this.store.setCategoryState(row.key, next);
-        row.state = this.store.getCategoryState(row.key);
+        var pos = ALERT_MODE_CYCLE.indexOf(row.mode);
+        if (pos === -1) pos = 0;
+        var len = ALERT_MODE_CYCLE.length;
+        var nextM = ALERT_MODE_CYCLE[(pos + delta + len) % len];
+        this.store.setCategoryMode(row.key, nextM);
+        row.mode = this.store.getCategoryMode(row.key);
     } else {
         return;
     }
     this.store.save();
-    this._statusText = ' ' + row.label + ' -> ' + this._stateLabel(row.state).text;
+    this._statusText = ' ' + row.label + ' -> ' + this._valueLabel(row).text;
     this._redraw();
 };
 

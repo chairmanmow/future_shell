@@ -123,7 +123,7 @@ function _mbFindIconBase(name) {
     }
     var iconDir = system.mods_dir;
     if (iconDir && iconDir.slice(-1) !== '/' && iconDir.slice(-1) !== '\\') iconDir += '/';
-    iconDir += "future_shell/assets/";
+    iconDir = system.text_dir + "icons/";
     var exts = ['.ans', '.bin'];
     for (var v = 0; v < variants.length; v++) {
         var variant = variants[v];
@@ -1437,6 +1437,19 @@ MessageBoard.prototype._releaseHotspots = function () {
     }
 };
 
+// Mint a fresh collision-proof hotspot token (|m1|, |m2|, ...). Clicking a
+// region registered with one of these injects the whole token, so it can never
+// be confused with a real keypress, and there is no ~90-item alphanumeric cap.
+// Falls back to a local counter in the (rare) case the shared helper is absent
+// so registration via console.add_hotspot still works.
+MessageBoard.prototype._nextHotspotToken = function () {
+    if (this.hotspots && typeof this.hotspots.nextToken === 'function') {
+        return this.hotspots.nextToken();
+    }
+    this._fallbackHotspotCounter = (this._fallbackHotspotCounter || 0) + 1;
+    return '|m' + this._fallbackHotspotCounter.toString(36) + '|';
+};
+
 MessageBoard.prototype._addHotspotArea = function (key, swallow, minX, maxX, startY, endY, opts) {
     if (key === undefined || key === null) return;
     if (typeof minX !== 'number' || typeof maxX !== 'number' || typeof startY !== 'number') return;
@@ -1566,8 +1579,8 @@ MessageBoard.prototype._init = function (reentry) {
     this.currentMessageHeader = null;
     this.currentMessageBody = '';
     this.currentMessageRawBody = '';
-    // Build comprehensive hotspot character set (single-key tokens only)
-    this._buildHotspotCharSet();
+    // Hotspots use collision-proof |mN| tokens minted on demand via
+    // _nextHotspotToken(); no precomputed single-key character pool needed.
     // Default to no artificial cap; hotspot mapping handles visible rows only
     this.threadHeaderLimit = 0;
     if (reentry) this._deactivateActiveViewController({ reason: 'reinit' });
@@ -1577,20 +1590,6 @@ MessageBoard.prototype._init = function (reentry) {
     if (reentry) this._releaseHotspots();
 };
 
-MessageBoard.prototype._buildHotspotCharSet = function () {
-    // Order preference: digits, uppercase, lowercase, selected punctuation, then remaining safe ASCII
-    var used = {};
-    function push(arr, ch) { if (!used[ch]) { arr.push(ch); used[ch] = true; } }
-    var chars = [];
-    var digits = '0123456789'; for (var i = 0; i < digits.length; i++) push(chars, digits[i]);
-    var upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'; for (i = 0; i < upper.length; i++) push(chars, upper[i]);
-    var lower = 'abcdefghijklmnopqrstuvwxyz'; for (i = 0; i < lower.length; i++) push(chars, lower[i]);
-    // Punctuation set (exclude ESC, control chars, space, DEL). Avoid characters likely to conflict with terminal sequences: '[' '\' ']' '^' '_' '`' maybe okay but include; skip '\x1b'
-    var punct = "~!@#$%^&*()-_=+[{]}|;:'\",<.>?"; // backslash escaped
-    for (i = 0; i < punct.length; i++) push(chars, punct[i]);
-    // Optionally add control-key markers? We'll skip non-printable for safety.
-    this._hotspotChars = chars; // potentially >90 chars
-};
 
 MessageBoard.prototype._changeSub = function (sub) {
     this.cursub = sub;
@@ -2590,18 +2589,15 @@ MessageBoard.prototype._updateReadUrlHotspots = function () {
     var visibleRows = canvas.height || 0;
     var bodyX = canvas.x;
     var bodyY = canvas.y;
-    var urlKeys = '0123456789';
-    var keyIdx = 0;
-    for (i = 0; i < this._readUrlRegions.length && keyIdx < urlKeys.length; i++) {
+    for (i = 0; i < this._readUrlRegions.length; i++) {
         var region = this._readUrlRegions[i];
         if (region.row < startRow || region.row >= startRow + visibleRows) continue;
-        var key = urlKeys.charAt(keyIdx);
+        var key = this._nextHotspotToken();
         var screenY = bodyY + (region.row - startRow) - 1;
         var minX = bodyX + region.startCol;
         var maxX = bodyX + region.endCol;
         this._hotspotMap[key] = 'read-url:' + region.url;
         this._addHotspotArea(key, false, minX, maxX, screenY, screenY, { owner: 'mb-read-url' });
-        keyIdx++;
     }
     this._applyPendingHotspots();
 };
@@ -3383,45 +3379,23 @@ MessageBoard.prototype._paintReadHeader = function (msg) {
     if (this._readGroupIconFrame && this._readGroupIconHotspotKey) {
         try { this._readGroupIconFrame.cycle(); } catch (_grpCycle) { }
         this._hotspotMap = this._hotspotMap || {};
-        this._hotspotMap[this._readGroupIconHotspotKey] = 'read-group-icon';
-        if (this._readGroupIconHotspotKey.length === 1) {
-            var lowerGroupHot = this._readGroupIconHotspotKey.toLowerCase();
-            if (lowerGroupHot !== this._readGroupIconHotspotKey) this._hotspotMap[lowerGroupHot] = 'read-group-icon';
-        }
+        var groupToken = this._nextHotspotToken();
+        this._hotspotMap[groupToken] = 'read-group-icon';
         var gMinX = this._readGroupIconFrame.x;
         var gMaxX = this._readGroupIconFrame.x + this._readGroupIconFrame.width - 1;
         for (var gy = 0; gy < this._readGroupIconFrame.height; gy++) {
-            this._addHotspotArea(this._readGroupIconHotspotKey, false, gMinX, gMaxX, this._readGroupIconFrame.y + gy);
-        }
-        if (this._readGroupIconHotspotKey.length === 1) {
-            var lowerGroupHotspot = this._readGroupIconHotspotKey.toLowerCase();
-            if (lowerGroupHotspot !== this._readGroupIconHotspotKey) {
-                for (var gy2 = 0; gy2 < this._readGroupIconFrame.height; gy2++) {
-                    this._addHotspotArea(lowerGroupHotspot, false, gMinX, gMaxX, this._readGroupIconFrame.y + gy2);
-                }
-            }
+            this._addHotspotArea(groupToken, false, gMinX, gMaxX, this._readGroupIconFrame.y + gy);
         }
     }
     if (this._readSubIconFrame && this._readSubIconHotspotKey) {
         try { this._readSubIconFrame.cycle(); } catch (_subCycle) { }
         this._hotspotMap = this._hotspotMap || {};
-        this._hotspotMap[this._readSubIconHotspotKey] = 'read-sub-icon';
-        if (this._readSubIconHotspotKey.length === 1) {
-            var lowerHot = this._readSubIconHotspotKey.toLowerCase();
-            if (lowerHot !== this._readSubIconHotspotKey) this._hotspotMap[lowerHot] = 'read-sub-icon';
-        }
+        var subToken = this._nextHotspotToken();
+        this._hotspotMap[subToken] = 'read-sub-icon';
         var minX = this._readSubIconFrame.x;
         var maxX = this._readSubIconFrame.x + this._readSubIconFrame.width - 1;
         for (var sy = 0; sy < this._readSubIconFrame.height; sy++) {
-            this._addHotspotArea(this._readSubIconHotspotKey, false, minX, maxX, this._readSubIconFrame.y + sy);
-        }
-        if (this._readSubIconHotspotKey.length === 1) {
-            var lowerHotspot = this._readSubIconHotspotKey.toLowerCase();
-            if (lowerHotspot !== this._readSubIconHotspotKey) {
-                for (var sy2 = 0; sy2 < this._readSubIconFrame.height; sy2++) {
-                    this._addHotspotArea(lowerHotspot, false, minX, maxX, this._readSubIconFrame.y + sy2);
-                }
-            }
+            this._addHotspotArea(subToken, false, minX, maxX, this._readSubIconFrame.y + sy);
         }
     }
     // Draw horizontal separator line on last row with 2 columns padding on each side
@@ -4413,8 +4387,6 @@ MessageBoard.prototype._paintSearchResults = function () {
     var end = Math.min(this._searchResults.length, this._searchScrollOffset + usable);
     this._releaseHotspots();
     if (!this._hotspotMap) this._hotspotMap = {};
-    var hotspotChars = this._hotspotChars || [];
-    var usedHotspots = 0;
     for (var i = this._searchScrollOffset; i < end; i++) {
         var res = this._searchResults[i];
         var lineY = 2 + (i - this._searchScrollOffset);
@@ -4432,14 +4404,9 @@ MessageBoard.prototype._paintSearchResults = function () {
         line = this._highlightQuery(line, this._searchQuery, resume);
         if (selected) line = '\x01n\x01h' + line; else line = '\x01n' + line;
         try { f.gotoxy(1, lineY); f.putmsg(line); } catch (e) { }
-        var cmd = null;
-        if (usedHotspots < hotspotChars.length) {
-            cmd = hotspotChars[usedHotspots++];
-        }
-        if (cmd) {
-            this._hotspotMap[cmd] = 'search-result:' + i;
-            this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
-        }
+        var cmd = this._nextHotspotToken();
+        this._hotspotMap[cmd] = 'search-result:' + i;
+        this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
     }
     try { f.cycle(); } catch (e) { }
     this._writeStatus('SEARCH: Enter=Read  ESC/Bksp=Back  ' + (this._searchSelection + 1) + '/' + this._searchResults.length);
@@ -4573,36 +4540,18 @@ MessageBoard.prototype._paintIconGrid = function () {
         try {
             this._renderIconLabel(labelFrame, itemData, isSelected, metrics.iconW);
         } catch (e) { }
-        // Hotspot mapping: ESC for special first cell; numbering starts at 1 for others (1-9 then A-Z)
+        // Hotspot mapping: clicking the special first cell injects ESC (so it
+        // routes through the existing ESC/back handler); every other cell gets
+        // a collision-proof token. We no longer assign 1-9/A-Z click keys —
+        // those collided with command keys and capped the grid at ~36 items.
         var item = itemData;
-        var cmd = null;
-        if (item.type === 'quit' || item.type === 'groups') {
-            cmd = '\x1b'; // ESC
-        } else if (item.type === 'search') {
-            cmd = (item.hotkey && item.hotkey.length) ? item.hotkey[0] : 'S';
-            cmd = cmd.toUpperCase();
-        } else if (this._nonSpecialOrdinals && typeof this._nonSpecialOrdinals[globalIndex] === 'number') {
-            var ord = this._nonSpecialOrdinals[globalIndex]; // 1-based
-            if (ord <= 9) cmd = String(ord);
-            else {
-                var alphaIndex = ord - 10; // 0-based for A
-                if (alphaIndex < 26) cmd = String.fromCharCode('A'.charCodeAt(0) + alphaIndex);
-            }
-        }
+        var cmd = (item.type === 'quit' || item.type === 'groups') ? '\x1b' : this._nextHotspotToken();
         if (cmd) {
-            var commands = [cmd];
-            if (cmd.length === 1) {
-                var lowerCmd = cmd.toLowerCase();
-                if (lowerCmd !== cmd) commands.push(lowerCmd);
+            this._hotspotMap[cmd] = globalIndex;
+            for (var hy = 0; hy < metrics.iconH; hy++) {
+                this._addHotspotArea(cmd, false, iconFrame.x, iconFrame.x + iconFrame.width - 1, iconFrame.y + hy);
             }
-            for (var cIdx = 0; cIdx < commands.length; cIdx++) {
-                var mappedCmd = commands[cIdx];
-                this._hotspotMap[mappedCmd] = globalIndex;
-                for (var hy = 0; hy < metrics.iconH; hy++) {
-                    this._addHotspotArea(mappedCmd, false, iconFrame.x, iconFrame.x + iconFrame.width - 1, iconFrame.y + hy);
-                }
-                this._addHotspotArea(mappedCmd, false, labelFrame.x, labelFrame.x + labelFrame.width - 1, labelFrame.y);
-            }
+            this._addHotspotArea(cmd, false, labelFrame.x, labelFrame.x + labelFrame.width - 1, labelFrame.y);
         }
         idx++;
     }
@@ -4854,8 +4803,6 @@ MessageBoard.prototype._paintFlatList = function () {
         f.putmsg('Messages (Flat ' + orderLabel + ') ' + '(' + headers.length + ')');
     } catch (_hdrErr) { }
     this._releaseHotspots();
-    var hotspotChars = this._hotspotChars || [];
-    var usedHotspots = 0;
     for (var i = this.flatScrollOffset; i < end; i++) {
         var hdr = headers[i];
         var lineY = 2 + (i - this.flatScrollOffset);
@@ -4880,11 +4827,9 @@ MessageBoard.prototype._paintFlatList = function () {
             var datePos = Math.max(1, f.width - 10);
             try { f.gotoxy(datePos, lineY); f.putmsg((isSelected ? '\x01n\x01h' : '\x01n') + dateStr); } catch (_datePosErr) { }
         }
-        if (usedHotspots < hotspotChars.length) {
-            var cmd = hotspotChars[usedHotspots++];
-            this._hotspotMap[cmd] = i;
-            this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
-        }
+        var cmd = this._nextHotspotToken();
+        this._hotspotMap[cmd] = i;
+        this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
     }
     this._writeStatus('FLAT: Enter=Read  P=Post  O=Order  Backspace=Threads  ESC=Subs  ' + (this.flatSelection + 1) + '/' + headers.length);
     this._registerThreadSearchHotspot();
@@ -5336,8 +5281,6 @@ MessageBoard.prototype._paintThreadList = function () {
     var row = 0;
     var self = this;
     this._releaseHotspots();
-    var hotspotChars = this._hotspotChars || [];
-    var usedHotspots = 0;
     for (var i = this.threadScrollOffset; i < end; i++) {
         var hdr = headers[i];
         var lineY = 2 + row; if (lineY > f.height) break;
@@ -5353,11 +5296,9 @@ MessageBoard.prototype._paintThreadList = function () {
         if (text.length < f.width) text += Array(f.width - text.length + 1).join(' ');
         if (sel) text = '\x01n\x01h' + text; else text = '\x01n' + text;
         f.putmsg(text.substr(0, f.width));
-        if (usedHotspots < hotspotChars.length) {
-            var cmd = hotspotChars[usedHotspots++];
-            this._hotspotMap[cmd] = i;
-            this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
-        }
+        var cmd = this._nextHotspotToken();
+        this._hotspotMap[cmd] = i;
+        this._addHotspotArea(cmd, false, f.x, f.x + f.width - 1, f.y + lineY - 1);
         row++;
     }
     this._writeStatus('THREADS: Enter=Read  O=Order  P=Post  S=Search  Backspace=Subs  ' + (this.threadSelection + 1) + '/' + headers.length);
@@ -5786,31 +5727,33 @@ MessageBoard.prototype._paintThreadTree = function () {
     try { f.cycle(); } catch (e) { }
     // Add hotspots for visible nodes (excluding beyond 36)
     this._releaseHotspots();
-    var chars = this._hotspotChars || [];
     var offset = (this.threadTree && typeof this.threadTree.offset === 'number') ? this.threadTree.offset : 0; // tree internal scroll offset (0-based)
     var visibleHeight = f.height; // number of rows available
     var mappedCount = 0;
     var overflow = false;
     // Iterate nodes, only map those within visible window (row > offset && row <= offset+visibleHeight)
-    for (var i = 0; i < this.threadNodeIndex.length && mappedCount < chars.length; i++) {
+    for (var i = 0; i < this.threadNodeIndex.length; i++) {
         var node = this.threadNodeIndex[i];
         var absRow = (typeof node.__row === 'number') ? node.__row : (i + 1); // 1-based
         if (absRow <= offset) continue; // above window
         if (absRow > offset + visibleHeight) { overflow = true; break; } // below window
         var visibleRow = absRow - offset; // 1..visibleHeight
-        var cmd = chars[mappedCount];
+        var cmd = this._nextHotspotToken();
         this._hotspotMap[cmd] = i; // map to node index
         var min_x = f.x; var max_x = f.x + f.width - 1; var y = f.y + visibleRow - 1;
-        this._addHotspotArea(cmd, false, min_x, max_x, y - 1);
+        // Tree nodes render from the frame's top row (no reserved header line),
+        // so the node at visibleRow lands on display row `y` exactly. Register the
+        // hotspot on `y` itself; an extra -1 here shifted every hotspot one row up,
+        // so clicks resolved to the node one row below the one clicked.
+        this._addHotspotArea(cmd, false, min_x, max_x, y);
         mappedCount++;
     }
-    // If there are still nodes beyond the visible window or beyond hotspot char capacity, mark overflow
-    if (!overflow && (this.threadNodeIndex.length > 0)) {
+    // Tokens are unlimited now, so overflow is purely about the visible window.
+    if (!overflow && this.threadNodeIndex.length > 0) {
         var lastVisibleAbs = offset + visibleHeight;
-        if (this.threadNodeIndex.length && (this.threadNodeIndex[this.threadNodeIndex.length - 1].__row > lastVisibleAbs)) overflow = true;
-        if (mappedCount >= chars.length && this.threadNodeIndex.length > mappedCount) overflow = true;
+        if (this.threadNodeIndex[this.threadNodeIndex.length - 1].__row > lastVisibleAbs) overflow = true;
     }
-    if (overflow) this._writeStatus('THREADS (tree ' + orderLabelTree + '): Enter=Expand/Read  Space=Expand/Collapse  S=Search  Backspace=Subs  ' + (this.threadTreeSelection + 1) + '/' + this.threadNodeIndex.length + ' (Scroll / hotspots ' + mappedCount + '/' + chars.length + ')');
+    if (overflow) this._writeStatus('THREADS (tree ' + orderLabelTree + '): Enter=Expand/Read  Space=Expand/Collapse  S=Search  Backspace=Subs  ' + (this.threadTreeSelection + 1) + '/' + this.threadNodeIndex.length + ' (Scroll for more)');
     this._registerThreadSearchHotspot();
     this._applyPendingHotspots();
 };

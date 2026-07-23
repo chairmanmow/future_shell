@@ -1,5 +1,20 @@
 // Update openSelection to use changeFolder for both up and down navigation
 "use strict";
+
+// Width of the bottom-right notification status badge (replaces MOUSE ON/OFF).
+// Wide enough for "(99) NOTIFICATIONS [SNOOZED]" plus a leading gap.
+var ICSH_NOTIFY_INDICATOR_WIDTH = 30;
+
+// Width of the BBScoin balance readout, pinned to the far right after the
+// notification badge. Holds e.g. " 1,234 BBScoin" / " +5 BBScoin". Dropped on
+// terminals too narrow to keep a usable breadcrumb (see _drawBreadcrumb path).
+var ICSH_BBSCOIN_INDICATOR_WIDTH = 16;
+var ICSH_BBSCOIN_MIN_CRUMB = 12;
+// Blank cells left of the coin text (gap from the notification badge) and right
+// of it (so the terminal cursor parking at the last column can't cover the text).
+var ICSH_BBSCOIN_LEFT_GAP = 2;
+var ICSH_BBSCOIN_RIGHT_MARGIN = 1;
+
 IconShell.prototype.openSelection = function () {
     dbug('[openSelection] selection=' + this.selection + ' scrollOffset=' + this.scrollOffset + ' stackDepth=' + this.stack.length, 'nav');
     var node = this.stack[this.stack.length - 1];
@@ -196,27 +211,40 @@ IconShell.prototype.drawFolder = function (options) {
     if (!opts.skipHeaderRefresh) this._refreshHeaderFrame();
     var names = [];
     for (var i = 0; i < this.stack.length; i++) names.push(this.stack[i].label || "Untitled");
-    // Recreate crumb and mouse indicator frames to fit screen
-    var mouseIndicatorWidth = 10; // Allow extra space for full text
+    // Recreate crumb and notification indicator frames to fit screen. The
+    // notification badge (right) replaces the former MOUSE ON/OFF readout; mouse
+    // support itself is unaffected (console.mouse_mode is set elsewhere).
+    var indicatorWidth = ICSH_NOTIFY_INDICATOR_WIDTH;
     var screenWidth = (typeof console !== 'undefined' && console.screen_columns) ? console.screen_columns : this.root.width;
-    var crumbWidth = screenWidth - mouseIndicatorWidth;
+    // Reserve the far-right slot for the BBScoin readout, but only if the
+    // breadcrumb keeps a usable width (so narrow terminals still fit).
+    var coinWidth = ICSH_BBSCOIN_INDICATOR_WIDTH;
+    if (screenWidth - indicatorWidth - coinWidth < ICSH_BBSCOIN_MIN_CRUMB) coinWidth = 0;
+    var crumbWidth = screenWidth - indicatorWidth - coinWidth;
     if (crumbWidth < 1) crumbWidth = 1;
     // Dispose old frames if they exist
     if (this.crumb && typeof this.crumb.close === 'function') this.crumb.close();
-    if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') this.mouseIndicator.close();
+    if (this.notifyIndicator && typeof this.notifyIndicator.close === 'function') this.notifyIndicator.close();
+    if (this.bbsCoinIndicator && typeof this.bbsCoinIndicator.close === 'function') this.bbsCoinIndicator.close();
     // Create crumb frame (left)
     var crumbAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('CRUMB', fallbackCrumb) : fallbackCrumb;
     this.crumb = new Frame(1, this.root.height, crumbWidth, 1, crumbAttr, this.root);
     this.crumb.open();
     this.crumb.clear(crumbAttr);
     this.crumb.home();
-    // Create mouse indicator frame (right)
-    var mouseX = crumbWidth + 1;
-    var mouseY = this.root.height;
-    var mouseAttr = (typeof this.paletteAttr === 'function') ? this.paletteAttr('MOUSE_ON', fallbackMouseOn) : fallbackMouseOn;
-    this.mouseIndicator = new Frame(mouseX, mouseY, mouseIndicatorWidth, 1, mouseAttr, this.root);
-    this.mouseIndicator.open();
-    this._updateMouseIndicator();
+    // Create notification indicator frame (middle-right)
+    var indicatorX = crumbWidth + 1;
+    var indicatorY = this.root.height;
+    this.notifyIndicator = new Frame(indicatorX, indicatorY, indicatorWidth, 1, crumbAttr, this.root);
+    this.notifyIndicator.open();
+    this._updateNotifyIndicator();
+    // Create BBScoin balance readout (far right, after the notification badge)
+    this.bbsCoinIndicator = null;
+    if (coinWidth > 0) {
+        this.bbsCoinIndicator = new Frame(indicatorX + indicatorWidth, indicatorY, coinWidth, 1, crumbAttr, this.root);
+        this.bbsCoinIndicator.open();
+        this._updateBBSCoinIndicator();
+    }
     var node = this.stack[this.stack.length - 1];
     if (!node._cachedChildren) {
         try {
@@ -253,22 +281,142 @@ IconShell.prototype.drawFolder = function (options) {
     this.folderChanged = false;
 };
 
-IconShell.prototype._updateMouseIndicator = function () {
-    if (!this.mouseIndicator) return;
-    var isActive = !!this.mouseActive;
-    var fallbackOn = ((typeof BG_BLUE !== 'undefined' ? BG_BLUE : (1 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
-    var fallbackOff = ((typeof BG_RED !== 'undefined' ? BG_RED : (4 << 4)) | (typeof WHITE !== 'undefined' ? WHITE : 7));
-    var attr = (typeof this.paletteAttr === 'function') ? this.paletteAttr(isActive ? 'MOUSE_ON' : 'MOUSE_OFF', isActive ? fallbackOn : fallbackOff) : (isActive ? fallbackOn : fallbackOff);
-    this.mouseIndicator.attr = attr;
-    this.mouseIndicator.clear(attr);
-    this.mouseIndicator.gotoxy(1, 1);
-    // Always write exactly 10 chars, pad if needed; prefix with a space for visual gap
-    var msg = isActive ? "MOUSE ON" : "MOUSE OFF";
-    msg = ' ' + msg;
-    if (msg.length < 10) msg += Array(11 - msg.length).join(' ');
-    else if (msg.length > 10) msg = msg.substring(0, 10);
-    this.mouseIndicator.putmsg(msg);
-    this.mouseIndicator.cycle();
+// Resolve the current notification status for the indicator badge:
+// { key:'on'|'snooze'|'off', attr:<frame attr>, frames:[<text>...] }
+// The frames array is what the 2-3 frame animation cycles through.
+IconShell.prototype._getNotifyIndicatorStatus = function () {
+    var BGk = (typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0;
+    var greenFg = (typeof LIGHTGREEN !== 'undefined') ? LIGHTGREEN : 10;
+    var yellowFg = (typeof YELLOW !== 'undefined') ? YELLOW : 14;
+    var redFg = (typeof LIGHTRED !== 'undefined') ? LIGHTRED : 12;
+
+    var globalState = 'on';
+    var unseen = 0;
+    var prefs = (typeof this._getShellPrefs === 'function') ? this._getShellPrefs() : null;
+    if (prefs) {
+        try { globalState = prefs.getGlobalState(); } catch (_) { globalState = 'on'; }
+        // Resolve a due timed snooze so the badge flips to ON on its own.
+        try { if (typeof prefs._expireSnoozeIfDue === 'function') { if (prefs._expireSnoozeIfDue()) globalState = prefs.getGlobalState(); } } catch (_) { }
+    }
+    if (typeof this.getUnseenNotificationCount === 'function') {
+        try { unseen = this.getUnseenNotificationCount(); } catch (_) { unseen = 0; }
+    }
+    var count = (unseen > 0) ? ('(' + unseen + ') ') : '';
+
+    if (globalState === 'off') {
+        return {
+            key: 'off',
+            attr: this.paletteAttr ? this.paletteAttr('NOTIFY_OFF', BGk | redFg) : (BGk | redFg),
+            frames: [count + 'NOTIFICATIONS [OFF]', 'Press CTRL-T: enable']
+        };
+    }
+    if (globalState === 'snooze') {
+        return {
+            key: 'snooze',
+            attr: this.paletteAttr ? this.paletteAttr('NOTIFY_SNOOZE', BGk | yellowFg) : (BGk | yellowFg),
+            frames: [count + 'NOTIFICATIONS [SNOOZED]', 'Press CTRL-S: unsnooze', 'Press CTRL-V: view']
+        };
+    }
+    return {
+        key: 'on',
+        attr: this.paletteAttr ? this.paletteAttr('NOTIFY_ON', BGk | greenFg) : (BGk | greenFg),
+        frames: [count + 'NOTIFICATIONS [ON]', 'Press CTRL-S: snooze', 'Press CTRL-T: turn off']
+    };
+};
+
+// Render the notification badge. Picks the animation frame from the current
+// status by this._notifyAnimPhase (advanced by _cycleNotifyIndicator).
+IconShell.prototype._updateNotifyIndicator = function () {
+    if (!this.notifyIndicator) return;
+    var W = ICSH_NOTIFY_INDICATOR_WIDTH;
+    var status = this._getNotifyIndicatorStatus();
+    // If the status changed, restart the animation from frame 0 so the
+    // primary "[STATE]" label shows immediately on a state change.
+    if (this._notifyStatusKey !== status.key) {
+        this._notifyStatusKey = status.key;
+        this._notifyAnimPhase = 0;
+    }
+    var frames = status.frames;
+    var phase = (typeof this._notifyAnimPhase === 'number') ? this._notifyAnimPhase : 0;
+    var text = frames[phase % frames.length];
+    // Right-align the badge text toward the coin readout (the coin's left gap
+    // provides the margin between them). Reserve 1 trailing col so the text
+    // never butts directly against the coin frame.
+    var avail = W - 1;
+    if (text.length > avail) text = text.substring(0, avail);
+    var msg = text;
+    while (msg.length < avail) msg = ' ' + msg;
+    msg += ' ';
+    this.notifyIndicator.attr = status.attr;
+    this.notifyIndicator.clear(status.attr);
+    this.notifyIndicator.gotoxy(1, 1);
+    this.notifyIndicator.putmsg(msg);
+    this.notifyIndicator.cycle();
+};
+
+// Format a BBScoin amount compactly so the readout stays a bounded width.
+// Exact under 1000; above that, decreasing granularity: 1.2K, 12K, 999K, 1.2M,
+// 12M, ... Keeps the number string to ~5 chars max regardless of magnitude.
+IconShell.prototype._formatBBSCoinAmount = function (value) {
+    value = Math.round(value || 0);
+    var sign = value < 0 ? '-' : '';
+    var n = Math.abs(value);
+    if (n < 1000) return sign + n;
+    if (n < 10000) return sign + (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';     // 1.2K..9.9K
+    if (n < 1000000) return sign + Math.round(n / 1000) + 'K';                          // 10K..999K
+    if (n < 10000000) return sign + (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M'; // 1.2M..9.9M
+    return sign + Math.round(n / 1000000) + 'M';                                        // 10M+
+};
+
+// Render the BBScoin readout: yellow "{{balance}} BBScoin" normally, or a
+// LIGHT_MAGENTA "+N/-N BBScoin" delta during an active (~10s) flash window.
+// Reads cached state owned by the shell (see shelllib.js awardPoints/reconcile).
+IconShell.prototype._updateBBSCoinIndicator = function () {
+    if (!this.bbsCoinIndicator) return;
+    var W = this.bbsCoinIndicator.width || ICSH_BBSCOIN_INDICATOR_WIDTH;
+    var BGk = (typeof BG_BLACK !== 'undefined') ? BG_BLACK : 0;
+    var yellowFg = (typeof YELLOW !== 'undefined') ? YELLOW : 14;
+    var magentaFg = (typeof LIGHTMAGENTA !== 'undefined') ? LIGHTMAGENTA : 13;
+
+    var flash = this._bbsCoinFlash;
+    var flashing = !!(flash && flash.delta && Date.now() < flash.until);
+
+    var attr, value, prefix;
+    if (flashing) {
+        attr = this.paletteAttr ? this.paletteAttr('BBSCOIN_FLASH', BGk | magentaFg) : (BGk | magentaFg);
+        value = flash.delta;
+        prefix = flash.delta > 0 ? '+' : ''; // negatives carry their own '-'
+    } else {
+        attr = this.paletteAttr ? this.paletteAttr('BBSCOIN', BGk | yellowFg) : (BGk | yellowFg);
+        value = (typeof this._bbsCoinBalance === 'number') ? this._bbsCoinBalance : 0;
+        prefix = '';
+    }
+
+    var text = prefix + this._formatBBSCoinAmount(value) + ' BBScoin';
+    // Left gap separates the readout from the notification badge; trailing pad
+    // keeps a right margin so the cursor parking at the last column can't sit on
+    // the final character ("n").
+    var msg = Array(ICSH_BBSCOIN_LEFT_GAP + 1).join(' ') + text;
+    var maxLen = W - ICSH_BBSCOIN_RIGHT_MARGIN;
+    if (msg.length > maxLen) msg = msg.substring(0, maxLen);
+    while (msg.length < W) msg += ' ';
+
+    this.bbsCoinIndicator.attr = attr;
+    this.bbsCoinIndicator.clear(attr);
+    this.bbsCoinIndicator.gotoxy(1, 1);
+    this.bbsCoinIndicator.putmsg(msg);
+    this.bbsCoinIndicator.cycle();
+};
+
+// Advance the indicator animation one frame (driven by a shell timer). Only
+// animates on the desktop (no active subprogram) when the badge exists.
+IconShell.prototype._cycleNotifyIndicator = function () {
+    if (!this.notifyIndicator) return;
+    if (this.activeSubprogram && this.activeSubprogram.running) return;
+    this._notifyAnimPhase = ((typeof this._notifyAnimPhase === 'number') ? this._notifyAnimPhase : 0) + 1;
+    this._updateNotifyIndicator();
+    // Repaint the coin readout too so an expired flash reverts to yellow.
+    if (this.bbsCoinIndicator) this._updateBBSCoinIndicator();
 };
 
 IconShell.prototype._closePreviousFrames = function () {
@@ -293,9 +441,10 @@ IconShell.prototype._shelveFolderFrames = function () {
         this._closePreviousFrames();
         // Clear hotspots so clicks don't route to hidden icons
         this._clearHotspots();
-        // Close crumb & mouse indicator
+        // Close crumb & notification indicator
         if (this.crumb && typeof this.crumb.close === 'function') this.crumb.close();
-        if (this.mouseIndicator && typeof this.mouseIndicator.close === 'function') this.mouseIndicator.close();
+        if (this.notifyIndicator && typeof this.notifyIndicator.close === 'function') this.notifyIndicator.close();
+        if (this.bbsCoinIndicator && typeof this.bbsCoinIndicator.close === 'function') { this.bbsCoinIndicator.close(); this.bbsCoinIndicator = null; }
         // Clear primary view surface (avoid leaving stale glyphs behind the subprogram)
         if (this.view && typeof this.view.clear === 'function') this.view.clear();
         if (this.headerFrame && typeof this.headerFrame.clear === 'function') {

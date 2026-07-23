@@ -18,6 +18,17 @@ try {
 	log("FUTURE_API files.js: failed to load whitelist: " + e);
 }
 
+// Load the random-skin generator (used to give generic "Vektrax" songs a
+// randomized character skin at upload time instead of the default skull).
+try {
+	var sgPath = system.mods_dir;
+	if (sgPath && sgPath.slice(-1) !== "/" && sgPath.slice(-1) !== "\\") sgPath += "/";
+	sgPath += "future_api/lib/skin-generator.js";
+	load(sgPath);
+} catch (e) {
+	log("FUTURE_API files.js: failed to load skin-generator: " + e);
+}
+
 function make_files_route(ctx) {
 var name = "files";
 
@@ -1017,6 +1028,32 @@ function commitUpload(options) {
 	}
 
 	removeUploadArtifacts(uploadId);
+
+	// When a song is uploaded, check its Artist (ID3 TPE1). If it's a generic
+	// "Vektrax" track (no custom artist) and has no skin yet, give it a random
+	// skin so it doesn't fall back to the default Vektrax skull in the player.
+	try {
+		if (typeof FutureSkinGenerator !== "undefined" &&
+		    state.finalPath && /\.mp3$/i.test(state.finalPath)) {
+			var charPath = FutureSkinGenerator.charPathFor(state.finalPath);
+			if (!file_exists(charPath)) {
+				var artist = FutureSkinGenerator.readMp3Artist(state.finalPath);
+				if (artist && /vektrax/i.test(artist)) {
+					var skinJson = FutureSkinGenerator.generateRandomSkinJSON();
+					if (skinJson) {
+						var cf = new File(charPath);
+						if (cf.open("w+")) {
+							cf.write(skinJson);
+							cf.close();
+							log("FUTURE_API: assigned random skin to Vektrax track " + state.filename);
+						}
+					}
+				}
+			}
+		}
+	} catch (skinErr) {
+		log("FUTURE_API: random skin assignment failed: " + skinErr);
+	}
 
 	return {
 		success: true,

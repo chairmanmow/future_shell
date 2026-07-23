@@ -548,6 +548,17 @@ Mail.prototype._drawInput = function () {
 
 Mail.prototype.handleKey = function (k) {
 	if (!k) return;
+	// Collapse a clicked multi-char hotspot token (|mN|) into a menu activation,
+	// or swallow the keystroke while a token is still mid-arrival.
+	k = this._resolveHotspotToken(k);
+	if (k === undefined) return true;
+	if (this._hotspotMap && this._hotspotMap[k] !== undefined && this.mode === 'icon') {
+		var hotIdx = this._hotspotMap[k];
+		if (this.menuOptions && hotIdx < this.menuOptions.length) {
+			this.selectedIndex = hotIdx; this.draw(); this.invokeSelected();
+		}
+		return true;
+	}
 	if (k === '\x1B') {
 		if (this.mode === 'confirm') { this.mode = 'icon'; this.confirmFor = null; this.draw(); return; }
 		if (this.mode === 'promptRecipient') { this._commitRecipientPrompt(false); return; }
@@ -910,17 +921,27 @@ Mail.prototype.clearCellBorder = function (cell) {
 	}
 };
 
+// Mint a collision-proof |mN| hotspot token (see SubprogramHotspotHelper).
+Mail.prototype._nextHotspotToken = function () {
+	if (this.hotspots && typeof this.hotspots.nextToken === 'function') return this.hotspots.nextToken();
+	this._fallbackHotspotCounter = (this._fallbackHotspotCounter || 0) + 1;
+	return '|m' + this._fallbackHotspotCounter.toString(36) + '|';
+};
+
 Mail.prototype._addMouseHotspots = function () {
 	if (!this.hotspots) return;
+	this._hotspotMap = {};
 	if (!this.iconCells || !this.iconCells.length) {
 		this.hotspots.clear();
 		return;
 	}
 	var defs = [];
-	for (var i = 0; i < this.iconCells.length && i < 9; i++) { // limit to 1-9 for now
+	// No longer capped at 9: click tokens are unlimited. The 1-9 keyboard
+	// accelerators remain handled separately in handleKey().
+	for (var i = 0; i < this.iconCells.length; i++) {
 		var cell = this.iconCells[i];
 		if (!cell || !cell.icon) continue;
-		var cmd = String(i + 1);
+		var cmd = this._nextHotspotToken();
 		var min_x = cell.icon.x;
 		var max_x = cell.icon.x + cell.icon.width - 1;
 		var min_y = cell.icon.y;
@@ -934,6 +955,7 @@ Mail.prototype._addMouseHotspots = function () {
 			swallow: false,
 			owner: 'mail'
 		});
+		this._hotspotMap[cmd] = i;
 	}
 	this.hotspots.set(defs);
 };

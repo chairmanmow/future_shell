@@ -186,13 +186,14 @@ IconShell.prototype.runExternal = function (fn, opts) {
     var shouldResumeSub = !!(activeBefore && activeBefore.running);
     var nodeStatusMeta = this._externalNodeStatusMeta(opts, this._consumeNodeStatusIntent('running'));
 
-    // Award points for running external program
-    if (this._pointsSystem && typeof this._pointsSystem.award === 'function') {
+    // Award points for running external program (via the shell wrapper so the
+    // BBScoin readout updates/flashes).
+    if (typeof this.awardPoints === 'function') {
         try {
-            this._pointsSystem.award('ranExternal');
+            this.awardPoints('ranExternal');
             // Extra points for door games
             if (programId && programId !== 'unknown') {
-                this._pointsSystem.award('playedDoor');
+                this.awardPoints('playedDoor');
             }
         } catch (e) { dbug('[launch] points award error: ' + e, 'points'); }
     }

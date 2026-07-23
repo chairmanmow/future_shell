@@ -170,6 +170,33 @@ export class SynchroClient {
     return this.request({ oper: "WRITE", location, data, lock, timeoutMs });
   }
 
+  // ---------- points ----------
+  // Thin wrappers over the points/* routes. `user`, `from`, `to` accept either a
+  // user number or an alias. Each resolves to the route's data payload:
+  //   { ok: true, ... }  on success
+  //   { ok: false, error: "<code>" }  on failure (user_not_found, invalid_amount,
+  //   insufficient_balance, unauthorized, points_api_not_configured, storage_error)
+
+  // READ: { ok, number, alias, balance, lifetime }
+  pointsBalance(user, { timeoutMs } = {}) {
+    return this.read(`points/balance/${encodeURIComponent(String(user))}`, { timeoutMs });
+  }
+
+  // WRITE: add points. `secret` is required. opts: { source, note, by }
+  pointsAdd(user, amount, secret, { source, note, by, timeoutMs } = {}) {
+    return this.write("points/add", { user, amount, secret, source, note, by }, { timeoutMs });
+  }
+
+  // WRITE: remove points (rejected if it would overdraw). `secret` is required.
+  pointsRemove(user, amount, secret, { source, note, by, timeoutMs } = {}) {
+    return this.write("points/remove", { user, amount, secret, source, note, by }, { timeoutMs });
+  }
+
+  // WRITE: transfer points between users (requires sufficient sender balance).
+  pointsTransfer(from, to, amount, secret, { note, timeoutMs } = {}) {
+    return this.write("points/transfer", { from, to, amount, secret, note }, { timeoutMs });
+  }
+
   // ---------- internal ----------
   _onData(chunk) {
     this._buf += chunk.toString("utf8");
