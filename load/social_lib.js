@@ -902,14 +902,6 @@ var Social = (function () {
 		return out;
 	}
 
-	function contributorMatches(list, alias) {
-		var target = collapse(alias);
-		var parts = String(list || '').split(/\s*(?:,|&|\band\b|\bfeat\.?\b|\bft\.?\b|\bx\b|\/)\s*/i);
-		var i;
-		if (!target.length) return false;
-		for (i = 0; i < parts.length; i++) if (collapse(parts[i]) === target) return true;
-		return false;
-	}
 
 	/* "70s_Funk_hm_derdoc.mp3" is Hm Derdoc's: the stem ends in the alias. */
 	function filenameCreditsAlias(name, alias) {
@@ -929,15 +921,47 @@ var Social = (function () {
 		return false;
 	}
 
-	function fileCreditsAlias(file, dirCode, alias) {
-		var target = collapse(alias);
-		var over;
-		if (!target.length) return false;
-		if (collapse(file.from) === target) return true;
-		if (filenameCreditsAlias(file.name, alias)) return true;
+	/* Every name an account is known by: its alias plus each handle a sysop
+	   linked to it (data/avatar_placeholders.json `links`), so a track the
+	   generator credited to "mro1337" lands on Jas Hud's page. */
+	function handlesForAccount(number) {
+		var a = account(number);
+		var out = [];
+		var main, h;
+		if (!a) return out;
+		out.push(a.alias);
+		loadPlaceholders();
+		main = handleKey(a.alias);
+		for (h in placeholderLinks) {
+			if (placeholderLinks.hasOwnProperty(h) && placeholderLinks[h] === main) out.push(h);
+		}
+		return out;
+	}
+
+	/* Does a name (uploader field, credit) mean this account? Direct alias
+	   or linked-handle match, else the full resolver (strips site tags). */
+	function nameMeansAccount(name, number, handles) {
+		var c = collapse(name);
+		var i;
+		if (!c.length) return false;
+		for (i = 0; i < handles.length; i++) if (collapse(handles[i]) === c) return true;
+		return resolveLocalUser(name, '') === number;
+	}
+
+	function creditListMeansAccount(list, number, handles) {
+		var parts = String(list || '').split(/\s*(?:,|&|\band\b|\bfeat\.?\b|\bft\.?\b|\bx\b|\/)\s*/i);
+		var i;
+		for (i = 0; i < parts.length; i++) if (nameMeansAccount(parts[i], number, handles)) return true;
+		return false;
+	}
+
+	function fileCreditsAccount(file, dirCode, number, handles) {
+		var i, over;
+		if (nameMeansAccount(file.from, number, handles)) return true;
+		for (i = 0; i < handles.length; i++) if (filenameCreditsAlias(file.name, handles[i])) return true;
 		if (creationKind(dirCode) === 'track') {
 			over = trackOverrides()[String(file.name).toLowerCase()];
-			if (over && (contributorMatches(over.composer, alias) || contributorMatches(over.artist, alias))) return true;
+			if (over && (creditListMeansAccount(over.composer, number, handles) || creditListMeansAccount(over.artist, number, handles))) return true;
 		}
 		return false;
 	}
@@ -958,8 +982,9 @@ var Social = (function () {
 	function creations(number, opts) {
 		var a = account(number);
 		var o = opts || {};
-		var dirs, i, j, code, fb, list, dir, out, file;
+		var dirs, i, j, code, fb, list, dir, out, file, handles;
 		if (!a) return [];
+		handles = handlesForAccount(a.number);
 		dirs = creationDirs();
 		out = [];
 		for (i = 0; i < dirs.length; i++) {
@@ -976,7 +1001,7 @@ var Social = (function () {
 			for (j = 0; j < list.length; j++) {
 				file = list[j];
 				if (!file || !file.name) continue;
-				if (!fileCreditsAlias(file, code, a.alias)) continue;
+				if (!fileCreditsAccount(file, code, a.number, handles)) continue;
 				out.push({
 					kind: creationKind(code),
 					dir: code,
@@ -1203,6 +1228,7 @@ var Social = (function () {
 		// creations + neighbours
 		creations: creations,
 		creationPath: creationPath,
+		handlesForAccount: handlesForAccount,
 		trackMeta: trackMeta,
 		creationDirs: creationDirs,
 		pointsBalance: pointsBalance,
