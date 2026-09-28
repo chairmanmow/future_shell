@@ -939,6 +939,17 @@ var Social = (function () {
 		return false;
 	}
 
+	/* Display metadata for a track from the records overrides: { title, artist, composer }. */
+	function trackMeta(name) {
+		var over = trackOverrides()[String(name || '').toLowerCase()] || {};
+		var stem = String(name || '').replace(/\.mp3$/i, '').replace(/_/g, ' ');
+		return {
+			title: String(over.title || '') || stem,
+			artist: String(over.artist || ''),
+			composer: String(over.composer || '')
+		};
+	}
+
 	/* Files a user made: [{kind, dir, name, vpath, path, desc, size, added, from}], newest first.
 	   opts: { kind: filter, limit } */
 	function creations(number, opts) {
@@ -1188,6 +1199,7 @@ var Social = (function () {
 		// creations + neighbours
 		creations: creations,
 		creationPath: creationPath,
+		trackMeta: trackMeta,
 		creationDirs: creationDirs,
 		pointsBalance: pointsBalance,
 		topPrograms: topPrograms,
