@@ -1210,3 +1210,12 @@ var Social = (function () {
 		currentUserNumber: currentUserNumber
 	};
 }());
+
+/* load(scope, file) callers (the fshell_ts runtime) get the API from this
+   function: a top-level `var` does not always land on a private load scope,
+   a top-level function declaration does. load(file) callers use `Social`. */
+function getSocial() { return Social; }
+try { if (typeof this === 'object' && this !== null && this.Social === undefined) this.Social = Social; } catch (e) { }
+
+/* load(scope, file) returns the last expression: hand the scope back. */
+this;
