@@ -366,6 +366,148 @@ var Social = (function () {
 		return true;
 	}
 
+	/* Sysop: read-modify-write of data/avatar_placeholders.json (entries,
+	   links, notLocal), the same file the terminal chat menu edits. */
+	function editPlaceholders(fn) {
+		var parsed;
+		if (!currentUserIsSysop()) return false;
+		parsed = readJson(placeholdersPath, PLACEHOLDERS_MAX_BYTES);
+		if (!parsed || typeof parsed !== 'object') parsed = { version: 1, entries: {}, links: {} };
+		if (!parsed.entries || typeof parsed.entries !== 'object') parsed.entries = {};
+		if (!parsed.links || typeof parsed.links !== 'object') parsed.links = {};
+		if (!parsed.notLocal || typeof parsed.notLocal !== 'object') parsed.notLocal = {};
+		if (fn(parsed) === false) return false;
+		try {
+			var f = new File(placeholdersPath);
+			if (!f.open('w')) return false;
+			try { f.write(JSON.stringify(parsed)); } finally { f.close(); }
+		} catch (e) { return false; }
+		placeholderStamp = -1;
+		return true;
+	}
+
+	/* Pin a 10x6 raster (base64, 160 chars) to a handle that has no real avatar. */
+	function setPlaceholder(handle, data, source) {
+		var key = handleKey(handle);
+		var clean = String(data || '').replace(/\s+/g, '');
+		if (!key.length || clean.length !== 160 || !/^[A-Za-z0-9+\/]+=*$/.test(clean)) return false;
+		return editPlaceholders(function (parsed) {
+			parsed.entries[key] = { data: clean, source: String(source || '').substr(0, 80), by: (typeof user === 'object' && user ? String(user.alias) : ''), at: nowMs() };
+		});
+	}
+
+	function clearPlaceholder(handle) {
+		var key = handleKey(handle);
+		if (!key.length) return false;
+		return editPlaceholders(function (parsed) {
+			if (!parsed.entries[key]) return false;
+			delete parsed.entries[key];
+		});
+	}
+
+	/* handle -> main name ('' unlinks). Chains flatten to the main name. */
+	function linkHandle(handle, mainName) {
+		var alias = handleKey(handle);
+		var main = handleKey(mainName);
+		if (!alias.length) return false;
+		return editPlaceholders(function (parsed) {
+			var other;
+			if (main.length && parsed.links[main]) main = handleKey(parsed.links[main]);
+			if (!main.length || main === alias) {
+				if (!parsed.links[alias]) return false;
+				delete parsed.links[alias];
+				return;
+			}
+			parsed.links[alias] = main;
+			for (other in parsed.links) if (parsed.links.hasOwnProperty(other) && parsed.links[other] === alias) parsed.links[other] = main;
+		});
+	}
+
+	/* What a sysop needs to know about a handle before offering overrides. */
+	function placeholderInfo(handle) {
+		var key = handleKey(handle);
+		var parsed = readJson(placeholdersPath, PLACEHOLDERS_MAX_BYTES) || {};
+		var entries = parsed.entries && typeof parsed.entries === 'object' ? parsed.entries : {};
+		var entry = entries[key] || null;
+		loadPlaceholders();
+		return {
+			hasPlaceholder: !!(entry && entry.data),
+			placeholderSource: entry ? String(entry.source || '') : '',
+			linkedTo: linkedTo(handle),
+			notLocal: isNotLocal(handle)
+		};
+	}
+
+	// ------------------------------------------------------------ ignore list (shell preferences)
+
+	var shellPrefsPath = system.mods_dir + 'fshell_ts/data/prefs/shell_prefs.json';
+
+	function readShellPrefs() {
+		var data = readJson(shellPrefsPath, 0);
+		if (!data || typeof data !== 'object') data = {};
+		if (!data.users || typeof data.users !== 'object') data.users = {};
+		return data;
+	}
+
+	/* The terminal shell's per-user ignore list: [{handle, label, network, hideChat, added}].
+	   Sharing it means ignoring someone on the web silences them on the BBS too. */
+	function ignoreList(number) {
+		var n = userNumber(number);
+		var entry = n ? readShellPrefs().users['user-' + n] : null;
+		var list = entry && entry.notifications && Object.prototype.toString.call(entry.notifications.ignored) === '[object Array]' ? entry.notifications.ignored : [];
+		var out = [];
+		var i, e;
+		for (i = 0; i < list.length; i++) {
+			e = list[i];
+			if (!e || typeof e !== 'object' || !handleKey(e.handle || e.label).length) continue;
+			out.push({ handle: handleKey(e.handle || e.label), label: String(e.label || e.handle), network: String(e.network || ''), hideChat: e.hideChat !== false, added: toNumber(e.added, 0) });
+		}
+		return out;
+	}
+
+	function isIgnored(number, handle, network) {
+		var list = ignoreList(number);
+		var key = handleKey(handle);
+		var i;
+		for (i = 0; i < list.length; i++) {
+			if (list[i].handle === key && (list[i].network === '' || list[i].network === String(network || ''))) return true;
+		}
+		return false;
+	}
+
+	/* Add (on) or drop (off) `handle` on `network` ('' = everywhere) for user `number`. */
+	function setIgnored(number, handle, network, on) {
+		var n = userNumber(number);
+		var key = handleKey(handle);
+		var net = String(network || '');
+		if (!n || !key.length) return fail('no-such-user');
+		return withLock(shellPrefsPath, function () {
+			var data = readShellPrefs();
+			var entry = data.users['user-' + n];
+			var list, i, changed = false;
+			if (!entry || typeof entry !== 'object') entry = { version: 7, updated: 0, notifications: {} };
+			if (!entry.notifications || typeof entry.notifications !== 'object') entry.notifications = {};
+			if (Object.prototype.toString.call(entry.notifications.ignored) !== '[object Array]') entry.notifications.ignored = [];
+			list = entry.notifications.ignored;
+			for (i = list.length - 1; i >= 0; i--) {
+				if (list[i] && handleKey(list[i].handle || list[i].label) === key && (on ? String(list[i].network || '') === net : (String(list[i].network || '') === net || String(list[i].network || '') === ''))) {
+					if (!on) { list.splice(i, 1); changed = true; }
+					else return { ok: true, status: 'already' };
+				}
+			}
+			if (on) {
+				if (list.length >= 200) return fail('list-full');
+				list.push({ handle: key, label: cleanText(handle, 60, false), network: net, hideChat: true, added: nowMs() });
+				changed = true;
+			}
+			if (!changed) return { ok: true, status: 'not-ignored' };
+			entry.updated = nowMs();
+			data.users['user-' + n] = entry;
+			writeJsonAtomic(shellPrefsPath, data);
+			return { ok: true, status: on ? 'ignored' : 'unignored' };
+		});
+	}
+
 	/* A chat handle seen on `network` -> local user number, or 0.
 	   'local' handles are aliases already, but the same rules do no harm. */
 	function resolveLocalUser(handle, network) {
@@ -1203,6 +1345,13 @@ var Social = (function () {
 		isNotLocal: isNotLocal,
 		setNotLocal: setNotLocal,
 		linkedTo: linkedTo,
+		placeholderInfo: placeholderInfo,
+		setPlaceholder: setPlaceholder,
+		clearPlaceholder: clearPlaceholder,
+		linkHandle: linkHandle,
+		ignoreList: ignoreList,
+		isIgnored: isIgnored,
+		setIgnored: setIgnored,
 		// friends
 		friendsOf: friendsOf,
 		friendList: friendList,
