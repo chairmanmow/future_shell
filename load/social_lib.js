@@ -120,13 +120,16 @@ var Social = (function () {
 		return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 	}
 
-	/* Plain text for a post / headline: no control bytes except newline,
-	   Ctrl-A dropped (it would re-colour a terminal). Pipe colour codes are
-	   left in place: both renderers already understand them. */
+	/* Text for a post / headline: no control bytes except newline and
+	   Synchronet Ctrl-A colour codes (\x01 + letter/digit/-/_), which both
+	   renderers understand; a bare \x01 is dropped. Mystic pipe codes (|07)
+	   are plain text here and still colour on both sides. */
 	function cleanText(value, max, multiline) {
 		var s = String(value === undefined || value === null ? '' : value)
 			.replace(/\r\n?/g, '\n')
-			.replace(multiline ? /[\x00-\x09\x0b-\x1f\x7f]/g : /[\x00-\x1f\x7f]/g, '');
+			.replace(/\x01([A-Za-z0-9\-_])/g, '\u0100$1')     // park valid Ctrl-A pairs
+			.replace(multiline ? /[\x00-\x09\x0b-\x1f\x7f]/g : /[\x00-\x1f\x7f]/g, '')
+			.replace(/\u0100/g, '\x01');
 		if (!multiline) s = s.replace(/\n/g, ' ');
 		s = s.replace(/^\s+|\s+$/g, '');
 		if (max > 0 && s.length > max) s = s.substr(0, max);
@@ -1088,6 +1091,7 @@ var Social = (function () {
 	/* Wiki markup lightly stripped to plain lines (for terminal previews). */
 	function plainLines(markup, maxLines) {
 		var body = String(markup || '')
+			.replace(/\x01./g, '')
 			.replace(/!\[[a-z]*\]\([^)]*\)/gi, '')
 			.replace(/\{[^}]{1,10}\}/g, '')
 			.replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, '$2')
