@@ -1227,6 +1227,18 @@ var Social = (function () {
 
 	function isNsfw(dir, name) { return nsfwInfo(dir, name).nsfw; }
 
+	/* The active keyword list (for clients that check names before render). */
+	function nsfwKeywords() { return readNsfw().keywords.slice(); }
+
+	/* Keyword check on any name / URL / caption (no manual overrides): the
+	   generated images land in chat first, under the same file names. */
+	function nsfwText(text) {
+		var t = String(text || '');
+		try { t = decodeURIComponent(t); } catch (e) { }
+		// Whole words over the entire text: URL paths, query values, captions.
+		return !!nsfwKeywordHit(t.replace(/[^A-Za-z0-9]+/g, '_') + '.x', readNsfw().keywords);
+	}
+
 	/* Sysops, plus anyone matching moderatorArs (default: FLAG1 M). */
 	function canModerate() {
 		var data = readNsfw();
@@ -1465,6 +1477,8 @@ var Social = (function () {
 		trackMeta: trackMeta,
 		nsfwInfo: nsfwInfo,
 		isNsfw: isNsfw,
+		nsfwKeywords: nsfwKeywords,
+		nsfwText: nsfwText,
 		setNsfw: setNsfw,
 		canModerate: canModerate,
 		creationDirs: creationDirs,
