@@ -49,6 +49,8 @@ var Social = (function () {
 	var MAX_REQUEST_MESSAGE = 200;
 	var PLACEHOLDERS_MAX_BYTES = 2 * 1024 * 1024;
 	var THEME_PRESETS = ['classic', 'midnight', 'cga', 'sunset', 'terminal'];
+	/* Theme of a profile whose owner never picked one (both renderers). */
+	var DEFAULT_THEME_PRESET = 'cga';
 	var WALL_POLICIES = ['friends', 'nobody'];
 
 	var baseDir = system.data_dir + 'social/';
@@ -804,7 +806,7 @@ var Social = (function () {
 			song: '',          // filename in the OriginalContent MP3 dir
 			featured: [],      // up to MAX_FEATURED friend numbers, in display order
 			wallPolicy: 'friends',
-			theme: { preset: 'classic', accent: '', background: '', text: '', link: '' },
+			theme: { preset: DEFAULT_THEME_PRESET, accent: '', background: '', text: '', link: '' },
 			updated: 0,
 			views: 0
 		};
@@ -833,7 +835,7 @@ var Social = (function () {
 		}
 		p.wallPolicy = indexOf(WALL_POLICIES, String(src.wallPolicy)) !== -1 ? String(src.wallPolicy) : 'friends';
 		theme = src.theme && typeof src.theme === 'object' ? src.theme : {};
-		p.theme.preset = indexOf(THEME_PRESETS, String(theme.preset)) !== -1 ? String(theme.preset) : 'classic';
+		p.theme.preset = indexOf(THEME_PRESETS, String(theme.preset)) !== -1 ? String(theme.preset) : DEFAULT_THEME_PRESET;
 		p.theme.accent = hexColor(theme.accent);
 		p.theme.background = hexColor(theme.background);
 		p.theme.text = hexColor(theme.text);
@@ -845,8 +847,13 @@ var Social = (function () {
 
 	function profile(number) {
 		var n = userNumber(number);
+		var p;
 		if (!n) return defaultProfile(0);
-		return normalizeProfile(n, readJson(profilePath(n), 0));
+		p = normalizeProfile(n, readJson(profilePath(n), 0));
+		/* A file the owner never saved (view counter only) carries whatever
+		   the default was when it was written: keep it on today's default. */
+		if (!p.updated) p.theme.preset = DEFAULT_THEME_PRESET;
+		return p;
 	}
 
 	/* Merge `patch` into the stored profile. `by` must be the owner or a
@@ -1044,6 +1051,140 @@ var Social = (function () {
 		return out;
 	}
 
+	// ---- track tags: the MP3's own ID3 title / artist / composer, cached ----
+	//
+	// The generator writes who asked for a track into TCOM (composer) and
+	// fronts most tracks with the house bot in TPE1 ("Vektrax feat. Alias"),
+	// so the composer is the owner and the lead artist is a collaborator.
+	// Tags are read once per file (first 256K) and kept in
+	// data/social/track-tags.json keyed by name, revalidated by size + mtime.
+
+	var trackTagsPath = baseDir + 'track-tags.json';
+	var TRACK_TAG_BYTES = 262144;
+	var ID3_FIELDS = { TIT2: 'title', TPE1: 'artist', TCOM: 'composer' };
+	var trackTagsCache = null;
+	var trackTagsDirty = false;
+
+	function byteAt(data, i) { return data.charCodeAt(i) & 0xff; }
+	function synchsafe(data, i) {
+		return ((byteAt(data, i) & 0x7f) << 21) | ((byteAt(data, i + 1) & 0x7f) << 14) | ((byteAt(data, i + 2) & 0x7f) << 7) | (byteAt(data, i + 3) & 0x7f);
+	}
+	function bigEndian32(data, i) {
+		return (byteAt(data, i) << 24) | (byteAt(data, i + 1) << 16) | (byteAt(data, i + 2) << 8) | byteAt(data, i + 3);
+	}
+
+	/* One ID3v2 text frame body -> UTF-8 byte string, the form every other
+	   name here has (uploader fields, chat handles, the link map), so the
+	   fancy-Unicode nicks match and the JSON cache round-trips.
+	   Encodings: 0 latin1, 1/2 UTF-16, 3 UTF-8. */
+	function id3Text(frame) {
+		var out = '';
+		var enc, i, little, b1, b2, code, start;
+		if (!frame || frame.length < 2) return '';
+		enc = byteAt(frame, 0);
+		if (enc === 1 || enc === 2) {
+			little = enc === 1;
+			start = 1;
+			b1 = byteAt(frame, 1); b2 = byteAt(frame, 2);
+			if (b1 === 0xff && b2 === 0xfe) { little = true; start = 3; }
+			else if (b1 === 0xfe && b2 === 0xff) { little = false; start = 3; }
+			for (i = start; i + 1 < frame.length; i += 2) {
+				b1 = byteAt(frame, i); b2 = byteAt(frame, i + 1);
+				code = little ? (b1 | (b2 << 8)) : ((b1 << 8) | b2);
+				if (!code) break;
+				out += String.fromCharCode(code);
+			}
+		} else {
+			for (i = 1; i < frame.length; i++) {
+				code = byteAt(frame, i);
+				if (!code) break;
+				out += String.fromCharCode(code);
+			}
+		}
+		if (enc !== 3 && typeof utf8_encode === 'function') { try { out = utf8_encode(out); } catch (e) { } }
+		return out.replace(/^\s+|\s+$/g, '');
+	}
+
+	function readId3(path) {
+		var out = {};
+		var f, data, major, flags, size, end, id, fsize, field;
+		var pos = 10;
+		f = new File(path);
+		if (!f.open('rb')) return out;
+		try { data = f.read(Math.min(f.length || TRACK_TAG_BYTES, TRACK_TAG_BYTES)) || ''; } catch (e) { data = ''; } finally { f.close(); }
+		if (data.length < 10 || data.substr(0, 3) !== 'ID3') return out;
+		major = byteAt(data, 3);
+		flags = byteAt(data, 5);
+		size = synchsafe(data, 6);
+		if (flags & 0x40) pos += major >= 4 ? synchsafe(data, pos) : bigEndian32(data, pos);
+		end = Math.min(10 + size, data.length);
+		while (pos + 10 <= end) {
+			id = data.substr(pos, 4);
+			if (!id.length || !id.charCodeAt(0)) break;
+			fsize = major >= 4 ? synchsafe(data, pos + 4) : bigEndian32(data, pos + 4);
+			pos += 10;
+			if (fsize <= 0 || pos + fsize > end) break;
+			field = ID3_FIELDS[id];
+			if (field && !out[field]) out[field] = id3Text(data.substr(pos, fsize));
+			pos += fsize;
+		}
+		return out;
+	}
+
+	/* { title, artist, composer } straight from the file (cached). */
+	function trackTags(name, path) {
+		var key = String(name || '').toLowerCase();
+		var size, mtime, hit, tags;
+		if (!trackTagsCache) trackTagsCache = readJson(trackTagsPath) || {};
+		if (!path || !file_exists(path)) return trackTagsCache[key] || {};
+		size = file_size(path);
+		mtime = file_date(path);
+		hit = trackTagsCache[key];
+		if (hit && hit.size === size && hit.mtime === mtime) return hit;
+		tags = readId3(path);
+		hit = { size: size, mtime: mtime, title: String(tags.title || ''), artist: String(tags.artist || ''), composer: String(tags.composer || '') };
+		trackTagsCache[key] = hit;
+		trackTagsDirty = true;
+		return hit;
+	}
+
+	function flushTrackTags() {
+		if (!trackTagsDirty || !trackTagsCache) return;
+		trackTagsDirty = false;
+		try { writeJsonAtomic(trackTagsPath, trackTagsCache); } catch (e) { }
+	}
+
+	/* On-disk path of a track by name, '' when no track dir holds it. */
+	function trackPath(name) {
+		var clean = String(name || '');
+		var dirs, i, dir;
+		if (!clean.length || /[\/\\\x00]/.test(clean)) return '';
+		dirs = creationDirs();
+		for (i = 0; i < dirs.length; i++) {
+			if (creationKind(dirs[i]) !== 'track') continue;
+			dir = file_area.dir[dirs[i]];
+			if (dir && file_exists(dir.path + clean)) return dir.path + clean;
+		}
+		return '';
+	}
+
+	/* Credits for a track: the records overrides win field by field over the
+	   file's own tags (the same precedence as the web files API). */
+	function trackCredits(name, path) {
+		var over = trackOverrides()[String(name || '').toLowerCase()] || {};
+		var tags = trackTags(name, path || trackPath(name));
+		return {
+			title: String(over.title || '') || String(tags.title || ''),
+			artist: String(over.artist || '') || String(tags.artist || ''),
+			composer: String(over.composer || '') || String(tags.composer || '')
+		};
+	}
+
+	/* "Vektrax feat. Cowboy & Hm Derdoc" -> { lead: 'Vektrax', featured: 'Cowboy & Hm Derdoc' }. */
+	function splitArtist(artist) {
+		var parts = String(artist || '').split(/\s*\b(?:feat\.?|ft\.?)\s*/i);
+		return { lead: String(parts[0] || '').replace(/^\s+|\s+$/g, ''), featured: parts.slice(1).join(', ') };
+	}
 
 	/* "70s_Funk_hm_derdoc.mp3" is Hm Derdoc's: the stem ends in the alias. */
 	function filenameCreditsAlias(name, alias) {
@@ -1097,41 +1238,84 @@ var Social = (function () {
 		return false;
 	}
 
-	function fileCreditsAccount(file, dirCode, number, handles) {
-		var i, over;
-		if (nameMeansAccount(file.from, number, handles)) return true;
-		for (i = 0; i < handles.length; i++) if (filenameCreditsAlias(file.name, handles[i])) return true;
-		if (creationKind(dirCode) === 'track') {
-			over = trackOverrides()[String(file.name).toLowerCase()];
-			if (over && (creditListMeansAccount(over.composer, number, handles) || creditListMeansAccount(over.artist, number, handles))) return true;
-		}
+	function filenameCreditsHandles(name, handles) {
+		var i;
+		for (i = 0; i < handles.length; i++) if (filenameCreditsAlias(name, handles[i])) return true;
 		return false;
 	}
 
-	/* Display metadata for a track from the records overrides: { title, artist, composer }. */
+	/* How an account is tied to a file: { role, collab, collabWith } or null.
+	   role: composer | featured | uploader | filename | artist. */
+	function fileCredit(file, number, handles) {
+		if (nameMeansAccount(file.from, number, handles)) return { role: 'uploader', collab: false, collabWith: '' };
+		if (filenameCreditsHandles(file.name, handles)) return { role: 'filename', collab: false, collabWith: '' };
+		return null;
+	}
+
+	/* Tracks, strongest tie first: composer, featured artist, uploader,
+	   filename suffix. Those own the track. The lead artist alone is a
+	   collaboration credit (the house bot fronts most tracks); it owns the
+	   track only when none of the other fields names anyone. */
+	function trackCredit(file, path, number, handles) {
+		var credits = trackCredits(file.name, path);
+		var artist = splitArtist(credits.artist);
+		var owners;
+		if (creditListMeansAccount(credits.composer, number, handles)) return { role: 'composer', collab: false, collabWith: '' };
+		if (creditListMeansAccount(artist.featured, number, handles)) return { role: 'featured', collab: false, collabWith: '' };
+		if (nameMeansAccount(file.from, number, handles)) return { role: 'uploader', collab: false, collabWith: '' };
+		if (filenameCreditsHandles(file.name, handles)) return { role: 'filename', collab: false, collabWith: '' };
+		if (!creditListMeansAccount(artist.lead, number, handles)) return null;
+		owners = ownerNames(credits.composer || artist.featured || file.from || '');
+		if (!owners.length) return { role: 'artist', collab: false, collabWith: '' };
+		return { role: 'artist', collab: true, collabWith: owners };
+	}
+
+	/* "mro1337, Cowboy" -> "Jas Hud, Cowboy": each credited name as the local
+	   alias it resolves to (so the tag names the member), else as written
+	   minus control bytes. */
+	function ownerNames(list) {
+		var parts = String(list || '').split(/\s*(?:,|&|\band\b|\/)\s*/);
+		var out = [];
+		var i, name, n, a;
+		for (i = 0; i < parts.length; i++) {
+			name = String(parts[i] || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/^\s+|\s+$/g, '');
+			if (!name.length) continue;
+			n = resolveLocalUser(name, '');
+			a = n ? account(n) : null;
+			if (a) name = a.alias;
+			if (indexOf(out, name) === -1) out.push(name);
+		}
+		return out.join(', ');
+	}
+
+	/* Display metadata for a track: { title, artist, composer } (overrides, then the file's tags). */
 	function trackMeta(name) {
-		var over = trackOverrides()[String(name || '').toLowerCase()] || {};
+		var credits = trackCredits(name, '');
 		var stem = String(name || '').replace(/\.mp3$/i, '').replace(/_/g, ' ');
+		flushTrackTags();
 		return {
-			title: String(over.title || '') || stem,
-			artist: String(over.artist || ''),
-			composer: String(over.composer || '')
+			title: credits.title || stem,
+			artist: credits.artist,
+			composer: credits.composer
 		};
 	}
 
-	/* Files a user made: [{kind, dir, name, vpath, path, desc, size, added, from}], newest first.
-	   opts: { kind: filter, limit } */
+	/* Files a user made: [{kind, dir, name, vpath, path, desc, size, added, from,
+	   role, collab, collabWith}], newest first. `collab` marks a track the account
+	   only fronts as lead artist while `collabWith` names its owner(s).
+	   opts: { kind: filter, limit, collabs: false to leave collaborations out } */
 	function creations(number, opts) {
 		var a = account(number);
 		var o = opts || {};
-		var dirs, i, j, code, fb, list, dir, out, file, handles;
+		var dirs, i, j, code, kind, fb, list, dir, out, file, handles, path, credit;
 		if (!a) return [];
 		handles = handlesForAccount(a.number);
 		dirs = creationDirs();
 		out = [];
 		for (i = 0; i < dirs.length; i++) {
 			code = dirs[i];
-			if (o.kind && creationKind(code) !== o.kind) continue;
+			kind = creationKind(code);
+			if (o.kind && kind !== o.kind) continue;
 			dir = file_area.dir[code];
 			if (!dir) continue;
 			fb = null;
@@ -1143,21 +1327,28 @@ var Social = (function () {
 			for (j = 0; j < list.length; j++) {
 				file = list[j];
 				if (!file || !file.name) continue;
-				if (!fileCreditsAccount(file, code, a.number, handles)) continue;
+				path = String(dir.path || '') + String(file.name);
+				credit = kind === 'track' ? trackCredit(file, path, a.number, handles) : fileCredit(file, a.number, handles);
+				if (!credit) continue;
+				if (o.collabs === false && credit.collab) continue;
 				out.push({
-					kind: creationKind(code),
+					kind: kind,
 					dir: code,
 					name: String(file.name),
-					nsfw: creationKind(code) === 'image' || creationKind(code) === 'ansi' || creationKind(code) === 'art' ? isNsfw(code, file.name) : false,
+					nsfw: kind === 'image' || kind === 'ansi' || kind === 'art' ? isNsfw(code, file.name) : false,
 					vpath: String(dir.lib_name || '') + '/' + String(dir.name || '') + '/' + String(file.name),
-					path: String(dir.path || '') + String(file.name),
+					path: path,
 					desc: String(file.desc || ''),
 					size: toNumber(file.size, 0),
 					added: toNumber(file.added, 0),
-					from: String(file.from || '')
+					from: String(file.from || ''),
+					role: credit.role,
+					collab: credit.collab,
+					collabWith: credit.collabWith
 				});
 			}
 		}
+		flushTrackTags();
 		out.sort(function (x, y) { return y.added - x.added; });
 		if (o.limit > 0 && out.length > o.limit) out.length = o.limit;
 		return out;
@@ -1607,8 +1798,13 @@ var Social = (function () {
 		page = wikiPage(a.number);
 		updates = feed(a.number, { kind: 'update', limit: 1 });
 		creationsList = creations(a.number, {});
-		counts = { total: creationsList.length, track: 0, ansi: 0, image: 0, text: 0, art: 0 };
-		for (i = 0; i < creationsList.length; i++) { k = creationsList[i].kind; counts[k] = (counts[k] || 0) + 1; }
+		counts = { total: 0, collab: 0, track: 0, ansi: 0, image: 0, text: 0, art: 0 };
+		for (i = 0; i < creationsList.length; i++) {
+			if (creationsList[i].collab) { counts.collab++; continue; }
+			k = creationsList[i].kind;
+			counts.total++;
+			counts[k] = (counts[k] || 0) + 1;
+		}
 		incoming = v && v === a.number ? incomingRequests(v).length : 0;
 		return {
 			number: a.number,
