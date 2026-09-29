@@ -1148,6 +1148,7 @@ var Social = (function () {
 					kind: creationKind(code),
 					dir: code,
 					name: String(file.name),
+					nsfw: creationKind(code) === 'image' || creationKind(code) === 'ansi' || creationKind(code) === 'art' ? isNsfw(code, file.name) : false,
 					vpath: String(dir.lib_name || '') + '/' + String(dir.name || '') + '/' + String(file.name),
 					path: String(dir.path || '') + String(file.name),
 					desc: String(file.desc || ''),
@@ -1171,6 +1172,89 @@ var Social = (function () {
 		if (!dir || indexOf(creationDirs(), code) === -1) return '';
 		if (!clean.length || /[\/\\\x00]/.test(clean) || clean === '.' || clean === '..') return '';
 		return file_exists(dir.path + clean) ? dir.path + clean : '';
+	}
+
+	// ------------------------------------------------------------ NSFW tags (creations)
+
+	/* data/social/nsfw.json
+	     { version, moderatorArs: "FLAG1 M", keywords: [...],
+	       manual: { "<dir>/<name lowercased>": { nsfw: true|false, by, at } } }
+	   Auto-flagging matches whole words in the file name (the AI generators
+	   name files after the prompt); a manual entry always wins, so a
+	   moderator can both flag and clear a false positive. */
+	var nsfwPath = baseDir + 'nsfw.json';
+	var NSFW_DEFAULT_KEYWORDS = ['nude', 'nudes', 'nudity', 'naked', 'nsfw', 'topless', 'sex', 'sexy', 'sexual', 'porn', 'porno',
+		'xxx', 'erotic', 'erotica', 'boobs', 'breasts', 'tits', 'nipples', 'nipple', 'genitals', 'penis', 'vagina',
+		'pussy', 'dick', 'cock', 'orgy', 'lingerie', 'thong', 'stripper', 'striptease', 'undressed', 'undressing'];
+	var nsfwCache = null;
+	var nsfwStamp = -1;
+
+	function readNsfw() {
+		var stamp = file_exists(nsfwPath) ? (file_date(nsfwPath) * 1000 + (file_size(nsfwPath) % 1000)) : 0;
+		var data;
+		if (nsfwCache && stamp === nsfwStamp) return nsfwCache;
+		data = readJson(nsfwPath, 0) || {};
+		if (typeof data !== 'object') data = {};
+		if (Object.prototype.toString.call(data.keywords) !== '[object Array]' || !data.keywords.length) data.keywords = NSFW_DEFAULT_KEYWORDS.slice();
+		if (!data.manual || typeof data.manual !== 'object') data.manual = {};
+		if (typeof data.moderatorArs !== 'string') data.moderatorArs = 'FLAG1 M';
+		data.version = VERSION;
+		nsfwCache = data;
+		nsfwStamp = stamp;
+		return data;
+	}
+
+	function nsfwKey(dir, name) { return String(dir || '').toLowerCase() + '/' + String(name || '').toLowerCase(); }
+
+	function nsfwKeywordHit(name, keywords) {
+		var words = String(name || '').replace(/\.[^.]+$/, '').toLowerCase().split(/[^a-z0-9]+/);
+		var i, j;
+		for (i = 0; i < words.length; i++) {
+			for (j = 0; j < keywords.length; j++) if (words[i] === String(keywords[j]).toLowerCase()) return String(keywords[j]);
+		}
+		return '';
+	}
+
+	/* { nsfw: bool, source: 'manual'|'auto'|'', keyword } */
+	function nsfwInfo(dir, name) {
+		var data = readNsfw();
+		var manual = data.manual[nsfwKey(dir, name)];
+		var hit;
+		if (manual && typeof manual === 'object') return { nsfw: manual.nsfw !== false, source: 'manual', keyword: '' };
+		hit = nsfwKeywordHit(name, data.keywords);
+		return { nsfw: !!hit, source: hit ? 'auto' : '', keyword: hit };
+	}
+
+	function isNsfw(dir, name) { return nsfwInfo(dir, name).nsfw; }
+
+	/* Sysops, plus anyone matching moderatorArs (default: FLAG1 M). */
+	function canModerate() {
+		var data = readNsfw();
+		try {
+			if (typeof user !== 'object' || user === null || !(user.number > 0)) return false;
+			if (user.is_sysop) return true;
+			return !!user.compare_ars(data.moderatorArs);
+		} catch (e) { return false; }
+	}
+
+	/* Moderator: set (on=true), clear (on=false), or forget (on=null: back to auto). */
+	function setNsfw(dir, name, on, by) {
+		var key = nsfwKey(dir, name);
+		if (!canModerate()) return fail('forbidden');
+		if (!creationPath(dir, name)) return fail('no-such-file');
+		return withLock(nsfwPath, function () {
+			var data = readJson(nsfwPath, 0) || {};
+			if (typeof data !== 'object') data = {};
+			if (!data.manual || typeof data.manual !== 'object') data.manual = {};
+			if (on === null || on === undefined) delete data.manual[key];
+			else data.manual[key] = { nsfw: !!on, by: String(by || (typeof user === 'object' && user ? user.alias : '')).substr(0, 40), at: nowMs() };
+			if (!data.keywords) data.keywords = NSFW_DEFAULT_KEYWORDS.slice();
+			if (!data.moderatorArs) data.moderatorArs = 'FLAG1 M';
+			data.version = VERSION;
+			writeJsonAtomic(nsfwPath, data);
+			nsfwCache = null;
+			return { ok: true, info: nsfwInfo(dir, name) };
+		});
 	}
 
 	// ------------------------------------------------------------ stats from neighbours
@@ -1379,6 +1463,10 @@ var Social = (function () {
 		creationPath: creationPath,
 		handlesForAccount: handlesForAccount,
 		trackMeta: trackMeta,
+		nsfwInfo: nsfwInfo,
+		isNsfw: isNsfw,
+		setNsfw: setNsfw,
+		canModerate: canModerate,
 		creationDirs: creationDirs,
 		pointsBalance: pointsBalance,
 		topPrograms: topPrograms,
