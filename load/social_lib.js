@@ -1370,6 +1370,221 @@ var Social = (function () {
 		return out;
 	}
 
+	// ------------------------------------------------------------ forum activity
+
+	var FORUM_PAGE_DEFAULT = 10;
+	var FORUM_PAGE_MAX = 50;
+	var FORUM_SNIPPET_CHARS = 200;
+	var FORUM_BODY_MAX = 64 * 1024;
+	var FORUM_ATTR_PRIVATE = typeof MSG_PRIVATE === 'number' ? MSG_PRIVATE : (1 << 0);
+	var FORUM_ATTR_DELETE = typeof MSG_DELETE === 'number' ? MSG_DELETE : (1 << 5);
+	var FORUM_ATTR_POLL = typeof MSG_POLL === 'number' ? MSG_POLL : 0;
+
+	/* Names whose posts count as this account's: the alias and every chat
+	   handle the sysop linked to it, on any BBS (a networked post carries the
+	   alias, not the account); the real name only for posts made here. */
+	function forumNames(number) {
+		var handles = handlesForAccount(number);
+		var out = { any: {}, local: {}, crcs: {} };
+		var i, key, real;
+		for (i = 0; i < handles.length; i++) {
+			key = String(handles[i]).replace(/\s+$/, '').toLowerCase();
+			if (!key.length || out.any[key]) continue;
+			out.any[key] = true;
+			out.crcs[crc16_calc(key)] = true;
+		}
+		try {
+			real = new User(number).name;
+			key = String(real || '').replace(/\s+$/, '').toLowerCase();
+			if (key.length && !out.any[key]) { out.local[key] = true; out.crcs[crc16_calc(key)] = true; }
+		} catch (e) { }
+		return out;
+	}
+
+	function forumNetType(settings) {
+		var s = toNumber(settings, 0);
+		if (typeof SUB_FIDO !== 'undefined' && (s & SUB_FIDO)) return 'fidonet';
+		if (typeof SUB_QNET !== 'undefined' && (s & SUB_QNET)) return 'qwknet';
+		if (typeof SUB_INET !== 'undefined' && (s & SUB_INET)) return 'internet';
+		if (typeof SUB_PNET !== 'undefined' && (s & SUB_PNET)) return 'postlink';
+		return 'local';
+	}
+
+	/* Machine channels (avatar/data exchange subs) are not forum activity. */
+	function forumSkipSub(code, s) {
+		if (/syncdata|sync-data|_data$|-data$/i.test(String(code || ''))) return true;
+		return /synchronet data|user avatars/i.test(String(s && s.name || ''));
+	}
+
+	/* The from-name check behind the index CRC hit (CRC-16 collides now and then). */
+	function forumHeaderIsBy(header, names) {
+		var key = String(header.from || '').replace(/\s+$/, '').toLowerCase();
+		if (!key.length) return false;
+		if (names.any[key]) return true;
+		return !!names.local[key] && !(toNumber(header.from_net_type, 0) > 0);
+	}
+
+	/* Message text with colour codes, ANSI, quotes, tearlines and origin lines
+	   removed: what a snippet or a plain body shows. */
+	function forumPlainBody(raw) {
+		var text = String(raw || '').replace(/\r\n?/g, '\n');
+		var lines = text.split('\n');
+		var out = [];
+		var i, line;
+		text = null;
+		for (i = 0; i < lines.length; i++) {
+			line = lines[i].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x01./g, '').replace(/[\x00-\x08\x0b-\x1f]/g, '');
+			if (/^\s*(?:[A-Za-z0-9]{0,3}>)/.test(line)) continue;
+			if (/^--- /.test(line) || /^\s*\* Origin:/.test(line) || /^-- $/.test(line) || /^\.\.\. /.test(line)) continue;
+			/* Quote preambles: "  Re: Subject" + "  By: X to Y on <date>", "On <date>, X wrote:". */
+			if (/^\s*By:\s.+\son\s/.test(line)) { while (out.length && /^\s*Re:/i.test(out[out.length - 1])) out.pop(); continue; }
+			if (/wrote:\s*$/.test(line) || /^\s*Re:\s.*\sBy:\s/i.test(line)) continue;
+			out.push(line.replace(/\s+$/, ''));
+		}
+		while (out.length && !out[0].length) out.shift();
+		while (out.length && !out[out.length - 1].length) out.pop();
+		return out.join('\n').replace(/\n{3,}/g, '\n\n');
+	}
+
+	/* Block/box-drawing cells (CP437 0xB0-0xDF) are art, not words: an ANSI
+	   post's snippet keeps whatever readable text it has and says it is art. */
+	function forumSnippet(raw) {
+		var plain = forumPlainBody(raw);
+		var art = /\x1b\[/.test(String(raw || '')) || /[\xb0-\xdf]{8,}/.test(plain);
+		plain = plain.replace(/[\xb0-\xdf]+/g, ' ').replace(/\s+/g, ' ').replace(/^\s+/, '');
+		if (plain.length > FORUM_SNIPPET_CHARS) plain = plain.substr(0, FORUM_SNIPPET_CHARS - 3).replace(/\s+\S*$/, '') + '...';
+		if (art) plain = '[ANSI art] ' + plain;
+		return plain.replace(/\s+$/, '');
+	}
+
+	function forumItem(code, header, withSnippet, body) {
+		var s = msg_area.sub[code];
+		var at = toNumber(header.when_written_time, 0) * 1000;
+		var item = {
+			sub: code,
+			subName: s ? String(s.name || code) : code,
+			group: s ? String(s.grp_name || '') : '',
+			netType: forumNetType(s ? s.settings : 0),
+			origin: String(header.from_net_addr || ''),
+			number: toNumber(header.number, 0),
+			id: String(header.id || ''),
+			thread: toNumber(header.thread_id, 0) || toNumber(header.number, 0),
+			at: at,
+			from: String(header.from || ''),
+			to: String(header.to || ''),
+			subject: String(header.subject || ''),
+			snippet: '',
+			art: /\x1b\[/.test(String(body || '')),
+			poll: !!(toNumber(header.attr, 0) & FORUM_ATTR_POLL)
+		};
+		if (withSnippet) item.snippet = forumSnippet(body);
+		return item;
+	}
+
+	function forumReadBody(mb, number) {
+		var body = '';
+		try { body = mb.get_msg_body(false, number, true, false, true, true) || ''; } catch (e) { body = ''; }
+		if (body.length > FORUM_BODY_MAX) body = body.substr(0, FORUM_BODY_MAX);
+		return body;
+	}
+
+	/* Every readable post by the account, newest first, as {sub, number, at}.
+	   One get_index() pass per sub (the whole board takes tens of ms), then a
+	   header read per CRC hit to confirm the name. */
+	function forumMatches(number, viewer) {
+		var names = forumNames(number);
+		var out = [];
+		var code, s, mb, idx, i, hits, h, header, ownPage;
+		ownPage = userNumber(viewer) === number;
+		for (code in msg_area.sub) {
+			if (!msg_area.sub.hasOwnProperty(code)) continue;
+			s = msg_area.sub[code];
+			if (forumSkipSub(code, s)) continue;
+			try { if (!s.can_read) continue; } catch (e) { continue; }
+			hits = [];
+			try {
+				mb = new MsgBase(code);
+				if (!mb.open()) continue;
+				idx = mb.get_index() || [];
+				for (i = 0; i < idx.length; i++) {
+					if (typeof idx[i].from !== 'number') continue;
+					if (idx[i].attr & FORUM_ATTR_DELETE) continue;
+					if (!names.crcs[idx[i].from]) continue;
+					if ((idx[i].attr & FORUM_ATTR_PRIVATE) && !ownPage) continue;
+					hits.push(idx[i].number);
+				}
+				idx = null;
+				for (h = 0; h < hits.length; h++) {
+					header = mb.get_msg_header(false, hits[h], false);
+					if (!header || (header.attr & FORUM_ATTR_DELETE) || !forumHeaderIsBy(header, names)) continue;
+					out.push({ sub: code, number: header.number, at: toNumber(header.when_written_time, 0) });
+				}
+				mb.close();
+			} catch (e) { try { mb.close(); } catch (e2) { } }
+		}
+		out.sort(function (x, y) { return y.at - x.at || y.number - x.number; });
+		return out;
+	}
+
+	/* One page of the account's posts across every sub the viewer may read,
+	   newest first: { total, page, per, pages, items }. Each item carries the
+	   sub/group/network, recipient, subject, a plain-text snippet and the
+	   thread root for deep links. */
+	function forumActivity(number, viewer, opts) {
+		var n = userNumber(number);
+		var o = opts || {};
+		var per = Math.max(1, Math.min(FORUM_PAGE_MAX, toNumber(o.per, FORUM_PAGE_DEFAULT)));
+		var page = Math.max(0, toNumber(o.page, 0));
+		var result = { total: 0, page: page, per: per, pages: 0, items: [] };
+		var all, slice, bySub, i, code, mb, header, j;
+		if (!n || !account(n)) return result;
+		all = forumMatches(n, viewer);
+		result.total = all.length;
+		result.pages = Math.ceil(all.length / per);
+		if (page >= result.pages) { result.page = page = Math.max(0, result.pages - 1); }
+		slice = all.slice(page * per, page * per + per);
+		bySub = {};
+		for (i = 0; i < slice.length; i++) {
+			if (!bySub[slice[i].sub]) bySub[slice[i].sub] = [];
+			bySub[slice[i].sub].push(i);
+		}
+		for (code in bySub) {
+			if (!bySub.hasOwnProperty(code)) continue;
+			try {
+				mb = new MsgBase(code);
+				if (!mb.open()) continue;
+				for (j = 0; j < bySub[code].length; j++) {
+					i = bySub[code][j];
+					header = mb.get_msg_header(false, slice[i].number, false);
+					if (!header) continue;
+					slice[i] = forumItem(code, header, true, forumReadBody(mb, slice[i].number));
+				}
+				mb.close();
+			} catch (e) { try { mb.close(); } catch (e2) { } }
+		}
+		for (i = 0; i < slice.length; i++) if (slice[i].subject !== undefined) result.items.push(slice[i]);
+		return result;
+	}
+
+	/* One post in full (plain text body) for the expand control; null when
+	   the viewer may not read that sub or the message is gone. */
+	function forumPost(code, number) {
+		var s = msg_area.sub[String(code || '')];
+		var mb, header, item;
+		if (!s) return null;
+		try { if (!s.can_read) return null; } catch (e) { return null; }
+		try {
+			mb = new MsgBase(s.code);
+			if (!mb.open()) return null;
+			header = mb.get_msg_header(false, toNumber(number, 0), false);
+			if (!header || (header.attr & FORUM_ATTR_DELETE)) { mb.close(); return null; }
+			item = forumItem(s.code, header, false, '');
+			item.body = forumPlainBody(forumReadBody(mb, header.number));
+			mb.close();
+			return item;
+		} catch (e) { try { mb.close(); } catch (e2) { } return null; }
+	}
+
 	// ------------------------------------------------------------ composite summary
 
 	/* Everything a profile page needs except the heavy lists. `viewer` is the
@@ -1487,6 +1702,9 @@ var Social = (function () {
 		wikiPage: wikiPage,
 		wikiUserPageSlug: wikiUserPageSlug,
 		plainLines: plainLines,
+		forumActivity: forumActivity,
+		forumPost: forumPost,
+		forumPlainBody: forumPlainBody,
 		summary: summary,
 		currentUserNumber: currentUserNumber
 	};
