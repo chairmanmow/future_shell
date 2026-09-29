@@ -1830,8 +1830,23 @@ var Social = (function () {
 			latestUpdate: updates.length ? updates[0] : null,
 			creationCounts: counts,
 			wallCount: feed(a.number, { kind: 'wall' }).length,
-			updateCount: feed(a.number, { kind: 'update' }).length
+			updateCount: feed(a.number, { kind: 'update' }).length,
+			nickStyle: nickStyleFor(a.number, a.alias)
 		};
+	}
+
+	/* The member's chat handle style (mods/load/chat_style_lib.js) aligned to
+	   their alias, so both profile pages paint the name the way chat does.
+	   null when they set none or the lib is missing. */
+	var chatStyleLib;
+	function nickStyleFor(number, alias) {
+		var style;
+		if (chatStyleLib === undefined) {
+			try { chatStyleLib = load({}, system.mods_dir + 'load/chat_style_lib.js').getChatStyle(); } catch (e) { chatStyleLib = null; }
+		}
+		if (!chatStyleLib) return null;
+		try { style = chatStyleLib.forName(number, alias); } catch (e2) { return null; }
+		return style && style.styled ? style : null;
 	}
 
 	return {
