@@ -1708,7 +1708,7 @@ var Social = (function () {
 				for (h = 0; h < hits.length; h++) {
 					header = mb.get_msg_header(false, hits[h], false);
 					if (!header || (header.attr & FORUM_ATTR_DELETE) || !forumHeaderIsBy(header, names)) continue;
-					out.push({ sub: code, number: header.number, at: toNumber(header.when_written_time, 0) });
+					out.push({ sub: code, number: header.number, at: toNumber(header.when_written_time, 0), subject: String(header.subject || '') });
 				}
 				mb.close();
 			} catch (e) { try { mb.close(); } catch (e2) { } }
@@ -1721,15 +1721,28 @@ var Social = (function () {
 	   newest first: { total, page, per, pages, items }. Each item carries the
 	   sub/group/network, recipient, subject, a plain-text snippet and the
 	   thread root for deep links. */
+	/* "[ANSI] futureland.today": the tag auto-posted ads and art drops carry. */
+	var FORUM_ANSI_SUBJECT = /\[ANSI\]/i;
+
 	function forumActivity(number, viewer, opts) {
 		var n = userNumber(number);
 		var o = opts || {};
 		var per = Math.max(1, Math.min(FORUM_PAGE_MAX, toNumber(o.per, FORUM_PAGE_DEFAULT)));
 		var page = Math.max(0, toNumber(o.page, 0));
-		var result = { total: 0, page: page, per: per, pages: 0, items: [] };
-		var all, slice, bySub, i, code, mb, header, j;
+		var result = { total: 0, page: page, per: per, pages: 0, items: [], hiddenAnsi: 0 };
+		var all, slice, bySub, i, code, mb, header, j, kept;
 		if (!n || !account(n)) return result;
 		all = forumMatches(n, viewer);
+		/* opts.hideAnsi: leave out posts tagged [ANSI] in the subject (ads and
+		   art drops), so a profile shows what they actually wrote. */
+		if (o.hideAnsi) {
+			kept = [];
+			for (i = 0; i < all.length; i++) {
+				if (FORUM_ANSI_SUBJECT.test(all[i].subject)) result.hiddenAnsi++;
+				else kept.push(all[i]);
+			}
+			all = kept;
+		}
 		result.total = all.length;
 		result.pages = Math.ceil(all.length / per);
 		if (page >= result.pages) { result.page = page = Math.max(0, result.pages - 1); }
