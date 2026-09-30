@@ -1335,7 +1335,7 @@ var Social = (function () {
 					kind: kind,
 					dir: code,
 					name: String(file.name),
-					nsfw: kind === 'image' || kind === 'ansi' || kind === 'art' ? isNsfw(code, file.name) : false,
+					nsfw: kind === 'image' || kind === 'ansi' || kind === 'art' ? isNsfw(code, file.name, file.desc) : false,
 					vpath: String(dir.lib_name || '') + '/' + String(dir.name || '') + '/' + String(file.name),
 					path: path,
 					desc: String(file.desc || ''),
@@ -1370,9 +1370,10 @@ var Social = (function () {
 	/* data/social/nsfw.json
 	     { version, moderatorArs: "FLAG1 M", keywords: [...],
 	       manual: { "<dir>/<name lowercased>": { nsfw: true|false, by, at } } }
-	   Auto-flagging matches whole words in the file name (the AI generators
-	   name files after the prompt); a manual entry always wins, so a
-	   moderator can both flag and clear a false positive. */
+	   Auto-flagging matches whole words in the file name and description
+	   (the AI generators name files after the prompt). Moderators can flag
+	   a piece the keywords missed; nothing ever un-flags a piece. Viewers
+	   blur / unblur flagged pieces for themselves, client side. */
 	var nsfwPath = baseDir + 'nsfw.json';
 	var NSFW_DEFAULT_KEYWORDS = ['nude', 'nudes', 'nudity', 'naked', 'nsfw', 'topless', 'sex', 'sexy', 'sexual', 'porn', 'porno',
 		'xxx', 'erotic', 'erotica', 'boobs', 'breasts', 'tits', 'nipples', 'nipple', 'genitals', 'penis', 'vagina',
@@ -1406,17 +1407,18 @@ var Social = (function () {
 		return '';
 	}
 
-	/* { nsfw: bool, source: 'manual'|'auto'|'', keyword } */
-	function nsfwInfo(dir, name) {
+	/* { nsfw: bool, source: 'auto'|'manual'|'', keyword } */
+	function nsfwInfo(dir, name, desc) {
 		var data = readNsfw();
 		var manual = data.manual[nsfwKey(dir, name)];
-		var hit;
-		if (manual && typeof manual === 'object') return { nsfw: manual.nsfw !== false, source: 'manual', keyword: '' };
-		hit = nsfwKeywordHit(name, data.keywords);
-		return { nsfw: !!hit, source: hit ? 'auto' : '', keyword: hit };
+		var hit = nsfwKeywordHit(name, data.keywords) || (desc ? nsfwKeywordHit(String(desc).replace(/[^A-Za-z0-9]+/g, '_') + '.x', data.keywords) : '');
+		if (hit) return { nsfw: true, source: 'auto', keyword: hit };
+		/* Older files may hold nsfw:false entries: those are ignored. */
+		if (manual && typeof manual === 'object' && manual.nsfw !== false) return { nsfw: true, source: 'manual', keyword: '' };
+		return { nsfw: false, source: '', keyword: '' };
 	}
 
-	function isNsfw(dir, name) { return nsfwInfo(dir, name).nsfw; }
+	function isNsfw(dir, name, desc) { return nsfwInfo(dir, name, desc).nsfw; }
 
 	/* The active keyword list (for clients that check names before render). */
 	function nsfwKeywords() { return readNsfw().keywords.slice(); }
@@ -1440,17 +1442,17 @@ var Social = (function () {
 		} catch (e) { return false; }
 	}
 
-	/* Moderator: set (on=true), clear (on=false), or forget (on=null: back to auto). */
+	/* Moderator: flag a piece (on must be true; flags are never removed). */
 	function setNsfw(dir, name, on, by) {
 		var key = nsfwKey(dir, name);
 		if (!canModerate()) return fail('forbidden');
+		if (on !== true) return fail('flags-are-permanent');
 		if (!creationPath(dir, name)) return fail('no-such-file');
 		return withLock(nsfwPath, function () {
 			var data = readJson(nsfwPath, 0) || {};
 			if (typeof data !== 'object') data = {};
 			if (!data.manual || typeof data.manual !== 'object') data.manual = {};
-			if (on === null || on === undefined) delete data.manual[key];
-			else data.manual[key] = { nsfw: !!on, by: String(by || (typeof user === 'object' && user ? user.alias : '')).substr(0, 40), at: nowMs() };
+			data.manual[key] = { nsfw: true, by: String(by || (typeof user === 'object' && user ? user.alias : '')).substr(0, 40), at: nowMs() };
 			if (!data.keywords) data.keywords = NSFW_DEFAULT_KEYWORDS.slice();
 			if (!data.moderatorArs) data.moderatorArs = 'FLAG1 M';
 			data.version = VERSION;
