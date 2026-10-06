@@ -1524,8 +1524,33 @@ var Social = (function () {
 		return s === '' ? '' : 'user-' + s;
 	}
 
-	/* Head revision of the user's wiki page: { slug, exists, rev, time, title, body }. */
-	function wikiPage(number) {
+	/* The wiki's shared core (xtrn/wiki), for its read-access rules; null
+	   when it is not installed. */
+	var wikiCoreLib;
+	function wikiCore() {
+		var scope;
+		if (wikiCoreLib === undefined) {
+			try {
+				scope = {};
+				load(scope, '/sbbs/xtrn/wiki/dist/wiki-core.js');
+				wikiCoreLib = scope.WikiCore || null;
+			} catch (e) { wikiCoreLib = null; }
+		}
+		return wikiCoreLib;
+	}
+
+	function securityLevel(number) {
+		var n = userNumber(number);
+		if (!n) return 0;
+		try { return toNumber(new User(n).security.level, 0); } catch (e) { return 0; }
+	}
+
+	/* Head revision of the user's wiki page, as a reader at viewerLevel
+	   (default 0) may see it: { slug, exists, rev, time, title, body }.
+	   A page above their level does not exist; ::: if sections are resolved. */
+	function wikiPage(number, viewerLevel) {
+		var level = toNumber(viewerLevel, 0);
+		var core, body;
 		var a = account(number);
 		var slug = a ? wikiUserPageSlug(a.alias) : '';
 		var empty = { slug: slug, exists: false, rev: 0, time: 0, title: '', body: '' };
@@ -1541,7 +1566,14 @@ var Social = (function () {
 			try { head = JSON.parse(line); } catch (e) { head = null; }
 		}
 		if (!head || head.deleted === true) return empty;
-		return { slug: slug, exists: true, rev: toNumber(head.rev, 0), time: toNumber(head.time, 0), title: String(head.title || ''), body: String(head.body || '') };
+		body = String(head.body || '');
+		if (/^:::/m.test(body)) {
+			core = wikiCore();
+			/* Without the core the access rules can't be applied: show nothing. */
+			if (!core || core.readLevel(body) > level) return empty;
+			body = core.applyAccess(body, core.pageAccess(core.createStore({ dataDir: system.data_dir + 'wiki/' }).listPages(), level).ctx);
+		}
+		return { slug: slug, exists: true, rev: toNumber(head.rev, 0), time: toNumber(head.time, 0), title: String(head.title || ''), body: body };
 	}
 
 	/* Wiki markup lightly stripped to plain lines (for terminal previews). */
@@ -1719,6 +1751,56 @@ var Social = (function () {
 		return out;
 	}
 
+	/* Every account's post count per sub, by the same rules as the profile's
+	   Forum Activity count as other members see it (alias and linked handles
+	   on any BBS, real name only here; no machine subs, private mail or
+	   [ANSI]-tagged posts): { code: { number: count } }. Readability is the
+	   caller's to apply, per viewer. One get_index() pass per sub for all
+	   accounts at once, then a header read per CRC hit. */
+	function forumPostCountsBySub() {
+		var byCrc = {}, namesOf = {}, out = {};
+		var n, crc, code, s, mb, idx, i, hits, h, header, cands, k, counts;
+		for (n = 1; n <= system.lastuser; n++) {
+			if (!account(n)) continue;
+			namesOf[n] = forumNames(n);
+			for (crc in namesOf[n].crcs) {
+				if (!namesOf[n].crcs.hasOwnProperty(crc)) continue;
+				if (!byCrc[crc]) byCrc[crc] = [];
+				byCrc[crc].push(n);
+			}
+		}
+		for (code in msg_area.sub) {
+			if (!msg_area.sub.hasOwnProperty(code)) continue;
+			s = msg_area.sub[code];
+			if (forumSkipSub(code, s)) continue;
+			hits = [];
+			try {
+				mb = new MsgBase(code);
+				if (!mb.open()) continue;
+				idx = mb.get_index() || [];
+				for (i = 0; i < idx.length; i++) {
+					if (typeof idx[i].from !== 'number') continue;
+					if (idx[i].attr & (FORUM_ATTR_DELETE | FORUM_ATTR_PRIVATE)) continue;
+					if (byCrc[idx[i].from]) hits.push(idx[i]);
+				}
+				idx = null;
+				counts = {};
+				for (h = 0; h < hits.length; h++) {
+					header = mb.get_msg_header(false, hits[h].number, false);
+					if (!header || (header.attr & FORUM_ATTR_DELETE)) continue;
+					if (FORUM_ANSI_SUBJECT.test(String(header.subject || ''))) continue;
+					cands = byCrc[hits[h].from];
+					for (k = 0; k < cands.length; k++) {
+						if (forumHeaderIsBy(header, namesOf[cands[k]])) { counts[cands[k]] = (counts[cands[k]] || 0) + 1; break; }
+					}
+				}
+				mb.close();
+				for (k in counts) { if (counts.hasOwnProperty(k)) { out[code] = counts; break; } }
+			} catch (e) { try { mb.close(); } catch (e2) { } }
+		}
+		return out;
+	}
+
 	/* One page of the account's posts across every sub the viewer may read,
 	   newest first: { total, page, per, pages, items }. Each item carries the
 	   sub/group/network, recipient, subject, a plain-text snippet and the
@@ -1810,7 +1892,7 @@ var Social = (function () {
 		if (!featured.length) {
 			for (i = 0; i < friends.length && featured.length < MAX_FEATURED; i++) featured.push(friends[i]);
 		}
-		page = wikiPage(a.number);
+		page = wikiPage(a.number, securityLevel(v));
 		updates = feed(a.number, { kind: 'update', limit: 1 });
 		creationsList = creations(a.number, {});
 		counts = { total: 0, collab: 0, track: 0, ansi: 0, image: 0, text: 0, art: 0 };
@@ -1926,6 +2008,7 @@ var Social = (function () {
 		pointsBalance: pointsBalance,
 		topPrograms: topPrograms,
 		wikiPage: wikiPage,
+		forumPostCountsBySub: forumPostCountsBySub,
 		wikiUserPageSlug: wikiUserPageSlug,
 		plainLines: plainLines,
 		forumActivity: forumActivity,
