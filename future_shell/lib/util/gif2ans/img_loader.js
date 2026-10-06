@@ -1,4 +1,5 @@
-// img_loader.js — unified bitmap→ANSI (native gif2ans with JS fallback) + SAUCE + ImageMagick presets + verbose logs
+// img_loader.js — unified bitmap→ANSI (native shadeans, else gif2ans, else JS fallback) + SAUCE + ImageMagick presets + verbose logs
+// Note: the 'cga'/'cga_comic' preprocess presets only apply to gif2ans; shadeans gets the clean source.
 "use strict";
 // Usage:
 //   convertImageToANSI(pathOrUrl, columns, /*contiguous_ignored*/ false, /*outputPath*/ null, {
@@ -321,16 +322,25 @@ function transcodeToPNG(inputPath, debugFlag) {
     return out;
 }
 
-/* ========================= Native gif2ans detection ========================= */
+/* ========================= Native converter detection ========================= */
+// shadeans (github.com/hmderdoc/shadeans) is preferred; gif2ans is kept as the
+// second native choice. Both take the same "-c <cols> INPUT OUTPUT" shape.
 
 var _NATIVE_GIF2ANS = null;
+var _NATIVE_IS_SHADEANS = false;
 
 function _exists(p) { return p && p.charAt(0) === '/' ? fileExists(p) : true; }
+
+function _isShadeans(path) { return /(^|[\/\\])shadeans[^\/\\]*$/i.test(String(path || '')); }
 
 function haveNativeGif2ans(debugFlag) {
     if (_NATIVE_GIF2ANS !== null) return !!_NATIVE_GIF2ANS;
 
     var candidates = [
+        '/home/sbbs/.local/bin/shadeans',
+        '/usr/local/bin/shadeans',
+        '/usr/bin/shadeans',
+        'shadeans',
         '/sbbs/exec/gif2ans',          // shim/symlink path if you created it
         '/usr/local/bin/gif2ans',
         '/usr/bin/gif2ans',
@@ -378,6 +388,7 @@ function haveNativeGif2ans(debugFlag) {
         _NATIVE_GIF2ANS = '';
         _log(debugFlag, "[1/discovery] native gif2ans NOT detected; will fall back when needed");
     }
+    _NATIVE_IS_SHADEANS = _isShadeans(_NATIVE_GIF2ANS);
     return !!_NATIVE_GIF2ANS;
 }
 
@@ -390,9 +401,9 @@ function runNativeBitmapToAnsi(inputPath, width, debugFlag) {
     var cols = (+width > 0) ? String(+width) : "80";
     var outTmp = tmpPath("gif2ans_native_out", ".ans"); // CLI output path
 
-    // gif2ans -r -c <cols> <INPUT> <OUTPUT>
+    // gif2ans -r -c <cols> <INPUT> <OUTPUT>   (shadeans: -r is meaningless, omitted)
     var cmd = shellQuote(bin)
-        + " -r -c " + cols + " "
+        + (_NATIVE_IS_SHADEANS ? "" : " -r") + " -c " + cols + " "
         + shellQuote(inputPath) + " "
         + shellQuote(outTmp);
 
@@ -481,8 +492,8 @@ function convertImageToANSI(filePathOrUrl, width, contiguous, outputPath, debug)
     var nativeOK = false, nativeResult = null;
     if (preferNative && haveNativeGif2ans(debugFlag)) {
         try {
-            // WEBP → PNG if needed
-            if (kind === "webp") {
+            // WEBP → PNG if needed (shadeans reads webp itself)
+            if (kind === "webp" && !_NATIVE_IS_SHADEANS) {
                 xcodeTmpPath = transcodeToPNG(inPath, debugFlag);
                 if (xcodeTmpPath) {
                     inPath = xcodeTmpPath; usedXcodeTmp = true; kind = "png";
@@ -492,8 +503,11 @@ function convertImageToANSI(filePathOrUrl, width, contiguous, outputPath, debug)
                 }
             }
 
-            // Your preferred preset with auto sizing
-            if (opts && opts.preprocess === 'cga_comic') {
+            // The ImageMagick presets pre-dither to the CGA palette for gif2ans.
+            // shadeans does its own shading and needs the clean source, so skip them.
+            if (_NATIVE_IS_SHADEANS) {
+                if (opts && opts.preprocess) _log(debugFlag, "[pre] shadeans: skipping preprocess '" + opts.preprocess + "'");
+            } else if (opts && opts.preprocess === 'cga_comic') {
                 var tun = {
                     sigmoidal: opts.preSigmoidal || "8x50%",
                     saturation: (typeof opts.preSaturation === 'number') ? opts.preSaturation : 145,
@@ -519,7 +533,7 @@ function convertImageToANSI(filePathOrUrl, width, contiguous, outputPath, debug)
                 }
             }
 
-            if (!kind || kind === "gif" || kind === "jpg" || kind === "png") {
+            if (!kind || kind === "gif" || kind === "jpg" || kind === "png" || (kind === "webp" && _NATIVE_IS_SHADEANS)) {
                 nativeResult = runNativeBitmapToAnsi(inPath, width || 80, debugFlag);
 
                 // SAUCE & strip
