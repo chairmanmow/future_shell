@@ -30,3 +30,7 @@ avatars.js
 
 # npm dependencies
 node_modules/
+
+# Python bytecode and dated backup copies
+__pycache__/
+*.bak.*
