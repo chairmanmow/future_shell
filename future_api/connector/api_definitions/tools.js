@@ -10,6 +10,10 @@
 //       _pathParams:   Array of params that go into the URL path
 //       _dataParams:   Array of params that go into packet.data
 //       _humanHint:    How to describe results naturally (guides LLM response)
+//       _oper:         Packet oper when not "READ" (e.g. "WRITE" for actions)
+//       _requiresSecret: Executor must merge {secret: <shared secret>} into
+//                        packet.data (e.g. from FUTURE_API_DDIAL_SECRET env).
+//                        The secret is NEVER a tool parameter the LLM sees.
 
 export const TOOLS = [
   // ===========================================================================
@@ -843,6 +847,111 @@ export const TOOLS = [
     _pathParams: [],
     _dataParams: [],
     _humanHint: "Describe the available properties."
+  },
+
+  // ===========================================================================
+  // DDIAL CHAT TOOLS (live chat on the linked DDial station)
+  // ===========================================================================
+  {
+    type: "function",
+    function: {
+      name: "getDdialStatus",
+      description: "Check the DDial chat bridge: whether the bot is attached as a line, whether the station link is up, which station we're linked to, and how many people are visible. Use before chatting, or when asked if DDial chat is working.",
+      parameters: { type: "object", properties: {}, required: [] }
+    },
+    _endpoint: "ddial/status",
+    _pathParams: [],
+    _dataParams: [],
+    _humanHint: "Say whether the chat link is up and how busy the station is."
+  },
+  {
+    type: "function",
+    function: {
+      name: "getDdialRoster",
+      description: "List who is currently on the DDial chat station: handles and line numbers, including users on linked stations. Use when asked who's on ddial / who's in chat.",
+      parameters: { type: "object", properties: {}, required: [] }
+    },
+    _endpoint: "ddial/roster",
+    _pathParams: [],
+    _dataParams: [],
+    _requiresSecret: true,
+    _humanHint: "List the people in chat naturally by handle; mention their line numbers only if useful."
+  },
+  {
+    type: "function",
+    function: {
+      name: "getDdialMessages",
+      description: "Read new DDial chat messages since the last check (cursor-based). Returns chat lines, private messages to the bot, joins/leaves, and link notices. Use to catch up on the conversation before replying. Pass the nextSince value from the previous call as 'since'.",
+      parameters: {
+        type: "object",
+        properties: {
+          since: {
+            type: "number",
+            description: "Cursor from the previous call's nextSince (0 for everything buffered)"
+          },
+          limit: {
+            type: "number",
+            description: "Max frames to return (default 50, max 200)"
+          }
+        },
+        required: []
+      }
+    },
+    _endpoint: "ddial/poll",
+    _pathParams: [],
+    _dataParams: ["since", "limit"],
+    _requiresSecret: true,
+    _humanHint: "Summarize or quote the new chat activity; frames with self:true are the bot's own messages."
+  },
+  {
+    type: "function",
+    function: {
+      name: "sendDdialMessage",
+      description: "Say something in DDial chat as the bot. Everyone on the station (and linked stations) sees it. Keep it short and conversational - this is a retro chat room with 255-character lines. Use when asked to speak, reply, or announce something in ddial chat.",
+      parameters: {
+        type: "object",
+        properties: {
+          body: {
+            type: "string",
+            description: "The chat message text (max 512 chars; longer messages are split into multiple lines)"
+          }
+        },
+        required: ["body"]
+      }
+    },
+    _endpoint: "ddial/send",
+    _pathParams: [],
+    _dataParams: ["body"],
+    _oper: "WRITE",
+    _requiresSecret: true,
+    _humanHint: "Confirm what was said. If the response says queued:true, mention it may take a moment to reach the far station."
+  },
+  {
+    type: "function",
+    function: {
+      name: "sendDdialPrivateMessage",
+      description: "Send a private message to one person on the DDial station by their line number (get line numbers from getDdialRoster or from message frames). Use for replies meant for one person only.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: {
+            type: "string",
+            description: "The recipient's line number, digits only (e.g. '2'; linked-station users have longer paths like '992')"
+          },
+          body: {
+            type: "string",
+            description: "The private message text"
+          }
+        },
+        required: ["target", "body"]
+      }
+    },
+    _endpoint: "ddial/pm",
+    _pathParams: [],
+    _dataParams: ["target", "body"],
+    _oper: "WRITE",
+    _requiresSecret: true,
+    _humanHint: "Confirm the private message was sent and to whom."
   }
 ];
 

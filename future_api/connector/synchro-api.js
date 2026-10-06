@@ -197,6 +197,61 @@ export class SynchroClient {
     return this.write("points/transfer", { from, to, amount, secret, note }, { timeoutMs });
   }
 
+  // ---------- ddial ----------
+  // Bridge to the DDial station link (see future_api/DDIAL_API.md).
+  // The bridge attaches a bot BBS account as a line on the linked DDial
+  // station; `secret` comes from data/future_api_ddial.json on the BBS.
+  // Everything except ddialStatus requires it. send/poll auto-attach.
+
+  // READ: { ok, configured, attached, line, linkState, station, lastSeq, epoch, ... }
+  ddialStatus({ timeoutMs } = {}) {
+    return this.read("ddial/status", { timeoutMs });
+  }
+
+  // WRITE: attach the bot line (idempotent). Optional handle override.
+  // Allow extra time: the server waits up to ~4s for the mux handshake.
+  ddialAttach(secret, { handle, timeoutMs } = {}) {
+    return this.write("ddial/attach", { secret, handle }, { timeoutMs: timeoutMs ?? 12000 });
+  }
+
+  // WRITE: drop the bot line off the station.
+  ddialDetach(secret, { timeoutMs } = {}) {
+    return this.write("ddial/detach", { secret }, { timeoutMs });
+  }
+
+  // READ: frames since cursor. Returns { ok, epoch, frames, nextSince, reset, more }.
+  // Track `epoch` + `nextSince` between calls; if epoch changes or reset is
+  // true, the service restarted — start again from the returned nextSince.
+  ddialPoll(secret, since = 0, { limit, noAttach, timeoutMs } = {}) {
+    return this.request({
+      oper: "READ",
+      location: "ddial/poll",
+      data: { secret, since, limit, noAttach },
+      timeoutMs: timeoutMs ?? 12000,
+    });
+  }
+
+  // WRITE: public chat line as the bot (auto-attaches). Body <=512 chars;
+  // the mux splits long bodies into <=255-char wire lines at ~1/second.
+  ddialSend(secret, body, { timeoutMs } = {}) {
+    return this.write("ddial/send", { secret, body }, { timeoutMs: timeoutMs ?? 12000 });
+  }
+
+  // WRITE: private message to a line number ('2', or link path like '992').
+  ddialPm(secret, target, body, { timeoutMs } = {}) {
+    return this.write("ddial/pm", { secret, target, body }, { timeoutMs: timeoutMs ?? 12000 });
+  }
+
+  // READ: who's visible on the station: { ok, station, locked, entries }.
+  ddialRoster(secret, { timeoutMs } = {}) {
+    return this.request({
+      oper: "READ",
+      location: "ddial/roster",
+      data: { secret },
+      timeoutMs,
+    });
+  }
+
   // ---------- internal ----------
   _onData(chunk) {
     this._buf += chunk.toString("utf8");

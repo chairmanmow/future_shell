@@ -19,6 +19,7 @@ function get_routes(ctx) {
 	load(base + "auth.js");
 	load(base + "wallet.js");
 	load(base + "points.js");
+	load(base + "ddial.js");
 
 	var routes = [];
 
@@ -70,6 +71,11 @@ function get_routes(ctx) {
 	// points.js defines make_points_route(ctx)
 	if (typeof make_points_route === "function") {
 		routes.push(make_points_route(ctx));
+	}
+
+	// ddial.js defines make_ddial_route(ctx)
+	if (typeof make_ddial_route === "function") {
+		routes.push(make_ddial_route(ctx));
 	}
 
 	return routes;

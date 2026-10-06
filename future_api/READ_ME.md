@@ -191,6 +191,15 @@ Notes:
 
 ---
 
+## DDial Chat Bridge
+
+The API can put a bot on the linked DDial station (read the room, chat,
+send/receive private messages) via `routes/ddial.js`, which attaches a bot
+BBS account as a line on the fshell_ts ddial multiplexer. Full endpoint
+reference, bot integration guide, and setup steps: **`DDIAL_API.md`**.
+
+---
+
 ### Other Considerations
 Documenting the API so an agent can know how / when to use it.  This will ultimately be used by an AI chatbot to gain more context in conversations about the system.
 
