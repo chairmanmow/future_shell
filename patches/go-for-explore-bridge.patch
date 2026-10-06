@@ -1,0 +1,48 @@
+diff --git a/xtrn/go-for/go-for.js b/xtrn/go-for/go-for.js
+index 2a8240485e..cd71a7f243 100644
+--- a/xtrn/go-for/go-for.js
++++ b/xtrn/go-for/go-for.js
+@@ -60,6 +60,35 @@ const state = {
+     fn: ''
+ };
+ 
++/*
++ * Optional node-local launch target written by fshell_ts.  This is consumed
++ * exactly once before any input is read, so an Explore bookmark opens the
++ * requested document without stuffing keys into GO-FOR's input loop.
++ */
++function load_startup_target() {
++    const path = system.node_dir + 'go-for-startup.json';
++    if (!file_exists(path)) return;
++    const file = new File(path);
++    var startup = null;
++    if (file.open('r', true)) {
++        try {
++            startup = JSON.parse(file.read());
++        } catch (error) {
++            startup = null;
++        } finally {
++            file.close();
++        }
++    }
++    file_remove(path);
++    if (!startup || typeof startup.host !== 'string' || !startup.host.length) return;
++    const port = parseInt(startup.port, 10);
++    state.host = startup.host;
++    state.port = isFinite(port) && port > 0 && port <= 65535 ? port : 70;
++    state.selector = typeof startup.selector === 'string' ? startup.selector : '';
++    state.item_type = typeof startup.type === 'string' && startup.type.length
++        ? startup.type.substr(0, 1) : '1';
++}
++
+ function mouse_enable(enable) {
+ 	if (!console.term_supports(USER_ANSI)) return;
+ 	ansiterm.send('mouse', enable ? 'set' : 'clear', 'normal_tracking');
+@@ -528,4 +557,5 @@ function main() {
+     scrollbox.close();
+ }
+ 
+-main();
+\ No newline at end of file
++load_startup_target();
++main();
